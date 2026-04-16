@@ -7,9 +7,6 @@ pragma solidity ^0.8.20;
 ///      Coldkeys are bytes32 (SS58 public keys), NOT H160 addresses.
 ///      The EVM→Substrate mapping uses Frontier HashedAddressMapping.
 interface IStaking {
-    function addStake(bytes32 hotkey, uint256 amount, uint256 netuid) external payable;
-    function removeStake(bytes32 hotkey, uint256 amount, uint256 netuid) external payable;
-
     function transferStake(
         bytes32 destination_coldkey,
         bytes32 hotkey,
@@ -27,8 +24,6 @@ interface IStaking {
     ) external payable;
 
     function getStake(bytes32 hotkey, bytes32 coldkey, uint256 netuid) external view returns (uint256);
-    function getTotalColdkeyStake(bytes32 coldkey) external view returns (uint256);
-    function getTotalHotkeyStake(bytes32 hotkey) external view returns (uint256);
 }
 
 /// @dev Staking precompile address on Bittensor EVM.
