@@ -18,9 +18,8 @@ contract DeployAlpha is Script {
         console.log("DepositForwarderLogic: %s", address(forwarderLogic));
 
         bytes32 vaultSubstrateColdkey = keccak256("vault_substrate_coldkey_placeholder");
-        AlphaVault vault = new AlphaVault(
-            "https://api.tao20.io/metadata/{id}.json", address(forwarderLogic), vaultSubstrateColdkey
-        );
+        AlphaVault vault =
+            new AlphaVault("https://api.tao20.io/metadata/{id}.json", address(forwarderLogic), vaultSubstrateColdkey);
         console.log("AlphaVault:            %s", address(vault));
 
         vm.stopBroadcast();
