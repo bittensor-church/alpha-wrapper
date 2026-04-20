@@ -834,6 +834,38 @@ contract AlphaVaultTest is Test {
         // No revert expected — returns early
     }
 
+    function testRebalanceEmitsEventAfterProcessDeposit() public {
+        // Repro of the localnet e2e flow. With 3 validators at 50/30/20 and a
+        // single-hotkey initial deposit, processDeposit's internal _findBestMove
+        // makes exactly one move (30 ether from hk1 → hk2), leaving the vault at
+        // [70, 30, 0] vs target [50, 30, 20]. A subsequent public rebalance()
+        // must find the residual 20-ether imbalance, do one more move, and emit
+        // Rebalanced(tokenId, 1). If this ever stops firing, either the on-chain
+        // rebalance sequence or mock ↔ real parity has regressed.
+        ValidatorRegistry reg = new ValidatorRegistry(address(this), address(this));
+        vault.setValidatorRegistry(address(reg));
+
+        bytes32[] memory hks = new bytes32[](3);
+        uint16[] memory wts = new uint16[](3);
+        hks[0] = hotkey1;
+        hks[1] = hotkey2;
+        hks[2] = hotkey3;
+        wts[0] = 5000;
+        wts[1] = 3000;
+        wts[2] = 2000;
+        reg.setValidators(NETUID1, hks, wts);
+
+        _simulateAlphaDepositHotkey(alice, NETUID1, 100 ether, hotkey1);
+        _processDeposit(alice, NETUID1);
+
+        // Intentionally do NOT reset the mock — we want to observe what rebalance()
+        // sees after a real processDeposit has already shifted some stake.
+        uint256 tokenId = vault.currentTokenId(NETUID1);
+        vm.expectEmit(true, false, false, true);
+        emit Rebalanced(tokenId, 1);
+        vault.rebalance(NETUID1);
+    }
+
     // ────────────────── setValidatorRegistry ────────────────────────────
 
     function testSetValidatorRegistry() public {

@@ -68,70 +68,18 @@ ok()   { echo -e "  \033[1;32m✓\033[0m $1"; }
 info() { echo -e "  \033[0;33m→\033[0m $1"; }
 fail() { echo -e "  \033[1;31m✗ $1\033[0m"; exit 1; }
 
-# H160 → blake2b("evm:" + h160) → substrate account_id (hex). Matches Frontier's
-# HashedAddressMapping which is what the staking precompile uses for coldkeys.
-h160_to_substrate_b32() {
-    python3 -c "
-import hashlib
-h160 = bytes.fromhex('${1#0x}')
-account_id = hashlib.blake2b(b'evm:' + h160, digest_size=32).digest()
-print('0x' + account_id.hex())
-"
-}
-
-# H160 → SS58 (network prefix 42) via HashedAddressMapping.
-h160_to_ss58() {
-    python3 -c "
-import hashlib
-def h160_to_ss58(h160_hex, pfx=42):
-    h160 = bytes.fromhex(h160_hex.replace('0x', ''))
-    aid = hashlib.blake2b(b'evm:' + h160, digest_size=32).digest()
-    pb = bytes([pfx]) if pfx < 64 else bytes([((pfx & 0xfc) >> 2) | 0x40, (pfx >> 8) | ((pfx & 3) << 6)])
-    cs = hashlib.blake2b(b'SS58PRE' + pb + aid, digest_size=64).digest()[:2]
-    full = pb + aid + cs
-    a = b'123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
-    n = int.from_bytes(full, 'big'); r = b''
-    while n > 0: n, rem = divmod(n, 58); r = bytes([a[rem]]) + r
-    for b_ in full:
-        if b_ == 0: r = bytes([a[0]]) + r
-        else: break
-    return r.decode()
-print(h160_to_ss58('$1'))
-"
-}
+h160_to_substrate_b32() { python3 scripts/e2e_helpers.py h160_to_substrate_b32 "$1"; }
+h160_to_ss58()          { python3 scripts/e2e_helpers.py h160_to_ss58 "$1"; }
 
 btcli_cmd() { btcli "$@" --network "$CHAIN_ENDPOINT"; }
 
-# Submit a transfer_stake extrinsic via substrate-interface. Works around btcli's
-# SignedExtension mismatch with recent subtensor builds.
 transfer_stake_py() {
-    local DEST_SS58="$1"
-    local HOTKEY_SS58="$2"
-    local NETUID="$3"
-    local ALPHA_AMOUNT="$4"  # raw units (1 alpha = 1e9)
-    python3 - <<PYEOF
-from substrateinterface import SubstrateInterface, Keypair
-import sys
-sub = SubstrateInterface(url="$CHAIN_ENDPOINT")
-alice = Keypair.create_from_uri("//Alice")
-call = sub.compose_call(
-    call_module="SubtensorModule",
-    call_function="transfer_stake",
-    call_params={
-        "destination_coldkey": "$DEST_SS58",
-        "hotkey": "$HOTKEY_SS58",
-        "origin_netuid": $NETUID,
-        "destination_netuid": $NETUID,
-        "alpha_amount": $ALPHA_AMOUNT,
-    },
-)
-ex = sub.create_signed_extrinsic(call=call, keypair=alice)
-r = sub.submit_extrinsic(ex, wait_for_inclusion=True)
-if not r.is_success:
-    print(f"FAIL: {r.error_message}", file=sys.stderr)
-    sys.exit(1)
-print(f"ok block={r.block_hash}")
-PYEOF
+    python3 scripts/e2e_helpers.py transfer_stake \
+        --chain-endpoint "$CHAIN_ENDPOINT" \
+        --dest-ss58 "$1" \
+        --hotkey-ss58 "$2" \
+        --netuid "$3" \
+        --alpha-amount "$4"
 }
 
 create_subnet() {
@@ -193,8 +141,9 @@ ok "Alice wallet ready"
 
 FUND_AMOUNT=10000
 
-DEPLOYER_BAL=$(cast balance "$DEPLOYER_ADDR" --rpc-url "$RPC_URL" --ether 2>/dev/null || echo "0")
-DEPLOYER_BAL_INT=$(echo "$DEPLOYER_BAL" | python3 -c "import sys; print(int(float(sys.stdin.read().strip())))")
+DEPLOYER_BAL=$(cast balance "$DEPLOYER_ADDR" --rpc-url "$RPC_URL" --ether)
+[[ -n "$DEPLOYER_BAL" ]] || fail "Could not read deployer balance"
+DEPLOYER_BAL_INT=$(echo "$DEPLOYER_BAL" | python3 -c "import sys; print(int(sys.stdin.read().strip().split('.')[0]))")
 
 if [[ "$DEPLOYER_BAL_INT" -lt 50 ]]; then
     log "Phase 0: Fund deployer (${FUND_AMOUNT} TAO)"
@@ -262,6 +211,10 @@ for i in 0 1 2; do
             echo "  Retry $attempt for $HK (waiting for next block)..."
             sleep 6
         done
+        if ! echo "$REG_OUT" | grep -q "Registered\|Already"; then
+            echo "$REG_OUT"
+            fail "register failed for $HK on netuid $NET after 3 attempts"
+        fi
 
         ALL_HK_NAMES+=("$HK")
         ALL_HK_B32S+=("$(read_hotkey_pubkey "$ALICE_WALLET" "$HK")")
@@ -290,6 +243,12 @@ for i in 0 1 2; do
 done
 
 log "Phase 4: Deploy"
+
+# Capture the block range boundary before any event-emitting tx (setValidators,
+# createSubnetProxy, processDeposit, rebalance, withdraw). Used by Phase 10 to
+# narrow the get_logs range passed to the Python observability scripts.
+BLOCK_START=$(cast block-number --rpc-url "$RPC_URL")
+info "Observability block range start: $BLOCK_START"
 
 forge build --quiet || fail "Build failed"
 ok "Compiled"
@@ -354,8 +313,9 @@ log "Phase 5: Fund user account"
 
 ok "User account: $WRAPPER_ADDR"
 
-WRAPPER_BAL=$(cast balance "$WRAPPER_ADDR" --rpc-url "$RPC_URL" --ether 2>/dev/null || echo "0")
-WRAPPER_BAL_INT=$(echo "$WRAPPER_BAL" | python3 -c "import sys; print(int(float(sys.stdin.read().strip())))")
+WRAPPER_BAL=$(cast balance "$WRAPPER_ADDR" --rpc-url "$RPC_URL" --ether)
+[[ -n "$WRAPPER_BAL" ]] || fail "Could not read wrapper balance"
+WRAPPER_BAL_INT=$(echo "$WRAPPER_BAL" | python3 -c "import sys; print(int(sys.stdin.read().strip().split('.')[0]))")
 
 if [[ "$WRAPPER_BAL_INT" -lt 5 ]]; then
     btcli_cmd wallet transfer \
@@ -491,6 +451,72 @@ for i in 0 1 2; do
     ok "netuid $NET: user received $SUM RAO (deposited $DEPOSITED, tolerance ${TOLERANCE_RAO})"
 done
 
+log "Phase 10: Observability scripts"
+
+BLOCK_END=$(cast block-number --rpc-url "$RPC_URL")
+info "Block range: [$BLOCK_START, $BLOCK_END]"
+
+SUBNET_COUNT=${#NETUIDS[@]}
+NETUIDS_CSV=$(IFS=,; echo "${NETUIDS[*]}")
+
+# Run a Python observability script, assert the number of CSV data rows equals
+# `expected`. Script stderr (the "Found N events" summary) flows through to the
+# terminal; stdout is captured and row-counted (awk ignores \r inside lines, so
+# csv.DictWriter's \r\n terminators count correctly).
+assert_script_rows() {
+    local label="$1" expected="$2"; shift 2
+    local out
+    out=$("$@")
+    local actual
+    actual=$(awk 'END { print NR - 1 }' <<< "$out")
+    if (( actual != expected )); then
+        echo "--- output (first 5 lines) ---"
+        head -5 <<< "$out"
+        fail "$label: expected $expected rows, got $actual"
+    fi
+    ok "$label: $actual rows"
+}
+
+assert_script_rows "get_subnet_proxies" "$SUBNET_COUNT" \
+    python3 scripts/get_subnet_proxies.py \
+        --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
+        --block-start "$BLOCK_START" --block-end "$BLOCK_END"
+
+assert_script_rows "get_deposits" "$SUBNET_COUNT" \
+    python3 scripts/get_deposits.py \
+        --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
+        --block-start "$BLOCK_START" --block-end "$BLOCK_END"
+
+assert_script_rows "get_withdrawals" "$SUBNET_COUNT" \
+    python3 scripts/get_withdrawals.py \
+        --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
+        --block-start "$BLOCK_START" --block-end "$BLOCK_END"
+
+assert_script_rows "get_validator_updates" "$SUBNET_COUNT" \
+    python3 scripts/get_validator_updates.py \
+        --rpc-url "$RPC_URL" --registry-address "$VAL_REGISTRY_ADDR" \
+        --block-start "$BLOCK_START" --block-end "$BLOCK_END"
+
+assert_script_rows "get_validator_batch_updates" 0 \
+    python3 scripts/get_validator_batch_updates.py \
+        --rpc-url "$RPC_URL" --registry-address "$VAL_REGISTRY_ADDR" \
+        --block-start "$BLOCK_START" --block-end "$BLOCK_END"
+
+assert_script_rows "get_volumes (by token_id)" "$SUBNET_COUNT" \
+    python3 scripts/get_volumes.py \
+        --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
+        --block-start "$BLOCK_START" --block-end "$BLOCK_END" --by token_id
+
+assert_script_rows "get_volumes (by user)" 1 \
+    python3 scripts/get_volumes.py \
+        --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
+        --block-start "$BLOCK_START" --block-end "$BLOCK_END" --by user
+
+assert_script_rows "get_vault_state" "$SUBNET_COUNT" \
+    python3 scripts/get_vault_state.py \
+        --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
+        --registry-address "$VAL_REGISTRY_ADDR" --netuids "$NETUIDS_CSV"
+
 log "E2E complete"
 echo "  AlphaVault:        $VAULT_ADDR"
 echo "  DepositMailbox:    $MAILBOX_ADDR"
@@ -498,4 +524,5 @@ echo "  SubnetClone:       $SUBNET_CLONE_ADDR"
 echo "  ValidatorRegistry: $VAL_REGISTRY_ADDR"
 echo "  Subnets:           ${NETUIDS[*]}"
 echo "  Token IDs:         ${VAULT_IDS[*]}"
+echo "  Block range:       [$BLOCK_START, $BLOCK_END]"
 ok "All phases passed"

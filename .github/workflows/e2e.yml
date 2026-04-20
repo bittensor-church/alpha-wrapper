@@ -40,7 +40,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install Python deps
-        run: pip install bittensor-cli==9.20.1 substrate-interface
+        run: |
+          pip install bittensor-cli==9.20.1 substrate-interface
+          pip install -r requirements.txt
 
       - name: Wait for subtensor to be ready
         run: |
