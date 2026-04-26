@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
 
-"""
-Fetch AlphaVault `SubnetProxyCreated` events within a block range and print as CSV.
-
-Event signature:
-    SubnetProxyCreated(uint256 indexed tokenId, address clone)
-"""
+"""Fetch AlphaVault `SubnetProxyCreated` events within a block range and print as CSV."""
 
 import argparse
 import sys
@@ -14,9 +9,6 @@ from dataclasses import asdict, dataclass, fields
 from web3 import Web3
 
 from common import (
-    SUBNET_PROXY_CREATED_ARGS,
-    SUBNET_PROXY_CREATED_SIG,
-    assert_event_abi,
     get_web3_connection,
     load_abi,
     make_csv_writer,
@@ -41,14 +33,13 @@ def fetch_subnet_proxies(
 ) -> list[SubnetProxyCreatedEvent]:
     address = w3.to_checksum_address(vault_address)
     abi = load_abi("AlphaVault")
-    assert_event_abi(abi, "SubnetProxyCreated", SUBNET_PROXY_CREATED_ARGS)
     vault = w3.eth.contract(address=address, abi=abi)
 
     logs = w3.eth.get_logs({
         "fromBlock": block_start,
         "toBlock": block_end,
         "address": address,
-        "topics": [w3.keccak(text=SUBNET_PROXY_CREATED_SIG).hex()],
+        "topics": [vault.events.SubnetProxyCreated().topic],
     })
 
     events = []

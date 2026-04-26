@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
 
-"""
-Fetch ValidatorRegistry `ValidatorsBatchUpdated` events within a block range and print as CSV.
-
-Event signature:
-    ValidatorsBatchUpdated(uint256 subnetCount, uint256 timestamp)
-"""
+"""Fetch ValidatorRegistry `ValidatorsBatchUpdated` events within a block range and print as CSV."""
 
 import argparse
 import sys
@@ -14,9 +9,6 @@ from dataclasses import asdict, dataclass, fields
 from web3 import Web3
 
 from common import (
-    VALIDATORS_BATCH_UPDATED_ARGS,
-    VALIDATORS_BATCH_UPDATED_SIG,
-    assert_event_abi,
     get_web3_connection,
     load_abi,
     make_csv_writer,
@@ -41,14 +33,13 @@ def fetch_validator_batch_updates(
 ) -> list[ValidatorsBatchUpdatedEvent]:
     address = w3.to_checksum_address(registry_address)
     abi = load_abi("ValidatorRegistry")
-    assert_event_abi(abi, "ValidatorsBatchUpdated", VALIDATORS_BATCH_UPDATED_ARGS)
     registry = w3.eth.contract(address=address, abi=abi)
 
     logs = w3.eth.get_logs({
         "fromBlock": block_start,
         "toBlock": block_end,
         "address": address,
-        "topics": [w3.keccak(text=VALIDATORS_BATCH_UPDATED_SIG).hex()],
+        "topics": [registry.events.ValidatorsBatchUpdated().topic],
     })
 
     events = []

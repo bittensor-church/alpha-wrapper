@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
 
-"""
-Fetch AlphaVault `Rebalanced` events within a block range and print as CSV.
-
-Event signature:
-    Rebalanced(uint256 indexed tokenId, uint8 moveCount)
-"""
+"""Fetch AlphaVault `Rebalanced` events within a block range and print as CSV."""
 
 import argparse
 import sys
@@ -14,9 +9,6 @@ from dataclasses import asdict, dataclass, fields
 from web3 import Web3
 
 from common import (
-    REBALANCED_ARGS,
-    REBALANCED_SIG,
-    assert_event_abi,
     get_web3_connection,
     load_abi,
     make_csv_writer,
@@ -41,14 +33,13 @@ def fetch_rebalances(
 ) -> list[RebalancedEvent]:
     address = w3.to_checksum_address(vault_address)
     abi = load_abi("AlphaVault")
-    assert_event_abi(abi, "Rebalanced", REBALANCED_ARGS)
     vault = w3.eth.contract(address=address, abi=abi)
 
     logs = w3.eth.get_logs({
         "fromBlock": block_start,
         "toBlock": block_end,
         "address": address,
-        "topics": [w3.keccak(text=REBALANCED_SIG).hex()],
+        "topics": [vault.events.Rebalanced().topic],
     })
 
     events = []

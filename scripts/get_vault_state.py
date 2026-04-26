@@ -1,198 +1,63 @@
 #!/usr/bin/env python3
 
-"""
-Print on-chain state of one or more AlphaVault positions, as CSV.
-
-Token discovery (mutually exclusive - exactly one required):
-    --token-ids 12345,67890        explicit packed tokenId list
-    --netuids 12,42                netuids; script computes currentTokenId(netuid) for each
-    --from-events                  scan SubnetProxyCreated logs in [--block-start, --block-end]
-
-Optional:
-    --registry-address ADDR        also fetch ValidatorRegistry.getValidators(netuid)
-                                   per token; populates validator_* columns
-
-For each token: totalSupply, totalStake, sharePrice (revert-safe), subnetClone.
-
-With --netuids, any netuid whose currentTokenId() reverts (e.g. SubnetNotRegistered)
-is logged to stderr and skipped from the output.
-"""
+"""Print a one-row CSV summary of an AlphaVault token's on-chain state."""
 
 import argparse
 import sys
-from dataclasses import dataclass, fields
 
-from web3 import Web3
+from eth_utils import function_signature_to_4byte_selector
 from web3.contract import Contract
 from web3.exceptions import ContractLogicError
 
-from common import (
-    SUBNET_PROXY_CREATED_ARGS,
-    SUBNET_PROXY_CREATED_SIG,
-    assert_event_abi,
-    dataclass_to_csv_row,
-    get_web3_connection,
-    load_abi,
-    make_csv_writer,
-)
+from common import get_web3_connection, load_abi, make_csv_writer
 
 
-@dataclass
-class VaultStateRow:
-    token_id: int
-    total_supply: int
-    total_stake: int
-    share_price: int | None
-    share_price_error: str
-    subnet_clone: str
-    validators_count: int | None
-    validator_1_hotkey: str
-    validator_1_weight: int | None
-    validator_2_hotkey: str
-    validator_2_weight: int | None
-    validator_3_hotkey: str
-    validator_3_weight: int | None
+def _extract_error_name(exc: Exception, abi: list[dict]) -> str:
+    """Match the exception's revert-data 4-byte selector against custom errors in the ABI.
 
-
-FIELDNAMES = [f.name for f in fields(VaultStateRow)]
-
-KNOWN_VAULT_REVERT_ERRORS = (
-    "SubnetInDissolutionBlackoutPeriod",
-    "SubnetDissolved",
-    "NoSharesOutstanding",
-    "SubnetNotRegistered",
-)
-
-
-def _extract_error_name(exc: Exception) -> str:
-    msg = str(exc)
-    for name in KNOWN_VAULT_REVERT_ERRORS:
-        if name in msg:
-            return name
-    return type(exc).__name__
-
-
-def _resolve_token_ids_from_netuids(vault: Contract, netuids: list[int]) -> list[int]:
-    token_ids: list[int] = []
-    for netuid in netuids:
-        try:
-            token_ids.append(vault.functions.currentTokenId(netuid).call())
-        except ContractLogicError as e:
-            print(
-                f"Warning: skipping netuid {netuid}: {_extract_error_name(e)}",
-                file=sys.stderr,
-            )
-    return token_ids
-
-
-def _resolve_token_ids_from_events(
-    w3: Web3,
-    vault: Contract,
-    block_start: int,
-    block_end: int,
-) -> list[int]:
-    assert_event_abi(vault.abi, "SubnetProxyCreated", SUBNET_PROXY_CREATED_ARGS)
-    logs = w3.eth.get_logs({
-        "fromBlock": block_start,
-        "toBlock": block_end,
-        "address": vault.address,
-        "topics": [w3.keccak(text=SUBNET_PROXY_CREATED_SIG).hex()],
-    })
-    token_ids = (
-        vault.events.SubnetProxyCreated().process_log(log)["args"]["tokenId"]
-        for log in logs
-    )
-    return list(dict.fromkeys(token_ids))
-
-
-def _validators_for(
-    registry: Contract | None,
-    netuid: int,
-) -> tuple[int | None, list[str], list[int | None]]:
-    """Return (count, [hotkey_1, hotkey_2, hotkey_3], [weight_1, weight_2, weight_3]).
-
-    Unused slots are empty string / None. count is None if no registry was given.
+    Falls back to the raw selector (e.g. ``0xf2b8b360``) if the selector is not
+    declared in the ABI, and to the exception class name if no selector is present.
     """
+    data = getattr(exc, "data", None)
+    if isinstance(data, dict):
+        data = data.get("data")  # web3.py sometimes wraps as {"data": "0x..."}
+    if not isinstance(data, str) or not data.startswith("0x") or len(data) < 10:
+        return type(exc).__name__
+    selector = data[:10].lower()
+    for item in abi:
+        if item.get("type") != "error":
+            continue
+        sig = f"{item['name']}({','.join(i['type'] for i in item['inputs'])})"
+        if "0x" + function_signature_to_4byte_selector(sig).hex() == selector:
+            return item["name"]
+    return selector
+
+
+def _validator_columns(registry: Contract | None, netuid: int) -> dict:
+    """Three (hotkey, weight) slots + count; empty for unused slots or no registry."""
+    cols: dict = {"validators_count": ""}
+    for i in range(3):
+        cols[f"validator_{i+1}_hotkey"] = ""
+        cols[f"validator_{i+1}_weight"] = ""
     if registry is None:
-        return None, ["", "", ""], [None, None, None]
+        return cols
     hotkeys, weights, count = registry.functions.getValidators(netuid).call()
-    hotkey_slots = ["", "", ""]
-    weight_slots: list[int | None] = [None, None, None]
+    cols["validators_count"] = count
     for i in range(min(count, 3)):
-        hotkey_slots[i] = "0x" + hotkeys[i].hex()
-        weight_slots[i] = weights[i]
-    return count, hotkey_slots, weight_slots
-
-
-def fetch_state(
-    vault: Contract,
-    registry: Contract | None,
-    token_ids: list[int],
-) -> list[VaultStateRow]:
-    rows = []
-    for token_id in token_ids:
-        netuid = token_id & 0xFFFF
-
-        total_supply = vault.functions.totalSupply(token_id).call()
-        total_stake = vault.functions.totalStake(token_id).call()
-        subnet_clone = vault.functions.subnetClone(token_id).call()
-
-        try:
-            share_price = vault.functions.sharePrice(token_id).call()
-            share_price_error = ""
-        except ContractLogicError as e:
-            share_price = None
-            share_price_error = _extract_error_name(e)
-
-        validators_count, hotkey_slots, weight_slots = _validators_for(registry, netuid)
-
-        rows.append(VaultStateRow(
-            token_id=token_id,
-            total_supply=total_supply,
-            total_stake=total_stake,
-            share_price=share_price,
-            share_price_error=share_price_error,
-            subnet_clone=subnet_clone,
-            validators_count=validators_count,
-            validator_1_hotkey=hotkey_slots[0],
-            validator_1_weight=weight_slots[0],
-            validator_2_hotkey=hotkey_slots[1],
-            validator_2_weight=weight_slots[1],
-            validator_3_hotkey=hotkey_slots[2],
-            validator_3_weight=weight_slots[2],
-        ))
-
-    return rows
-
-
-def _parse_int_list(s: str) -> list[int]:
-    return [int(x.strip()) for x in s.split(",") if x.strip()]
+        cols[f"validator_{i+1}_hotkey"] = "0x" + hotkeys[i].hex()
+        cols[f"validator_{i+1}_weight"] = weights[i]
+    return cols
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--vault-address", required=True, help="AlphaVault contract address")
     parser.add_argument("--registry-address", help="Optional ValidatorRegistry address (enables validator columns)")
     parser.add_argument("--rpc-url", required=True, help="HTTP RPC URL of the Subtensor EVM endpoint")
-
-    discovery = parser.add_mutually_exclusive_group(required=True)
-    discovery.add_argument("--token-ids", help="Comma-separated packed tokenIds (e.g. 12345,67890)")
-    discovery.add_argument("--netuids", help="Comma-separated netuids; resolved via currentTokenId()")
-    discovery.add_argument(
-        "--from-events",
-        action="store_true",
-        help="Discover tokenIds from SubnetProxyCreated logs (requires --block-start/--block-end)",
-    )
-
-    parser.add_argument("--block-start", type=int, help="Starting block (inclusive); required with --from-events")
-    parser.add_argument("--block-end", type=int, help="Ending block (inclusive); required with --from-events")
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--token-id", type=int, help="Packed tokenId")
+    target.add_argument("--netuid", type=int, help="Subnet netuid")
     args = parser.parse_args()
-
-    if args.from_events and (args.block_start is None or args.block_end is None):
-        parser.error("--from-events requires --block-start and --block-end")
 
     w3 = get_web3_connection(args.rpc_url)
     vault = w3.eth.contract(
@@ -206,20 +71,33 @@ def main() -> None:
             abi=load_abi("ValidatorRegistry"),
         )
 
-    if args.token_ids:
-        token_ids = _parse_int_list(args.token_ids)
-    elif args.netuids:
-        token_ids = _resolve_token_ids_from_netuids(vault, _parse_int_list(args.netuids))
-    else:
-        token_ids = _resolve_token_ids_from_events(w3, vault, args.block_start, args.block_end)
+    token_id = (
+        args.token_id if args.token_id is not None
+        else vault.functions.currentTokenId(args.netuid).call()
+    )
+    netuid = token_id & 0xFFFF
 
-    rows = fetch_state(vault, registry, token_ids)
+    try:
+        share_price = vault.functions.sharePrice(token_id).call()
+        share_price_error = ""
+    except ContractLogicError as e:
+        share_price = ""
+        share_price_error = _extract_error_name(e, vault.abi)
 
-    writer = make_csv_writer(sys.stdout, FIELDNAMES)
-    for row in rows:
-        writer.writerow(dataclass_to_csv_row(row))
+    row = {
+        "token_id": token_id,
+        "total_supply": vault.functions.totalSupply(token_id).call(),
+        "total_stake": vault.functions.totalStake(token_id).call(),
+        "share_price": share_price,
+        "share_price_error": share_price_error,
+        "subnet_clone": vault.functions.subnetClone(token_id).call(),
+        **_validator_columns(registry, netuid),
+    }
 
-    print(f"Fetched state for {len(rows)} tokens", file=sys.stderr)
+    writer = make_csv_writer(sys.stdout, list(row))
+    writer.writerow(row)
+
+    print(f"Fetched state for token {token_id}", file=sys.stderr)
 
 
 if __name__ == "__main__":

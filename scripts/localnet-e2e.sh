@@ -457,70 +457,115 @@ BLOCK_END=$(cast block-number --rpc-url "$RPC_URL")
 info "Block range: [$BLOCK_START, $BLOCK_END]"
 
 SUBNET_COUNT=${#NETUIDS[@]}
+VAULT_IDS_CSV=$(IFS=,; echo "${VAULT_IDS[*]}")
 NETUIDS_CSV=$(IFS=,; echo "${NETUIDS[*]}")
 
-# Run a Python observability script, assert the number of CSV data rows equals
-# `expected`. Script stderr (the "Found N events" summary) flows through to the
-# terminal; stdout is captured and row-counted (awk ignores \r inside lines, so
-# csv.DictWriter's \r\n terminators count correctly).
-assert_script_rows() {
-    local label="$1" expected="$2"; shift 2
-    local out
-    out=$("$@")
-    local actual
-    actual=$(awk 'END { print NR - 1 }' <<< "$out")
-    if (( actual != expected )); then
-        echo "--- output (first 5 lines) ---"
-        head -5 <<< "$out"
-        fail "$label: expected $expected rows, got $actual"
-    fi
-    ok "$label: $actual rows"
+# verify_script <label> <verify_csv args...> -- <script command...>
+# Pipes the script's CSV stdout through scripts/verify_csv.py with the verify args.
+# Fails the e2e on the first invariant violation.
+verify_script() {
+    local label="$1"; shift
+    local v_args=()
+    while [[ $# -gt 0 && "$1" != "--" ]]; do v_args+=("$1"); shift; done
+    [[ "$1" == "--" ]] && shift
+    "$@" | python3 scripts/verify_csv.py "${v_args[@]}"
+    ok "$label"
 }
 
-assert_script_rows "get_subnet_proxies" "$SUBNET_COUNT" \
-    python3 scripts/get_subnet_proxies.py \
+verify_script "get_subnet_proxies" \
+    --rows "$SUBNET_COUNT" \
+    --column-set "token_id=$VAULT_IDS_CSV" \
+    -- python3 scripts/get_subnet_proxies.py \
         --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
         --block-start "$BLOCK_START" --block-end "$BLOCK_END"
 
-assert_script_rows "get_deposits" "$SUBNET_COUNT" \
-    python3 scripts/get_deposits.py \
+verify_script "get_deposits" \
+    --rows "$SUBNET_COUNT" \
+    --column-set "token_id=$VAULT_IDS_CSV" \
+    --column-eq "user=$WRAPPER_ADDR" \
+    --column-positive assets \
+    --column-positive shares \
+    -- python3 scripts/get_deposits.py \
         --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
         --block-start "$BLOCK_START" --block-end "$BLOCK_END"
 
-assert_script_rows "get_withdrawals" "$SUBNET_COUNT" \
-    python3 scripts/get_withdrawals.py \
+verify_script "get_withdrawals" \
+    --rows "$SUBNET_COUNT" \
+    --column-set "token_id=$VAULT_IDS_CSV" \
+    --column-eq "user=$WRAPPER_ADDR" \
+    --column-positive assets \
+    --column-positive shares \
+    -- python3 scripts/get_withdrawals.py \
         --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
         --block-start "$BLOCK_START" --block-end "$BLOCK_END"
 
-assert_script_rows "get_rebalances" "$SUBNET_COUNT" \
-    python3 scripts/get_rebalances.py \
+# Rebalance count is nondeterministic: processDeposit always emits one per subnet,
+# withdraw emits an additional one only when the post-flush leftover dust exceeds
+# minRebalanceAmt. Assert the set of token_ids and that every emitted move_count is 1.
+verify_script "get_rebalances" \
+    --column-set "token_id=$VAULT_IDS_CSV" \
+    --column-eq "move_count=1" \
+    -- python3 scripts/get_rebalances.py \
         --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
         --block-start "$BLOCK_START" --block-end "$BLOCK_END"
 
-assert_script_rows "get_validator_updates" "$SUBNET_COUNT" \
-    python3 scripts/get_validator_updates.py \
+verify_script "get_validator_updates" \
+    --rows "$SUBNET_COUNT" \
+    --column-set "netuid=$NETUIDS_CSV" \
+    --column-eq "count=3" \
+    --column-positive timestamp \
+    -- python3 scripts/get_validator_updates.py \
         --rpc-url "$RPC_URL" --registry-address "$VAL_REGISTRY_ADDR" \
         --block-start "$BLOCK_START" --block-end "$BLOCK_END"
 
-assert_script_rows "get_validator_batch_updates" 0 \
-    python3 scripts/get_validator_batch_updates.py \
+verify_script "get_validator_batch_updates" \
+    --rows 0 \
+    -- python3 scripts/get_validator_batch_updates.py \
         --rpc-url "$RPC_URL" --registry-address "$VAL_REGISTRY_ADDR" \
         --block-start "$BLOCK_START" --block-end "$BLOCK_END"
 
-assert_script_rows "get_volumes (by token_id)" "$SUBNET_COUNT" \
-    python3 scripts/get_volumes.py \
-        --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
-        --block-start "$BLOCK_START" --block-end "$BLOCK_END" --by token_id
+for i in 0 1 2; do
+    NET="${NETUIDS[$i]}"
+    TID="${VAULT_IDS[$i]}"
 
-assert_script_rows "get_volumes (by user)" 1 \
-    python3 scripts/get_volumes.py \
-        --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
-        --block-start "$BLOCK_START" --block-end "$BLOCK_END" --by user
+    verify_script "get_volumes (netuid $NET)" \
+        --rows 1 \
+        --column-eq "token_id=$TID" \
+        --column-eq "user=" \
+        --column-eq "deposit_count=1" \
+        --column-eq "withdraw_count=1" \
+        --column-positive total_assets_in \
+        --column-positive total_shares_minted \
+        --column-positive total_assets_out \
+        --column-positive total_shares_burned \
+        -- python3 scripts/get_volumes.py \
+            --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
+            --block-start "$BLOCK_START" --block-end "$BLOCK_END" --netuid "$NET"
 
-assert_script_rows "get_vault_state" "$SUBNET_COUNT" \
-    python3 scripts/get_vault_state.py \
-        --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
-        --registry-address "$VAL_REGISTRY_ADDR" --netuids "$NETUIDS_CSV"
+    verify_script "get_volumes (netuid $NET / wrapper)" \
+        --rows 1 \
+        --column-eq "token_id=$TID" \
+        --column-eq "user=$WRAPPER_ADDR" \
+        --column-eq "deposit_count=1" \
+        --column-eq "withdraw_count=1" \
+        -- python3 scripts/get_volumes.py \
+            --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
+            --block-start "$BLOCK_START" --block-end "$BLOCK_END" \
+            --netuid "$NET" --user "$WRAPPER_ADDR"
+
+    # After full withdraw: totalSupply = 0 → sharePrice() reverts NoSharesOutstanding.
+    # Validator registry is set with 3 hotkeys per subnet.
+    verify_script "get_vault_state (netuid $NET)" \
+        --rows 1 \
+        --column-eq "token_id=$TID" \
+        --column-eq "total_supply=0" \
+        --column-eq "share_price=" \
+        --column-eq "share_price_error=NoSharesOutstanding" \
+        --column-eq "validators_count=3" \
+        -- python3 scripts/get_vault_state.py \
+            --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
+            --registry-address "$VAL_REGISTRY_ADDR" --netuid "$NET"
+done
 
 log "E2E complete"
 echo "  AlphaVault:        $VAULT_ADDR"
