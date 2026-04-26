@@ -21,6 +21,7 @@ address constant STORAGE_QUERY = 0x0000000000000000000000000000000000000807;
 contract AlphaVaultTest is Test {
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
     event Rebalanced(uint256 indexed tokenId, uint8 moveCount);
+    event MinRebalanceAmtUpdated(uint256 oldValue, uint256 newValue);
 
     AlphaVault public vault;
     DepositMailbox public mailboxLogic;
@@ -832,6 +833,83 @@ contract AlphaVaultTest is Test {
         // Subnet with validators but no stake — rebalance should return early (total==0)
         vault.rebalance(NETUID1); // Has validators but no deposits yet → total stake is 0 after resolving
         // No revert expected — returns early
+    }
+
+    // ────────────────── minRebalanceAmt ──────────────────────────────────
+
+    function testMinRebalanceAmtConstructorDefault() public view {
+        assertEq(vault.minRebalanceAmt(), 1e6);
+    }
+
+    function testSetMinRebalanceAmt() public {
+        vm.expectEmit(false, false, false, true);
+        emit MinRebalanceAmtUpdated(1e6, 5e9);
+        vault.setMinRebalanceAmt(5e9);
+        assertEq(vault.minRebalanceAmt(), 5e9);
+    }
+
+    function testSetMinRebalanceAmtOnlyOwner() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        vault.setMinRebalanceAmt(0);
+    }
+
+    function testRebalanceSkipsMoveBelowMinRebalanceAmt() public {
+        ValidatorRegistry reg = new ValidatorRegistry(address(this), address(this));
+        vault.setValidatorRegistry(address(reg));
+
+        bytes32[] memory hks = new bytes32[](2);
+        uint16[] memory wts = new uint16[](2);
+        hks[0] = hotkey1;
+        hks[1] = hotkey2;
+        wts[0] = 5000;
+        wts[1] = 5000;
+        reg.setValidators(NETUID1, hks, wts);
+
+        // Seed a tiny imbalance: total = 1_000_001 RAO, target = 500_000/500_000,
+        // so moveAmt = 1 RAO — well below the 1e6 default minRebalanceAmt.
+        _simulateAlphaDepositHotkey(alice, NETUID1, 1, hotkey1);
+        _processDeposit(alice, NETUID1);
+        bytes32 cloneCk = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneCk, NETUID1, 500_001);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneCk, NETUID1, 500_000);
+
+        uint256 tokenId = vault.currentTokenId(NETUID1);
+        vm.expectEmit(true, false, false, true);
+        emit Rebalanced(tokenId, 0);
+        vault.rebalance(NETUID1);
+
+        // No move took place — balances unchanged.
+        assertEq(_getVaultStake(hotkey1, NETUID1), 500_001);
+        assertEq(_getVaultStake(hotkey2, NETUID1), 500_000);
+    }
+
+    function testRebalanceMovesAtOrAboveMinRebalanceAmt() public {
+        ValidatorRegistry reg = new ValidatorRegistry(address(this), address(this));
+        vault.setValidatorRegistry(address(reg));
+
+        bytes32[] memory hks = new bytes32[](2);
+        uint16[] memory wts = new uint16[](2);
+        hks[0] = hotkey1;
+        hks[1] = hotkey2;
+        wts[0] = 5000;
+        wts[1] = 5000;
+        reg.setValidators(NETUID1, hks, wts);
+
+        // moveAmt = (4e6 - 0) / 2 = 2e6, which exceeds the 1e6 default.
+        _simulateAlphaDepositHotkey(alice, NETUID1, 1, hotkey1);
+        _processDeposit(alice, NETUID1);
+        bytes32 cloneCk = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneCk, NETUID1, 4e6);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneCk, NETUID1, 0);
+
+        uint256 tokenId = vault.currentTokenId(NETUID1);
+        vm.expectEmit(true, false, false, true);
+        emit Rebalanced(tokenId, 1);
+        vault.rebalance(NETUID1);
+
+        assertEq(_getVaultStake(hotkey1, NETUID1), 2e6);
+        assertEq(_getVaultStake(hotkey2, NETUID1), 2e6);
     }
 
     // ────────────────── setValidatorRegistry ────────────────────────────

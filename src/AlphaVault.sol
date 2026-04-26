@@ -42,6 +42,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     IValidatorRegistry public validatorRegistry;
     mapping(uint256 => address) public subnetClone;
 
+    /// @notice Minimum RAO amount for a single rebalance move. Below this, `_rebalanceOnce`
+    ///         and `rebalance` skip the `moveStake` precompile call — substrate's alpha-pool
+    ///         round-trip can round tiny moves to zero and revert. Owner-tunable so it can
+    ///         track future subtensor changes without a redeploy.
+    uint256 public minRebalanceAmt;
+
     // ──────────────────── Precision ─────────────────────────────────────────────
     /// @dev Virtual shares/assets to prevent inflation attacks (ERC4626 pattern).
     uint256 private constant VIRTUAL_SHARES = 1e9;
@@ -52,6 +58,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares, bytes32 hotkey);
     event Withdrawn(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 assets, bytes32 hotkey);
     event ValidatorRegistryUpdated(address oldRegistry, address newRegistry);
+    event MinRebalanceAmtUpdated(uint256 oldValue, uint256 newValue);
     event Rebalanced(uint256 indexed tokenId, uint8 moveCount);
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
 
@@ -72,6 +79,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         if (_mailboxLogic == address(0) || _subnetLogic == address(0)) revert ZeroAddress();
         mailboxLogic = _mailboxLogic;
         subnetLogic = _subnetLogic;
+        minRebalanceAmt = 1e6;
     }
 
     // ──────────────────── Token ID & Subnet Proxy ────────────────────────────────
@@ -308,6 +316,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
             if (maxOver == 0 || maxUnder == 0 || overIdx == underIdx) break;
 
             uint256 moveAmt = maxOver < maxUnder ? maxOver : maxUnder;
+            if (moveAmt < minRebalanceAmt) break;
             SubnetClone(payable(clone)).moveStake(hotkeys[overIdx], hotkeys[underIdx], netuid, moveAmt);
             balances[overIdx] -= moveAmt;
             balances[underIdx] += moveAmt;
@@ -407,6 +416,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         _setURI(newUri);
     }
 
+    function setMinRebalanceAmt(uint256 newValue) external onlyOwner {
+        uint256 old = minRebalanceAmt;
+        minRebalanceAmt = newValue;
+        emit MinRebalanceAmtUpdated(old, newValue);
+    }
+
     /// @notice Reclaim native TAO stuck in the caller's mailbox clone after subnet deregistration.
     /// @dev    Deploys the mailbox clone lazily if it was never materialized, so the TAO refund
     ///         credited directly to the deterministic address can still be swept.
@@ -496,6 +511,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         if (maxOver == 0 || maxUnder == 0 || overIdx == underIdx) return;
 
         uint256 moveAmt = maxOver < maxUnder ? maxOver : maxUnder;
+        if (moveAmt < minRebalanceAmt) return;
         SubnetClone(payable(clone)).moveStake(hotkeys[overIdx], hotkeys[underIdx], netuid, moveAmt);
     }
 
