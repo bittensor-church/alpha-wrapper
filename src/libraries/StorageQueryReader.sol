@@ -30,13 +30,7 @@ library StorageQueryReader {
     /// @notice Check whether `netuid` is currently in subtensor's DissolvedNetworks cleanup queue.
     /// @return True  = subnet cleanup is in progress; TAO refunds may not yet have been credited.
     ///         False = either the netuid was never dissolved, or every dissolution has been fully
-    ///                 cleaned up.
-    /// @dev    Reverts `DissolvedQueueReadFailed` when the precompile call or SCALE decoding
-    ///         fails — silently returning a guess would either lie about the blackout state or
-    ///         brick healthy subnets behind a misleading error. DissolvedNetworks is a Vec<NetUid>;
-    ///         we decode the SCALE compact length prefix in single-byte mode (up to 63 entries),
-    ///         far more than the realistic queue size given the global register-network rate limit
-    ///         and the `NetworkAlreadyDissolved` dedup inside do_dissolve_network.
+    ///                 cleaned up.s
     function isNetuidInDissolvedQueue(uint16 netuid) internal view returns (bool) {
         bytes memory key = abi.encodePacked(PALLET_PREFIX, DISSOLVED_NETWORKS);
         (bool ok, bytes memory result) = STORAGE_QUERY.staticcall(key);
