@@ -882,6 +882,29 @@ contract AlphaVaultTest is Test {
         assertEq(_getVaultStake(hotkey2, NETUID1), 500_000);
     }
 
+    function testProcessDepositEmitsRebalanced() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        uint256 tokenId = vault.currentTokenId(NETUID1);
+        vm.expectEmit(true, false, false, true);
+        emit Rebalanced(tokenId, 1);
+        _processDeposit(alice, NETUID1);
+    }
+
+    function testWithdrawEmitsRebalanced() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _processDeposit(alice, NETUID1);
+
+        // _rebalanceOnce inside processDeposit does a single move, so the clone
+        // is still unbalanced w.r.t. targets. A partial withdraw flushes from the
+        // largest hotkey, leaving a leftover that's still off-target — withdraw's
+        // _rebalanceOnce then moves stake again and emits.
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        vm.expectEmit(true, false, false, true);
+        emit Rebalanced(TOKEN1, 1);
+        vm.prank(alice);
+        vault.withdraw(TOKEN1, shares / 2, _toSubstrate(alice));
+    }
+
     function testRebalanceMovesAtOrAboveMinRebalanceAmt() public {
         ValidatorRegistry reg = new ValidatorRegistry(address(this), address(this));
         vault.setValidatorRegistry(address(reg));

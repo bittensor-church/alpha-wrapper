@@ -492,6 +492,11 @@ assert_script_rows "get_withdrawals" "$SUBNET_COUNT" \
         --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
         --block-start "$BLOCK_START" --block-end "$BLOCK_END"
 
+assert_script_rows "get_rebalances" "$SUBNET_COUNT" \
+    python3 scripts/get_rebalances.py \
+        --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
+        --block-start "$BLOCK_START" --block-end "$BLOCK_END"
+
 assert_script_rows "get_validator_updates" "$SUBNET_COUNT" \
     python3 scripts/get_validator_updates.py \
         --rpc-url "$RPC_URL" --registry-address "$VAL_REGISTRY_ADDR" \

@@ -513,6 +513,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         uint256 moveAmt = maxOver < maxUnder ? maxOver : maxUnder;
         if (moveAmt < minRebalanceAmt) return;
         SubnetClone(payable(clone)).moveStake(hotkeys[overIdx], hotkeys[underIdx], netuid, moveAmt);
+        emit Rebalanced(tokenId, 1);
     }
 
     function _sharesFor(uint256 stake, uint256 supply, uint256 assets) private pure returns (uint256) {
