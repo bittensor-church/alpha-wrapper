@@ -21,6 +21,7 @@ address constant STORAGE_QUERY = 0x0000000000000000000000000000000000000807;
 contract AlphaVaultTest is Test {
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
     event Rebalanced(uint256 indexed tokenId, uint8 moveCount);
+    event MinRebalanceAmtUpdated(uint256 oldValue, uint256 newValue);
 
     AlphaVault public vault;
     DepositMailbox public mailboxLogic;
@@ -834,36 +835,79 @@ contract AlphaVaultTest is Test {
         // No revert expected — returns early
     }
 
-    function testRebalanceEmitsEventAfterProcessDeposit() public {
-        // Repro of the localnet e2e flow. With 3 validators at 50/30/20 and a
-        // single-hotkey initial deposit, processDeposit's internal _findBestMove
-        // makes exactly one move (30 ether from hk1 → hk2), leaving the vault at
-        // [70, 30, 0] vs target [50, 30, 20]. A subsequent public rebalance()
-        // must find the residual 20-ether imbalance, do one more move, and emit
-        // Rebalanced(tokenId, 1). If this ever stops firing, either the on-chain
-        // rebalance sequence or mock ↔ real parity has regressed.
+    function testMinRebalanceAmtConstructorDefault() public view {
+        assertEq(vault.minRebalanceAmt(), 1e6);
+    }
+
+    function testSetMinRebalanceAmt() public {
+        vm.expectEmit(false, false, false, true);
+        emit MinRebalanceAmtUpdated(1e6, 5e9);
+        vault.setMinRebalanceAmt(5e9);
+        assertEq(vault.minRebalanceAmt(), 5e9);
+    }
+
+    function testSetMinRebalanceAmtOnlyOwner() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        vault.setMinRebalanceAmt(0);
+    }
+
+    function testRebalanceSkipsMoveBelowMinRebalanceAmt() public {
         ValidatorRegistry reg = new ValidatorRegistry(address(this), address(this));
         vault.setValidatorRegistry(address(reg));
 
-        bytes32[] memory hks = new bytes32[](3);
-        uint16[] memory wts = new uint16[](3);
+        bytes32[] memory hks = new bytes32[](2);
+        uint16[] memory wts = new uint16[](2);
         hks[0] = hotkey1;
         hks[1] = hotkey2;
-        hks[2] = hotkey3;
         wts[0] = 5000;
-        wts[1] = 3000;
-        wts[2] = 2000;
+        wts[1] = 5000;
         reg.setValidators(NETUID1, hks, wts);
 
-        _simulateAlphaDepositHotkey(alice, NETUID1, 100 ether, hotkey1);
+        // Seed a tiny imbalance: total = 1_000_001 RAO, target = 500_000/500_000,
+        // so moveAmt = 1 RAO — well below the 1e6 default minRebalanceAmt.
+        _simulateAlphaDepositHotkey(alice, NETUID1, 1, hotkey1);
         _processDeposit(alice, NETUID1);
+        bytes32 cloneCk = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneCk, NETUID1, 500_001);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneCk, NETUID1, 500_000);
 
-        // Intentionally do NOT reset the mock — we want to observe what rebalance()
-        // sees after a real processDeposit has already shifted some stake.
+        uint256 tokenId = vault.currentTokenId(NETUID1);
+        vm.expectEmit(true, false, false, true);
+        emit Rebalanced(tokenId, 0);
+        vault.rebalance(NETUID1);
+
+        // No move took place — balances unchanged.
+        assertEq(_getVaultStake(hotkey1, NETUID1), 500_001);
+        assertEq(_getVaultStake(hotkey2, NETUID1), 500_000);
+    }
+
+    function testRebalanceMovesAtOrAboveMinRebalanceAmt() public {
+        ValidatorRegistry reg = new ValidatorRegistry(address(this), address(this));
+        vault.setValidatorRegistry(address(reg));
+
+        bytes32[] memory hks = new bytes32[](2);
+        uint16[] memory wts = new uint16[](2);
+        hks[0] = hotkey1;
+        hks[1] = hotkey2;
+        wts[0] = 5000;
+        wts[1] = 5000;
+        reg.setValidators(NETUID1, hks, wts);
+
+        // moveAmt = (4e6 - 0) / 2 = 2e6, which exceeds the 1e6 default.
+        _simulateAlphaDepositHotkey(alice, NETUID1, 1, hotkey1);
+        _processDeposit(alice, NETUID1);
+        bytes32 cloneCk = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneCk, NETUID1, 4e6);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneCk, NETUID1, 0);
+
         uint256 tokenId = vault.currentTokenId(NETUID1);
         vm.expectEmit(true, false, false, true);
         emit Rebalanced(tokenId, 1);
         vault.rebalance(NETUID1);
+
+        assertEq(_getVaultStake(hotkey1, NETUID1), 2e6);
+        assertEq(_getVaultStake(hotkey2, NETUID1), 2e6);
     }
 
     // ────────────────── setValidatorRegistry ────────────────────────────

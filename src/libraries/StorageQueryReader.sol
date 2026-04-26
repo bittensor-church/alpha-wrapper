@@ -5,6 +5,8 @@ pragma solidity ^0.8.20;
 /// @notice Reads raw Substrate storage from the StorageQuery precompile (0x0807).
 ///         Constructs storage keys for SubtensorModule maps that use Identity hasher + u16 NetUid key.
 library StorageQueryReader {
+    error DissolvedQueueReadFailed();
+
     address constant STORAGE_QUERY = 0x0000000000000000000000000000000000000807;
 
     // twox_128("SubtensorModule") -- LE integer byte order, verified against subtensor source
@@ -28,28 +30,22 @@ library StorageQueryReader {
     /// @notice Check whether `netuid` is currently in subtensor's DissolvedNetworks cleanup queue.
     /// @return True  = subnet cleanup is in progress; TAO refunds may not yet have been credited.
     ///         False = either the netuid was never dissolved, or every dissolution has been fully
-    ///                 cleaned up (which means pass 2 of the cleanup loop has run for each).
-    /// @dev    Fail-safe: returns `true` when the query or decoding fails, so callers never take
-    ///         the dead path based on a bad read. DissolvedNetworks is a Vec<NetUid>; we decode
-    ///         the SCALE compact length prefix in single-byte mode (up to 63 entries), which is
-    ///         far more than the realistic queue size given the global register-network rate
-    ///         limit and the `NetworkAlreadyDissolved` dedup inside do_dissolve_network.
+    ///                 cleaned up.s
     function isNetuidInDissolvedQueue(uint16 netuid) internal view returns (bool) {
         bytes memory key = abi.encodePacked(PALLET_PREFIX, DISSOLVED_NETWORKS);
         (bool ok, bytes memory result) = STORAGE_QUERY.staticcall(key);
-        if (!ok) return true; // query failed -> assume dissolved (fail-safe)
+        if (!ok) revert DissolvedQueueReadFailed();
         if (result.length == 0) return false; // empty storage -> no dissolved networks
 
         // SCALE compact length prefix: single-byte mode has (length << 2) | 0b00 in the low byte.
-        // Any other encoding is unexpected for this storage item -> fail-safe.
         uint8 firstByte = uint8(result[0]);
-        if ((firstByte & 0x03) != 0) return true;
+        if ((firstByte & 0x03) != 0) revert DissolvedQueueReadFailed();
         uint256 len = uint256(firstByte >> 2);
 
         // Each NetUid is SCALE-encoded as a 2-byte little-endian u16.
         for (uint256 i = 0; i < len; i++) {
             uint256 pos = 1 + i * 2;
-            if (pos + 1 >= result.length) return true; // truncated -> fail-safe
+            if (pos + 1 >= result.length) revert DissolvedQueueReadFailed();
             uint16 entry = uint16(uint8(result[pos])) | (uint16(uint8(result[pos + 1])) << 8);
             if (entry == netuid) return true;
         }

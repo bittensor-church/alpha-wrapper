@@ -6,8 +6,8 @@ import { ERC1155Supply } from "@openzeppelin/contracts/token/ERC1155/extensions/
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
-import { CloneBase } from "./CloneBase.sol";
 import { SubnetClone } from "./SubnetClone.sol";
+import { DepositMailbox } from "./DepositMailbox.sol";
 import { IStaking, STAKING_PRECOMPILE } from "./interfaces/IStaking.sol";
 import { IValidatorRegistry } from "./interfaces/IValidatorRegistry.sol";
 import { IAddressMapping, ADDRESS_MAPPING_PRECOMPILE } from "./interfaces/IAddressMapping.sol";
@@ -42,6 +42,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     IValidatorRegistry public validatorRegistry;
     mapping(uint256 => address) public subnetClone;
 
+    /// @notice Minimum RAO amount for a single rebalance move. Below this, `_rebalanceOnce`
+    ///         and `rebalance` skip the `moveStake` precompile call — substrate's alpha-pool
+    ///         round-trip can round tiny moves to zero and revert. Owner-tunable so it can
+    ///         track future subtensor changes without a redeploy.
+    uint256 public minRebalanceAmt;
+
     // ──────────────────── Precision ─────────────────────────────────────────────
     /// @dev Virtual shares/assets to prevent inflation attacks (ERC4626 pattern).
     uint256 private constant VIRTUAL_SHARES = 1e9;
@@ -52,6 +58,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares, bytes32 hotkey);
     event Withdrawn(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 assets, bytes32 hotkey);
     event ValidatorRegistryUpdated(address oldRegistry, address newRegistry);
+    event MinRebalanceAmtUpdated(uint256 oldValue, uint256 newValue);
     event Rebalanced(uint256 indexed tokenId, uint8 moveCount);
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
 
@@ -72,6 +79,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         if (_mailboxLogic == address(0) || _subnetLogic == address(0)) revert ZeroAddress();
         mailboxLogic = _mailboxLogic;
         subnetLogic = _subnetLogic;
+        minRebalanceAmt = 1e6;
     }
 
     // ──────────────────── Token ID & Subnet Proxy ────────────────────────────────
@@ -124,7 +132,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         for (uint8 i = 0; i < count; i++) {
             uint256 stakeUnderHk = staking.getStake(hotkeys[i], cloneSubstrateColdkey, netuid);
             if (stakeUnderHk > 0) {
-                CloneBase(payable(userClone)).flush(destColdkey, hotkeys[i], netuid, stakeUnderHk);
+                DepositMailbox(payable(userClone)).flush(destColdkey, hotkeys[i], netuid, stakeUnderHk);
                 totalDeposit += stakeUnderHk;
             }
         }
@@ -199,7 +207,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
             uint8 idx = drainOrder[i];
             uint256 takeAmount = remaining > balances[idx] ? balances[idx] : remaining;
             if (takeAmount > 0) {
-                CloneBase(payable(clone)).flush(userSubstrateColdkey, hotkeys[idx], netuid, takeAmount);
+                SubnetClone(payable(clone)).flush(userSubstrateColdkey, hotkeys[idx], netuid, takeAmount);
                 remaining -= takeAmount;
             }
         }
@@ -219,7 +227,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         uint256 supplyBefore = totalSupply(tokenId);
         uint256 userTao = (cloneBalance * shares) / supplyBefore;
         _burn(msg.sender, tokenId, shares);
-        if (userTao > 0) CloneBase(payable(clone)).withdrawTao(payable(msg.sender), userTao);
+        if (userTao > 0) SubnetClone(payable(clone)).withdrawTao(payable(msg.sender), userTao);
         if (supplyBefore == shares) totalStake[tokenId] = 0;
         emit Withdrawn(msg.sender, tokenId, shares, userTao, bytes32(0));
     }
@@ -308,6 +316,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
             if (maxOver == 0 || maxUnder == 0 || overIdx == underIdx) break;
 
             uint256 moveAmt = maxOver < maxUnder ? maxOver : maxUnder;
+            if (moveAmt < minRebalanceAmt) break;
             SubnetClone(payable(clone)).moveStake(hotkeys[overIdx], hotkeys[underIdx], netuid, moveAmt);
             balances[overIdx] -= moveAmt;
             balances[underIdx] += moveAmt;
@@ -407,6 +416,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         _setURI(newUri);
     }
 
+    function setMinRebalanceAmt(uint256 newValue) external onlyOwner {
+        uint256 old = minRebalanceAmt;
+        minRebalanceAmt = newValue;
+        emit MinRebalanceAmtUpdated(old, newValue);
+    }
+
     /// @notice Reclaim native TAO stuck in the caller's mailbox clone after subnet deregistration.
     /// @dev    Deploys the mailbox clone lazily if it was never materialized, so the TAO refund
     ///         credited directly to the deterministic address can still be swept.
@@ -417,7 +432,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         uint256 amount = predicted.balance;
         if (amount == 0) revert ZeroAmount();
         _ensureMailboxClone(msg.sender, netuid);
-        CloneBase(payable(predicted)).withdrawTao(payable(msg.sender), amount);
+        DepositMailbox(payable(predicted)).withdrawTao(payable(msg.sender), amount);
     }
 
     // ──────────────────── Internal Helpers ──────────────────────────────────────
@@ -496,6 +511,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         if (maxOver == 0 || maxUnder == 0 || overIdx == underIdx) return;
 
         uint256 moveAmt = maxOver < maxUnder ? maxOver : maxUnder;
+        if (moveAmt < minRebalanceAmt) return;
         SubnetClone(payable(clone)).moveStake(hotkeys[overIdx], hotkeys[underIdx], netuid, moveAmt);
     }
 
@@ -524,7 +540,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         userClone = Clones.predictDeterministicAddress(mailboxLogic, salt, address(this));
         if (!cloneDeployed[userClone]) {
             Clones.cloneDeterministic(mailboxLogic, salt);
-            CloneBase(payable(userClone)).initialize(address(this));
+            DepositMailbox(payable(userClone)).initialize(address(this));
             cloneDeployed[userClone] = true;
         }
     }
@@ -536,7 +552,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
 
     function _deploySubnetClone(uint256 tokenId) private returns (address clone) {
         clone = Clones.clone(subnetLogic);
-        CloneBase(payable(clone)).initialize(address(this));
+        SubnetClone(payable(clone)).initialize(address(this));
         subnetClone[tokenId] = clone;
         emit SubnetProxyCreated(tokenId, clone);
     }
