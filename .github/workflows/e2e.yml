@@ -1,0 +1,66 @@
+name: E2E Tests
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  FOUNDRY_PROFILE: ci
+
+jobs:
+  e2e:
+    name: Localnet E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      subtensor:
+        image: ghcr.io/opentensor/subtensor-localnet:main
+        ports:
+          - 9944:9944
+          - 9945:9945
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python deps
+        run: pip install bittensor-cli==9.20.1 substrate-interface
+
+      - name: Wait for subtensor to be ready
+        run: |
+          echo "Waiting for subtensor localnet..."
+          for i in $(seq 1 30); do
+            if cast chain-id --rpc-url http://127.0.0.1:9944 2>/dev/null; then
+              echo "Subtensor is ready!"
+              exit 0
+            fi
+            echo "  attempt $i/30..."
+            sleep 2
+          done
+          echo "Subtensor failed to start"
+          exit 1
+
+      - name: Run E2E tests
+        run: |
+          chmod +x scripts/localnet-e2e.sh
+          ./scripts/localnet-e2e.sh
+
+      - name: Collect subtensor logs
+        if: failure()
+        run: docker logs subtensor 2>&1 | tail -100 || true
