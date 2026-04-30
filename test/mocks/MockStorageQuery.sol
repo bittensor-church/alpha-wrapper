@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+/// @title MockStorageQuery
 /// @notice Minimal mock for the StorageQuery precompile at 0x0807.
 contract MockStorageQuery {
     bytes16 constant NETWORK_REGISTERED_AT = 0x271d29b9b717ce3d8c571f1cbc180fa2;

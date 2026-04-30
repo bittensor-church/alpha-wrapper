@@ -30,7 +30,7 @@ library StorageQueryReader {
     /// @notice Check whether `netuid` is currently in subtensor's DissolvedNetworks cleanup queue.
     /// @return True  = subnet cleanup is in progress; TAO refunds may not yet have been credited.
     ///         False = either the netuid was never dissolved, or every dissolution has been fully
-    ///                 cleaned up.s
+    ///                 cleaned up.
     function isNetuidInDissolvedQueue(uint16 netuid) internal view returns (bool) {
         bytes memory key = abi.encodePacked(PALLET_PREFIX, DISSOLVED_NETWORKS);
         (bool ok, bytes memory result) = STORAGE_QUERY.staticcall(key);
