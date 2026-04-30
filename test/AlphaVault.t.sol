@@ -101,8 +101,6 @@ contract AlphaVaultTest is Test {
         TOKEN2 = vault.currentTokenId(NETUID2);
     }
 
-    // ──────────── Helpers ────────────────────────────────────────────────────
-
     function _toSubstrate(address addr) internal pure returns (bytes32) {
         return keccak256(abi.encodePacked("evm:", addr));
     }
@@ -467,7 +465,7 @@ contract AlphaVaultTest is Test {
         vault.withdraw(TOKEN1, 0, aliceSub);
     }
 
-    // ────────────────── Forwarder Security ───────────────────────────────────
+    // ────────────────── Mailbox Security ─────────────────────────────────────
 
     function testOnlyVaultCanFlush() public {
         _simulateAlphaDeposit(alice, NETUID1, 5 ether);
@@ -481,7 +479,7 @@ contract AlphaVaultTest is Test {
         CloneBase(payable(clone)).flush(bytes32(0), hotkey1, NETUID1, 1 ether);
     }
 
-    function testForwarderCannotReinitialize() public {
+    function testMailboxCannotReinitialize() public {
         _simulateAlphaDeposit(alice, NETUID1, 1 ether);
         _processDeposit(alice, NETUID1);
 
@@ -835,8 +833,6 @@ contract AlphaVaultTest is Test {
         // No revert expected — returns early
     }
 
-    // ────────────────── minRebalanceAmt ──────────────────────────────────
-
     function testMinRebalanceAmtConstructorDefault() public view {
         assertEq(vault.minRebalanceAmt(), 1e6);
     }
@@ -882,6 +878,46 @@ contract AlphaVaultTest is Test {
         // No move took place — balances unchanged.
         assertEq(_getVaultStake(hotkey1, NETUID1), 500_001);
         assertEq(_getVaultStake(hotkey2, NETUID1), 500_000);
+    }
+
+    function testProcessDepositEmitsRebalanced() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        uint256 tokenId = vault.currentTokenId(NETUID1);
+        vm.expectEmit(true, false, false, true);
+        emit Rebalanced(tokenId, 1);
+        _processDeposit(alice, NETUID1);
+    }
+
+    function testWithdrawEmitsRebalanced() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _processDeposit(alice, NETUID1);
+
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        vm.expectEmit(true, false, false, true);
+        emit Rebalanced(TOKEN1, 1);
+        vm.prank(alice);
+        vault.withdraw(TOKEN1, shares / 2, _toSubstrate(alice));
+    }
+
+    function testProcessDepositDoesNotEmitRebalancedWhenMoveBelowThreshold() public {
+        ValidatorRegistry reg = new ValidatorRegistry(address(this), address(this));
+        vault.setValidatorRegistry(address(reg));
+        bytes32[] memory hks = new bytes32[](2);
+        uint16[] memory wts = new uint16[](2);
+        hks[0] = hotkey1;
+        hks[1] = hotkey2;
+        wts[0] = 5000;
+        wts[1] = 5000;
+        reg.setValidators(NETUID1, hks, wts);
+
+        // 1 RAO under hotkey1 → after flush, clone holds [1, 0] with weights [50%, 50%].
+        // moveAmt = 1, well below the 1e6 default minRebalanceAmt — _rebalanceOnce
+        // returns early without emitting.
+        _simulateAlphaDepositHotkey(alice, NETUID1, 1, hotkey1);
+
+        vm.expectEmit(false, false, false, false, address(vault), 0);
+        emit Rebalanced(0, 0);
+        _processDeposit(alice, NETUID1);
     }
 
     function testRebalanceMovesAtOrAboveMinRebalanceAmt() public {
@@ -957,15 +993,13 @@ contract AlphaVaultTest is Test {
         vault.setURI("https://malicious.io/{id}.json");
     }
 
-    // ────────────────── DepositForwarder: ZeroAddress revert ────────────
+    // ────────────────── DepositMailbox: ZeroAddress revert ──────────────────
 
-    function testForwarderInitializeRevertsZeroAddress() public {
+    function testMailboxInitializeRevertsZeroAddress() public {
         address clone = Clones.clone(address(mailboxLogic));
         vm.expectRevert(CloneBase.ZeroAddress.selector);
         CloneBase(payable(clone)).initialize(address(0));
     }
-
-    // ────────────────── receive() payable ────────────────────────────────
 
     // ────────────────── Registry fallback to metagraph ───────────────────
 

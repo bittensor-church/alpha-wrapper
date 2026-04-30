@@ -6,3 +6,4 @@ node_modules/
 .idea/
 broadcast/
 frontend/dist/
+scripts/__pycache__/
