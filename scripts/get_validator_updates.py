@@ -13,6 +13,7 @@ from common import fetch_event_logs, get_web3_connection, write_dataclass_csv
 class ValidatorsUpdatedEvent:
     tx_hash: str
     netuid: int
+    nonce: int
     count: int
     timestamp: int
 
@@ -30,8 +31,9 @@ def main() -> None:
         ValidatorsUpdatedEvent(
             tx_hash=log["transactionHash"].to_0x_hex(),
             netuid=ev_args["netuid"],
-            count=ev_args["count"],
-            timestamp=ev_args["timestamp"],
+            nonce=ev_args["nonce"],
+            count=len(ev_args["hotkeys"]),
+            timestamp=w3.eth.get_block(log["blockNumber"]).timestamp,
         )
         for log, ev_args in fetch_event_logs(
             w3, args.registry_address, "ValidatorRegistry", "ValidatorsUpdated",

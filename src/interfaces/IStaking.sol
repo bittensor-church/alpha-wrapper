@@ -5,7 +5,7 @@ pragma solidity ^0.8.20;
 /// @notice Interface for the Bittensor staking precompile on EVM.
 /// @dev Precompile lives at 0x0000000000000000000000000000000000000805.
 ///      Coldkeys are bytes32 (SS58 public keys), NOT H160 addresses.
-///      The EVM→Substrate mapping uses Frontier HashedAddressMapping.
+///      The EVM-to-Substrate mapping uses Frontier HashedAddressMapping.
 interface IStaking {
     function transferStake(
         bytes32 destination_coldkey,
