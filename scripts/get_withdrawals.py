@@ -16,7 +16,6 @@ class WithdrawnEvent:
     token_id: int
     shares: int
     assets: int
-    hotkey: str
 
 
 def main() -> None:
@@ -35,7 +34,6 @@ def main() -> None:
             token_id=ev_args["tokenId"],
             shares=ev_args["shares"],
             assets=ev_args["assets"],
-            hotkey="0x" + ev_args["hotkey"].hex(),
         )
         for log, ev_args in fetch_event_logs(
             w3, args.vault_address, "AlphaVault", "Withdrawn",

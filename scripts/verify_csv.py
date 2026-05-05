@@ -18,6 +18,10 @@ def main() -> None:
         help="Distinct values of COL must equal this set (order-independent)",
     )
     parser.add_argument(
+        "--column-subset", action="append", default=[], metavar="COL=v1,v2,...",
+        help="Distinct values of COL must be a subset of this set (order-independent)",
+    )
+    parser.add_argument(
         "--column-eq", action="append", default=[], metavar="COL=value",
         help="All rows must have COL == value",
     )
@@ -42,6 +46,14 @@ def main() -> None:
         actual = {r[col] for r in rows}
         if actual != expected:
             fail(f"'{col}' set: expected {sorted(expected)}, got {sorted(actual)}")
+
+    for spec in args.column_subset:
+        col, vals = spec.split("=", 1)
+        allowed = set(vals.split(","))
+        actual = {r[col] for r in rows}
+        extras = actual - allowed
+        if extras:
+            fail(f"'{col}' subset: unexpected value(s) {sorted(extras)} (allowed: {sorted(allowed)})")
 
     for spec in args.column_eq:
         col, val = spec.split("=", 1)

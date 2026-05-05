@@ -82,6 +82,16 @@ transfer_stake_py() {
         --alpha-amount "$4"
 }
 
+set_validators_py() {
+    python3 scripts/e2e_helpers.py set_validators \
+        --rpc-url "$RPC_URL" \
+        --registry "$VAL_REGISTRY_ADDR" \
+        --signer-pk "$DEPLOYER_PK" \
+        --netuid "$1" \
+        --hotkeys "$2" \
+        --weights "$3"
+}
+
 create_subnet() {
     printf '\n\n\n\n\n\n\n\n\n\n' | btcli_cmd subnets create \
         --wallet-name "$ALICE_WALLET" --hotkey "$ALICE_HOTKEY_NAME" \
@@ -244,9 +254,7 @@ done
 
 log "Phase 4: Deploy"
 
-# Capture the block range boundary before any event-emitting tx (setValidators,
-# createSubnetProxy, processDeposit, rebalance, withdraw). Used by Phase 10 to
-# narrow the get_logs range passed to the Python observability scripts.
+# Block range for Phase 10 observability scripts.
 BLOCK_START=$(cast block-number --rpc-url "$RPC_URL")
 info "Observability block range start: $BLOCK_START"
 
@@ -271,9 +279,9 @@ ok "AlphaVault: $VAULT_ADDR"
 
 VAL_REGISTRY_ADDR=$(forge create src/ValidatorRegistry.sol:ValidatorRegistry \
     --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" $FORGE_FLAGS --json \
-    --constructor-args "$DEPLOYER_ADDR" "$DEPLOYER_ADDR" \
+    --constructor-args "$DEPLOYER_ADDR" "[$DEPLOYER_ADDR]" 1 \
     | python3 -c "import json,sys; print(json.load(sys.stdin)['deployedTo'])")
-ok "ValidatorRegistry: $VAL_REGISTRY_ADDR"
+ok "ValidatorRegistry: $VAL_REGISTRY_ADDR (admin + sole signer: $DEPLOYER_ADDR)"
 
 VAULT_IDS=()
 for NET in "${NETUIDS[@]}"; do
@@ -289,17 +297,16 @@ cast send "$VAULT_ADDR" "setValidatorRegistry(address)" \
     $CAST_FLAGS --json > /dev/null 2>&1
 ok "Vault → ValidatorRegistry linked"
 
+REG_BLOCK_START=$(cast block-number --rpc-url "$RPC_URL")
 for i in 0 1 2; do
     NET="${NETUIDS[$i]}"
     HK_A="${ALL_HK_B32S[$((i * 3 + 0))]}"
     HK_B="${ALL_HK_B32S[$((i * 3 + 1))]}"
     HK_C="${ALL_HK_B32S[$((i * 3 + 2))]}"
-    cast send "$VAL_REGISTRY_ADDR" "setValidators(uint256,bytes32[],uint16[])" \
-        "$NET" "[$HK_A,$HK_B,$HK_C]" "[5000,3000,2000]" \
-        --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" \
-        $CAST_FLAGS --json > /dev/null 2>&1
+    set_validators_py "$NET" "$HK_A,$HK_B,$HK_C" "5000,3000,2000" > /dev/null
     ok "netuid $NET validators set (50/30/20): ${HK_A:0:18}..., ${HK_B:0:18}..., ${HK_C:0:18}..."
 done
+REG_BLOCK_END=$(cast block-number --rpc-url "$RPC_URL")
 
 for NET in "${NETUIDS[@]}"; do
     cast send "$VAULT_ADDR" "createSubnetProxy(uint256)" \
@@ -333,52 +340,56 @@ ok "Balance: $(cast balance "$WRAPPER_ADDR" --rpc-url "$RPC_URL" --ether) TAO"
 WRAPPER_SUB_B32=$(h160_to_substrate_b32 "$WRAPPER_ADDR")
 info "Wrapper substrate coldkey: $WRAPPER_SUB_B32"
 
-log "Phase 6: Transfer alpha → clone addresses"
+log "Phase 6: Transfer alpha to clone addresses (split across 3 validators)"
 
-CLONE_SUB_B32S=()
+PER_HOTKEY_RAW=$((TRANSFER_AMOUNT * 1000000000 / 3))
 
 for i in 0 1 2; do
     NET="${NETUIDS[$i]}"
-    FIRST_IDX=$((i * 3))
-
     CLONE_ADDR=$(cast call "$VAULT_ADDR" "getDepositAddress(address,uint256)(address)" \
         "$WRAPPER_ADDR" "$NET" --rpc-url "$RPC_URL")
     ok "netuid $NET clone: $CLONE_ADDR"
 
     CLONE_SUB=$(h160_to_substrate_b32 "$CLONE_ADDR")
     CLONE_SS58=$(h160_to_ss58 "$CLONE_ADDR")
-    CLONE_SUB_B32S+=("$CLONE_SUB")
     ok "Clone SS58: $CLONE_SS58"
 
-    echo "  Transferring $TRANSFER_AMOUNT alpha on netuid $NET → clone ..."
-    HK_SS58="${ALL_HK_SS58S[$FIRST_IDX]}"
-    RAW=$((TRANSFER_AMOUNT * 1000000000))
-    transfer_stake_py "$CLONE_SS58" "$HK_SS58" "$NET" "$RAW" | tail -1
+    for j in 0 1 2; do
+        IDX=$((i * 3 + j))
+        HK_SS58="${ALL_HK_SS58S[$IDX]}"
+        HK_B32="${ALL_HK_B32S[$IDX]}"
 
-    CLONE_STAKE=$(cast call "$STAKING" "getStake(bytes32,bytes32,uint256)(uint256)" \
-        "${ALL_HK_B32S[$FIRST_IDX]}" "$CLONE_SUB" "$NET" --rpc-url "$RPC_URL")
-    [[ "$CLONE_STAKE" == "0" ]] && fail "Clone $CLONE_ADDR has 0 alpha after transfer"
-    ok "Clone stake: $CLONE_STAKE RAO"
+        echo "  Transferring $PER_HOTKEY_RAW RAO on netuid $NET under ${HK_B32:0:18}... to clone"
+        transfer_stake_py "$CLONE_SS58" "$HK_SS58" "$NET" "$PER_HOTKEY_RAW" | tail -1
+
+        CLONE_STAKE=$(cast call "$STAKING" "getStake(bytes32,bytes32,uint256)(uint256)" \
+            "$HK_B32" "$CLONE_SUB" "$NET" --rpc-url "$RPC_URL")
+        [[ "$CLONE_STAKE" == "0" ]] && fail "Clone $CLONE_ADDR has 0 alpha under ${HK_B32:0:18}... after transfer"
+        ok "Clone stake under ${HK_B32:0:18}...: $CLONE_STAKE RAO"
+    done
 done
 
-log "Phase 7: Process deposits"
+log "Phase 7: Process deposits (one per validator)"
 
 for i in 0 1 2; do
     NET="${NETUIDS[$i]}"
-    CLONE_SUB="${CLONE_SUB_B32S[$i]}"
+    for j in 0 1 2; do
+        IDX=$((i * 3 + j))
+        CHOSEN_HK="${ALL_HK_B32S[$IDX]}"
 
-    TX_JSON=$(cast send "$VAULT_ADDR" \
-        "processDeposit(address,uint256,bytes32)" \
-        "$WRAPPER_ADDR" "$NET" "$CLONE_SUB" \
-        --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
-        $EVM_FLAGS --gas-limit 1000000 --json || true)
+        TX_JSON=$(cast send "$VAULT_ADDR" \
+            "processDeposit(address,uint256,bytes32)" \
+            "$WRAPPER_ADDR" "$NET" "$CHOSEN_HK" \
+            --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
+            $EVM_FLAGS --gas-limit 1000000 --json || true)
 
-    STATUS=$(echo "$TX_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
-    if [[ "$STATUS" != "0x1" ]]; then
-        echo "$TX_JSON"
-        fail "processDeposit for netuid $NET failed (status=$STATUS)"
-    fi
-    ok "netuid $NET deposited"
+        STATUS=$(echo "$TX_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
+        if [[ "$STATUS" != "0x1" ]]; then
+            echo "$TX_JSON"
+            fail "processDeposit for netuid $NET, hotkey ${CHOSEN_HK:0:18}... failed (status=$STATUS)"
+        fi
+        ok "netuid $NET deposited under ${CHOSEN_HK:0:18}..."
+    done
 done
 
 log "Phase 8: Verify deposits"
@@ -480,7 +491,7 @@ verify_script "get_subnet_proxies" \
         --block-start "$BLOCK_START" --block-end "$BLOCK_END"
 
 verify_script "get_deposits" \
-    --rows "$SUBNET_COUNT" \
+    --rows $((SUBNET_COUNT * 3)) \
     --column-set "token_id=$VAULT_IDS_CSV" \
     --column-eq "user=$WRAPPER_ADDR" \
     --column-positive assets \
@@ -499,12 +510,11 @@ verify_script "get_withdrawals" \
         --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
         --block-start "$BLOCK_START" --block-end "$BLOCK_END"
 
-# Rebalance count is nondeterministic: processDeposit always emits one per subnet,
-# withdraw emits an additional one only when the post-flush leftover dust exceeds
-# minRebalanceAmt. Assert the set of token_ids and that every emitted move_count is 1.
+# Per-netuid: 0 or 1 emission depending on whether post-drain leftover (emissions
+# accrued between deposit and withdraw) clears `minRebalanceAmt`. Assert membership only.
 verify_script "get_rebalances" \
-    --column-set "token_id=$VAULT_IDS_CSV" \
-    --column-eq "move_count=1" \
+    --column-subset "token_id=$VAULT_IDS_CSV" \
+    --column-positive amount \
     -- python3 scripts/get_rebalances.py \
         --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
         --block-start "$BLOCK_START" --block-end "$BLOCK_END"
@@ -516,13 +526,7 @@ verify_script "get_validator_updates" \
     --column-positive timestamp \
     -- python3 scripts/get_validator_updates.py \
         --rpc-url "$RPC_URL" --registry-address "$VAL_REGISTRY_ADDR" \
-        --block-start "$BLOCK_START" --block-end "$BLOCK_END"
-
-verify_script "get_validator_batch_updates" \
-    --rows 0 \
-    -- python3 scripts/get_validator_batch_updates.py \
-        --rpc-url "$RPC_URL" --registry-address "$VAL_REGISTRY_ADDR" \
-        --block-start "$BLOCK_START" --block-end "$BLOCK_END"
+        --block-start "$REG_BLOCK_START" --block-end "$REG_BLOCK_END"
 
 for i in 0 1 2; do
     NET="${NETUIDS[$i]}"
@@ -532,7 +536,7 @@ for i in 0 1 2; do
         --rows 1 \
         --column-eq "token_id=$TID" \
         --column-eq "user=" \
-        --column-eq "deposit_count=1" \
+        --column-eq "deposit_count=3" \
         --column-eq "withdraw_count=1" \
         --column-positive total_assets_in \
         --column-positive total_shares_minted \
@@ -546,15 +550,13 @@ for i in 0 1 2; do
         --rows 1 \
         --column-eq "token_id=$TID" \
         --column-eq "user=$WRAPPER_ADDR" \
-        --column-eq "deposit_count=1" \
+        --column-eq "deposit_count=3" \
         --column-eq "withdraw_count=1" \
         -- python3 scripts/get_volumes.py \
             --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
             --block-start "$BLOCK_START" --block-end "$BLOCK_END" \
             --netuid "$NET" --user "$WRAPPER_ADDR"
 
-    # After full withdraw: totalSupply = 0 → sharePrice() reverts NoSharesOutstanding.
-    # Validator registry is set with 3 hotkeys per subnet.
     verify_script "get_vault_state (netuid $NET)" \
         --rows 1 \
         --column-eq "token_id=$TID" \

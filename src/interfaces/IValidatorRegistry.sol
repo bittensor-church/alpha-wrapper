@@ -2,20 +2,14 @@
 pragma solidity ^0.8.20;
 
 /// @title IValidatorRegistry
-/// @notice Interface for the validator registry that stores preferred validators per subnet
-///         with target allocation weights. Off-chain bot selects validators (e.g. by APY)
-///         and pushes hotkeys + weights here. AlphaVault reads this to decide stake distribution.
+/// @notice Read interface that AlphaVault consumes to learn which validator hotkeys
+///         to stake under, and in what BPS proportions, for a given subnet.
 interface IValidatorRegistry {
-    /// @notice Returns the preferred validator hotkeys and their target weights for a subnet.
-    /// @param netuid The subnet ID.
-    /// @return hotkeys Array of validator hotkeys (up to 3).
-    /// @return weights Target allocation in BPS (basis points, sum = 10000).
-    /// @return count Number of valid entries.
-    function getValidators(uint256 netuid)
-        external
-        view
-        returns (bytes32[3] memory hotkeys, uint16[3] memory weights, uint8 count);
-
-    /// @notice Whether the registry has validators set for a subnet.
-    function hasValidators(uint256 netuid) external view returns (bool);
+    /// @notice Returns the per-subnet validator hotkeys and their BPS weights.
+    /// @dev    Returned arrays are packed from index 0: populated entries occupy
+    ///         indices `0..count-1`, trailing entries are zero. Callers derive count
+    ///         as the index of the first zero weight. A subnet is configured iff
+    ///         `weights[0] > 0`; weights sum to 10000 across populated entries.
+    /// @param  netuid Subnet id.
+    function getValidators(uint256 netuid) external view returns (bytes32[3] memory hotkeys, uint16[3] memory weights);
 }

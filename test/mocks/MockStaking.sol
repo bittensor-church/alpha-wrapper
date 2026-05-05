@@ -1,26 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/// @title MockStaking
-/// @notice Mock of the Bittensor staking precompile (0x805) for testing.
-///         Matches the real IStaking interface: coldkeys are bytes32 (substrate account IDs).
-///
-///         On the real chain, an EVM address (H160) maps to a substrate account via
-///         blake2b("evm:" + h160). In this mock, we simulate the same with
-///         keccak256("evm:", h160) for simplicity (the test helpers use the same hash).
+/// @dev Uses keccak256("evm:", h160) for coldkey derivation instead of the real
+///      blake2b, matching the test helper `_toSubstrate`.
 contract MockStaking {
-    // hotkey => coldkey(bytes32) => netuid => stake
     mapping(bytes32 => mapping(bytes32 => mapping(uint256 => uint256))) public stakes;
     uint256 public moveStakeRoundingLoss;
 
-    /// @notice Test helper: directly set stake for a coldkey.
     function setStake(bytes32 hotkey, bytes32 coldkey, uint256 netuid, uint256 amount) external {
         stakes[hotkey][coldkey][netuid] = amount;
     }
 
-    /// @dev Convert msg.sender H160 to substrate-like account ID.
-    ///      Uses keccak256("evm:", addr) to match the test helper _toSubstrate().
-    function _senderColdkey() internal view returns (bytes32) {
+    function _senderColdkey() private view returns (bytes32) {
         return keccak256(abi.encodePacked("evm:", msg.sender));
     }
 
