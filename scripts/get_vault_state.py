@@ -25,9 +25,10 @@ def _validator_columns(registry: Contract | None, netuid: int) -> dict:
         cols[f"validator_{i+1}_weight"] = ""
     if registry is None:
         return cols
-    hotkeys, weights, count = registry.functions.getValidators(netuid).call()
+    hotkeys, weights = registry.functions.getValidators(netuid).call()
+    count = sum(1 for w in weights if w != 0)
     cols["validators_count"] = count
-    for i in range(min(count, 3)):
+    for i in range(count):
         cols[f"validator_{i+1}_hotkey"] = "0x" + hotkeys[i].hex()
         cols[f"validator_{i+1}_weight"] = weights[i]
     return cols

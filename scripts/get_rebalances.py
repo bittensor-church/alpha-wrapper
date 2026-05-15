@@ -13,7 +13,9 @@ from common import fetch_event_logs, get_web3_connection, write_dataclass_csv
 class RebalancedEvent:
     tx_hash: str
     token_id: int
-    move_count: int
+    from_hotkey: str
+    to_hotkey: str
+    amount: int
 
 
 def main() -> None:
@@ -29,7 +31,9 @@ def main() -> None:
         RebalancedEvent(
             tx_hash=log["transactionHash"].to_0x_hex(),
             token_id=ev_args["tokenId"],
-            move_count=ev_args["moveCount"],
+            from_hotkey="0x" + ev_args["fromHotkey"].hex(),
+            to_hotkey="0x" + ev_args["toHotkey"].hex(),
+            amount=ev_args["amount"],
         )
         for log, ev_args in fetch_event_logs(
             w3, args.vault_address, "AlphaVault", "Rebalanced",
