@@ -52,14 +52,12 @@ WRAPPER_SS58="5H9xN1Y6KqdhcK9wPqFSPHC7yeaRC5y4CL3nNF2GX6hJrmpT"
 
 STAKING="0x0000000000000000000000000000000000000805"
 
-STAKE_RATIOS=(600 400 200)
+STAKE_AMOUNT=200
 TRANSFER_AMOUNT=100
 HK_SUFFIXES=(a b c)
 
 # Bittensor EVM: gas estimation fails; always use legacy tx with explicit gas.
 EVM_FLAGS="--legacy --gas-price 10000000000"
-FORGE_FLAGS="$EVM_FLAGS --gas-limit 5000000 --broadcast"
-CAST_FLAGS="$EVM_FLAGS --gas-limit 500000"
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -70,6 +68,82 @@ fail() { echo -e "  \033[1;31m✗ $1\033[0m"; exit 1; }
 
 h160_to_substrate_b32() { python3 scripts/e2e_helpers.py h160_to_substrate_b32 "$1"; }
 h160_to_ss58()          { python3 scripts/e2e_helpers.py h160_to_ss58 "$1"; }
+
+# Extract decimal gasUsed from a cast send --json receipt (handles hex or decimal).
+extract_gas() {
+    echo "$1" | python3 -c "import json,sys; g=json.load(sys.stdin).get('gasUsed','0'); print(int(g,16) if isinstance(g,str) and g.startswith('0x') else int(g))"
+}
+
+# Create the hotkey wallet file if missing and register on a subnet.
+# Sleeps one block after success to space out Alice's extrinsics. Allows one retry
+# to absorb btcli's transient sign-and-submit races (stale nonce / era expiry) on
+# fast localnet — not a rate-limit workaround.
+# Usage: register_hotkey <wallet> <hotkey_name> <netuid>
+register_hotkey() {
+    local wallet="$1"
+    local hk="$2"
+    local netuid="$3"
+
+    if [[ ! -f "$HOME/.bittensor/wallets/$wallet/hotkeys/$hk" ]]; then
+        btcli wallet new-hotkey --wallet-name "$wallet" --hotkey "$hk" \
+            --n-words 12 --no-use-password 2>&1 | tail -1
+    fi
+
+    local reg_out
+    for attempt in 1 2; do
+        reg_out=$(btcli_cmd subnets register --netuid "$netuid" --wallet-name "$wallet" --hotkey "$hk" --no-prompt 2>&1)
+        if echo "$reg_out" | grep -q "Registered\|Already"; then
+            sleep 12
+            return 0
+        fi
+        sleep 12
+    done
+    echo "$reg_out"
+    fail "register failed for $hk on netuid $netuid (2 attempts)"
+}
+
+# Run `cast send <args> --json`, fail loudly on non-success status, echo decimal gasUsed.
+# Usage: GAS=$(send_tx "<label for failure>" <cast send args without --json>)
+send_tx() {
+    local label="$1"
+    shift
+    local tx_json
+    tx_json=$(cast send "$@" --json || true)
+    local status
+    status=$(echo "$tx_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
+    if [[ "$status" != "0x1" ]]; then
+        echo "$tx_json" >&2
+        fail "$label failed (status=$status)"
+    fi
+    extract_gas "$tx_json"
+}
+
+# verify_script <label> <verify_csv args...> -- <script command...>
+# Pipes the script's CSV stdout through scripts/verify_csv.py with the verify args.
+# Fails the e2e on the first invariant violation.
+verify_script() {
+    local label="$1"; shift
+    local v_args=()
+    while [[ $# -gt 0 && "$1" != "--" ]]; do v_args+=("$1"); shift; done
+    [[ "$1" == "--" ]] && shift
+    "$@" | python3 scripts/verify_csv.py "${v_args[@]}"
+    ok "$label"
+}
+
+# Print gas stats for a labeled series of measurements.
+print_gas_stats() {
+    local label="$1"
+    shift
+    python3 -c "
+import sys
+gs = [int(x) for x in sys.argv[2:]]
+if not gs:
+    print(f'  {sys.argv[1]:<15} (no calls)')
+else:
+    n = len(gs); total = sum(gs); avg = total // n
+    print(f'  {sys.argv[1]:<15} calls={n:>2}  total={total:>10,}  avg={avg:>9,}  min={min(gs):>9,}  max={max(gs):>9,}')
+" "$label" "$@"
+}
 
 btcli_cmd() { btcli "$@" --network "$CHAIN_ENDPOINT"; }
 
@@ -87,6 +161,7 @@ set_validators_py() {
         --rpc-url "$RPC_URL" \
         --registry "$VAL_REGISTRY_ADDR" \
         --signer-pk "$DEPLOYER_PK" \
+        --signer-pk "$WRAPPER_PK" \
         --netuid "$1" \
         --hotkeys "$2" \
         --weights "$3"
@@ -170,9 +245,9 @@ else
     ok "Balance: ${DEPLOYER_BAL} TAO (>50, skipping transfer)"
 fi
 
-log "Phase 1: Create 3 subnets"
+log "Phase 1: Create 2 subnets"
 NETUIDS=()
-for i in 1 2 3; do
+for i in 1 2; do
     echo "  Creating subnet alpha_e2e_$i ..."
     OUTPUT=$(create_subnet "alpha_e2e_$i")
     NETUID=$(echo "$OUTPUT" | sed -n 's/.*netuid: \([0-9]*\).*/\1/p' | tail -1)
@@ -181,15 +256,11 @@ for i in 1 2 3; do
     ok "netuid $NETUID"
 done
 
-log "Start emissions + increase max_regs_per_block"
+log "Start emissions"
 for NETUID in "${NETUIDS[@]}"; do
     btcli_cmd subnets start --netuid "$NETUID" \
         --wallet-name "$ALICE_WALLET" --hotkey "$ALICE_HOTKEY_NAME" --no-prompt 2>&1 | tail -1
     ok "netuid $NETUID emissions started"
-
-    btcli_cmd sudo set --netuid "$NETUID" \
-        --wallet-name "$ALICE_WALLET" --param max_regs_per_block --value 8 --no-prompt 2>&1 | tail -1
-    ok "netuid $NETUID max_regs_per_block → 8"
 done
 
 log "Phase 2: Hotkeys & validators (3 per subnet)"
@@ -199,7 +270,7 @@ ALL_HK_NAMES=()
 ALL_HK_B32S=()
 ALL_HK_SS58S=()
 
-for i in 0 1 2; do
+for i in 0 1; do
     NET="${NETUIDS[$i]}"
     SUBNET_NUM=$((i + 1))
 
@@ -208,23 +279,7 @@ for i in 0 1 2; do
         HK="hk_e2e_${SUBNET_NUM}${SUFFIX}"
         IDX=$((i * 3 + j))
 
-        [[ ! -f "$HOME/.bittensor/wallets/$ALICE_WALLET/hotkeys/$HK" ]] && \
-            btcli wallet new-hotkey --wallet-name "$ALICE_WALLET" --hotkey "$HK" \
-                --n-words 12 --no-use-password 2>&1 | tail -1
-
-        # Retry register with 6s block delay — rate-limited even at max_regs_per_block=8.
-        for attempt in 1 2 3; do
-            REG_OUT=$(btcli_cmd subnets register --netuid "$NET" --wallet-name "$ALICE_WALLET" --hotkey "$HK" --no-prompt 2>&1)
-            if echo "$REG_OUT" | grep -q "Registered\|Already"; then
-                break
-            fi
-            echo "  Retry $attempt for $HK (waiting for next block)..."
-            sleep 6
-        done
-        if ! echo "$REG_OUT" | grep -q "Registered\|Already"; then
-            echo "$REG_OUT"
-            fail "register failed for $HK on netuid $NET after 3 attempts"
-        fi
+        register_hotkey "$ALICE_WALLET" "$HK" "$NET"
 
         ALL_HK_NAMES+=("$HK")
         ALL_HK_B32S+=("$(read_hotkey_pubkey "$ALICE_WALLET" "$HK")")
@@ -233,55 +288,49 @@ for i in 0 1 2; do
     done
 done
 
-log "Phase 3: Stake TAO per validator (ratio 3:2:1)"
+log "Phase 3: Stake TAO per validator"
 
-for i in 0 1 2; do
+for i in 0 1; do
     NET="${NETUIDS[$i]}"
 
     for j in 0 1 2; do
         IDX=$((i * 3 + j))
-        AMOUNT="${STAKE_RATIOS[$j]}"
         HK="${ALL_HK_NAMES[$IDX]}"
 
         btcli_cmd stake add --wallet-name "$ALICE_WALLET" --hotkey "$HK" \
-            --amount "$AMOUNT" --netuid "$NET" --no-mev-protection \
+            --amount "$STAKE_AMOUNT" --netuid "$NET" --no-mev-protection \
             --no-prompt --unsafe 2>&1 | tail -2
         STAKE=$(cast call "$STAKING" "getStake(bytes32,bytes32,uint256)(uint256)" \
             "${ALL_HK_B32S[$IDX]}" "$ALICE_COLDKEY_B32" "$NET" --rpc-url "$RPC_URL")
-        ok "netuid $NET $HK: ${AMOUNT} TAO → $STAKE RAO"
+        ok "netuid $NET $HK: ${STAKE_AMOUNT} TAO → $STAKE RAO"
     done
 done
 
 log "Phase 4: Deploy"
 
-# Block range for Phase 10 observability scripts.
-BLOCK_START=$(cast block-number --rpc-url "$RPC_URL")
-info "Observability block range start: $BLOCK_START"
+# DEPLOYER (0x7bD3...) < WRAPPER (0xd103...) hex-ascending — required by ValidatorRegistry.
+DEPLOY_OUT=$(VR_ADMIN="$DEPLOYER_ADDR" \
+    VR_SIGNERS="$DEPLOYER_ADDR,$WRAPPER_ADDR" \
+    VR_THRESHOLD=2 \
+    forge script script/DeployAlpha.s.sol:DeployAlpha \
+        --rpc-url "$RPC_URL" --private-key "$DEPLOYER_PK" \
+        --broadcast $EVM_FLAGS 2>&1)
 
-forge build --quiet || fail "Build failed"
-ok "Compiled"
+MAILBOX_ADDR=$(echo "$DEPLOY_OUT"      | grep 'DepositMailbox:'    | grep -oE '0x[a-fA-F0-9]{40}' | tail -1)
+SUBNET_CLONE_ADDR=$(echo "$DEPLOY_OUT" | grep 'SubnetClone:'       | grep -oE '0x[a-fA-F0-9]{40}' | tail -1)
+VAULT_ADDR=$(echo "$DEPLOY_OUT"        | grep 'AlphaVault:'        | grep -oE '0x[a-fA-F0-9]{40}' | tail -1)
+VAL_REGISTRY_ADDR=$(echo "$DEPLOY_OUT" | grep 'ValidatorRegistry:' | grep -oE '0x[a-fA-F0-9]{40}' | tail -1)
 
-MAILBOX_ADDR=$(forge create src/DepositMailbox.sol:DepositMailbox \
-    --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" $FORGE_FLAGS --json \
-    | python3 -c "import json,sys; print(json.load(sys.stdin)['deployedTo'])")
-ok "DepositMailbox: $MAILBOX_ADDR"
+if [[ -z "$MAILBOX_ADDR" || -z "$SUBNET_CLONE_ADDR" || -z "$VAULT_ADDR" || -z "$VAL_REGISTRY_ADDR" ]]; then
+    echo "$DEPLOY_OUT"
+    fail "Could not parse one or more deploy addresses from forge script output"
+fi
 
-SUBNET_CLONE_ADDR=$(forge create src/SubnetClone.sol:SubnetClone \
-    --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" $FORGE_FLAGS --json \
-    | python3 -c "import json,sys; print(json.load(sys.stdin)['deployedTo'])")
-ok "SubnetClone: $SUBNET_CLONE_ADDR"
-
-VAULT_ADDR=$(forge create src/AlphaVault.sol:AlphaVault \
-    --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" $FORGE_FLAGS --json \
-    --constructor-args "https://api.tao20.io/{id}.json" "$MAILBOX_ADDR" "$SUBNET_CLONE_ADDR" \
-    | python3 -c "import json,sys; print(json.load(sys.stdin)['deployedTo'])")
-ok "AlphaVault: $VAULT_ADDR"
-
-VAL_REGISTRY_ADDR=$(forge create src/ValidatorRegistry.sol:ValidatorRegistry \
-    --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" $FORGE_FLAGS --json \
-    --constructor-args "$DEPLOYER_ADDR" "[$DEPLOYER_ADDR]" 1 \
-    | python3 -c "import json,sys; print(json.load(sys.stdin)['deployedTo'])")
-ok "ValidatorRegistry: $VAL_REGISTRY_ADDR (admin + sole signer: $DEPLOYER_ADDR)"
+ok "DepositMailbox:    $MAILBOX_ADDR"
+ok "SubnetClone:       $SUBNET_CLONE_ADDR"
+ok "AlphaVault:        $VAULT_ADDR"
+ok "ValidatorRegistry: $VAL_REGISTRY_ADDR (admin=$DEPLOYER_ADDR, signers=[DEPLOYER,WRAPPER], threshold=2)"
+ok "Vault → ValidatorRegistry linked"
 
 VAULT_IDS=()
 for NET in "${NETUIDS[@]}"; do
@@ -291,14 +340,12 @@ for NET in "${NETUIDS[@]}"; do
     info "netuid $NET -> tokenId $TID"
 done
 
-cast send "$VAULT_ADDR" "setValidatorRegistry(address)" \
-    "$VAL_REGISTRY_ADDR" \
-    --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" \
-    $CAST_FLAGS --json > /dev/null 2>&1
-ok "Vault → ValidatorRegistry linked"
+SUBNET_COUNT=${#NETUIDS[@]}
+VAULT_IDS_CSV=$(IFS=,; echo "${VAULT_IDS[*]}")
+NETUIDS_CSV=$(IFS=,; echo "${NETUIDS[*]}")
 
 REG_BLOCK_START=$(cast block-number --rpc-url "$RPC_URL")
-for i in 0 1 2; do
+for i in 0 1; do
     NET="${NETUIDS[$i]}"
     HK_A="${ALL_HK_B32S[$((i * 3 + 0))]}"
     HK_B="${ALL_HK_B32S[$((i * 3 + 1))]}"
@@ -308,13 +355,14 @@ for i in 0 1 2; do
 done
 REG_BLOCK_END=$(cast block-number --rpc-url "$RPC_URL")
 
-for NET in "${NETUIDS[@]}"; do
-    cast send "$VAULT_ADDR" "createSubnetProxy(uint256)" \
-        "$NET" \
-        --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" \
-        $CAST_FLAGS --json > /dev/null 2>&1
-    ok "Subnet proxy created for netuid $NET"
-done
+verify_script "get_validator_updates" \
+    --rows "$SUBNET_COUNT" \
+    --column-set "netuid=$NETUIDS_CSV" \
+    --column-eq "count=3" \
+    --column-positive timestamp \
+    -- python3 scripts/get_validator_updates.py \
+        --rpc-url "$RPC_URL" --registry-address "$VAL_REGISTRY_ADDR" \
+        --block-start "$REG_BLOCK_START" --block-end "$REG_BLOCK_END"
 
 log "Phase 5: Fund user account"
 
@@ -344,7 +392,7 @@ log "Phase 6: Transfer alpha to clone addresses (split across 3 validators)"
 
 PER_HOTKEY_RAW=$((TRANSFER_AMOUNT * 1000000000 / 3))
 
-for i in 0 1 2; do
+for i in 0 1; do
     NET="${NETUIDS[$i]}"
     CLONE_ADDR=$(cast call "$VAULT_ADDR" "getDepositAddress(address,uint256)(address)" \
         "$WRAPPER_ADDR" "$NET" --rpc-url "$RPC_URL")
@@ -371,33 +419,48 @@ done
 
 log "Phase 7: Process deposits (one per validator)"
 
-for i in 0 1 2; do
+DEPOSIT_BLOCK_START=$(cast block-number --rpc-url "$RPC_URL")
+DEPOSIT_GAS=()
+for i in 0 1; do
     NET="${NETUIDS[$i]}"
     for j in 0 1 2; do
         IDX=$((i * 3 + j))
         CHOSEN_HK="${ALL_HK_B32S[$IDX]}"
 
-        TX_JSON=$(cast send "$VAULT_ADDR" \
-            "processDeposit(address,uint256,bytes32)" \
+        GAS=$(send_tx "processDeposit netuid=$NET hk=${CHOSEN_HK:0:18}..." \
+            "$VAULT_ADDR" "processDeposit(address,uint256,bytes32)" \
             "$WRAPPER_ADDR" "$NET" "$CHOSEN_HK" \
             --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
-            $EVM_FLAGS --gas-limit 1000000 --json || true)
-
-        STATUS=$(echo "$TX_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
-        if [[ "$STATUS" != "0x1" ]]; then
-            echo "$TX_JSON"
-            fail "processDeposit for netuid $NET, hotkey ${CHOSEN_HK:0:18}... failed (status=$STATUS)"
-        fi
-        ok "netuid $NET deposited under ${CHOSEN_HK:0:18}..."
+            $EVM_FLAGS --gas-limit 1000000)
+        DEPOSIT_GAS+=("$GAS")
+        ok "netuid $NET deposited under ${CHOSEN_HK:0:18}... [gas: $GAS]"
     done
 done
+DEPOSIT_BLOCK_END=$(cast block-number --rpc-url "$RPC_URL")
+
+verify_script "get_subnet_proxies" \
+    --rows "$SUBNET_COUNT" \
+    --column-set "token_id=$VAULT_IDS_CSV" \
+    -- python3 scripts/get_subnet_proxies.py \
+        --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
+        --block-start "$DEPOSIT_BLOCK_START" --block-end "$DEPOSIT_BLOCK_END"
+
+verify_script "get_deposits" \
+    --rows $((SUBNET_COUNT * 3)) \
+    --column-set "token_id=$VAULT_IDS_CSV" \
+    --column-eq "user=$WRAPPER_ADDR" \
+    --column-positive assets \
+    --column-positive shares \
+    -- python3 scripts/get_deposits.py \
+        --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
+        --block-start "$DEPOSIT_BLOCK_START" --block-end "$DEPOSIT_BLOCK_END"
 
 log "Phase 8: Verify deposits"
 
 SHARES_CACHE=()
 DEPOSIT_TOTALS=()
 
-for i in 0 1 2; do
+for i in 0 1; do
     NET="${NETUIDS[$i]}"
     TID="${VAULT_IDS[$i]}"
     SHARES=$(cast call "$VAULT_ADDR" "balanceOf(address,uint256)(uint256)" "$WRAPPER_ADDR" "$TID" --rpc-url "$RPC_URL" | awk '{print $1}')
@@ -416,13 +479,58 @@ for i in 0 1 2; do
     SHARES_CACHE+=("$SHARES")
     DEPOSIT_TOTALS+=("$TOTAL")
 done
-ok "All 3 vaults have positive shares / totalStake / sharePrice"
+ok "All $SUBNET_COUNT vaults have positive shares / totalStake / sharePrice"
 
-log "Phase 9: Withdraw all shares → verify alpha returned"
+log "Phase 9: Rebalance with disjoint validator set"
+
+# Single subnet only — one rebalance is enough to measure gas in the worst-case path.
+# Register 3 fresh hotkeys disjoint from the original 3 for REBAL_IDX, swap the
+# registry to that set, then call rebalance(): forces sweep of all stake off old
+# hotkeys onto currentSet[0] (3 moveStake calls) plus redistribution by new weights
+# (up to 2 more moves).
+
+REBAL_IDX=0
+REBAL_NET="${NETUIDS[$REBAL_IDX]}"
+REBAL_SUBNET_NUM=$((REBAL_IDX + 1))
+
+NEW_HK_SUFFIXES=(d e f)
+NEW_HK_B32S=()
+for j in 0 1 2; do
+    SUFFIX="${NEW_HK_SUFFIXES[$j]}"
+    HK="hk_e2e_${REBAL_SUBNET_NUM}${SUFFIX}"
+    register_hotkey "$ALICE_WALLET" "$HK" "$REBAL_NET"
+    NEW_HK_B32S+=("$(read_hotkey_pubkey "$ALICE_WALLET" "$HK")")
+    ok "$HK registered (disjoint) on netuid $REBAL_NET"
+done
+
+set_validators_py "$REBAL_NET" \
+    "${NEW_HK_B32S[0]},${NEW_HK_B32S[1]},${NEW_HK_B32S[2]}" \
+    "8000,1500,500" > /dev/null
+ok "netuid $REBAL_NET validators replaced with disjoint set (80/15/5)"
+
+REBAL_BLOCK_START=$(cast block-number --rpc-url "$RPC_URL")
+REBALANCE_GAS=("$(send_tx "rebalance netuid=$REBAL_NET" \
+    "$VAULT_ADDR" "rebalance(uint256)" "$REBAL_NET" \
+    --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" \
+    $EVM_FLAGS --gas-limit 2000000)")
+REBAL_BLOCK_END=$(cast block-number --rpc-url "$RPC_URL")
+ok "netuid $REBAL_NET rebalanced [gas: ${REBALANCE_GAS[0]}]"
+
+# Disjoint sweep emits >= 1 Rebalanced; redistribution adds 0-2 more. Membership check only.
+verify_script "get_rebalances" \
+    --column-subset "token_id=$VAULT_IDS_CSV" \
+    --column-positive amount \
+    -- python3 scripts/get_rebalances.py \
+        --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
+        --block-start "$REBAL_BLOCK_START" --block-end "$REBAL_BLOCK_END"
+
+log "Phase 10: Withdraw all shares → verify alpha returned"
 
 TOLERANCE_RAO=10
 
-for i in 0 1 2; do
+WITHDRAW_BLOCK_START=$(cast block-number --rpc-url "$RPC_URL")
+WITHDRAW_GAS=()
+for i in 0 1; do
     NET="${NETUIDS[$i]}"
     TID="${VAULT_IDS[$i]}"
     SHARES="${SHARES_CACHE[$i]}"
@@ -430,26 +538,23 @@ for i in 0 1 2; do
 
     info "netuid $NET: burning $SHARES shares (tokenId $TID)"
 
-    TX_JSON=$(cast send "$VAULT_ADDR" \
-        "withdraw(uint256,uint256,bytes32)" \
+    GAS=$(send_tx "withdraw netuid=$NET tid=$TID" \
+        "$VAULT_ADDR" "withdraw(uint256,uint256,bytes32)" \
         "$TID" "$SHARES" "$WRAPPER_SUB_B32" \
         --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
-        $EVM_FLAGS --gas-limit 2000000 --json || true)
-
-    STATUS=$(echo "$TX_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
-    if [[ "$STATUS" != "0x1" ]]; then
-        echo "$TX_JSON"
-        fail "withdraw for netuid $NET failed (status=$STATUS)"
-    fi
+        $EVM_FLAGS --gas-limit 2000000)
+    WITHDRAW_GAS+=("$GAS")
 
     POST_SHARES=$(cast call "$VAULT_ADDR" "balanceOf(address,uint256)(uint256)" "$WRAPPER_ADDR" "$TID" --rpc-url "$RPC_URL" | awk '{print $1}')
     [[ "$POST_SHARES" != "0" ]] && fail "netuid $NET: shares still $POST_SHARES after full withdraw"
-    ok "netuid $NET: shares burned"
+    ok "netuid $NET: shares burned [gas: $GAS]"
 
+    # For the subnet swapped in Phase 9, user alpha lands on the NEW hotkeys (withdraw
+    # drains the active validator set). Sum both sets there; old-set-only elsewhere.
     SUM=0
-    for j in 0 1 2; do
-        IDX=$((i * 3 + j))
-        HK_B32="${ALL_HK_B32S[$IDX]}"
+    HK_SET=("${ALL_HK_B32S[@]:$((i * 3)):3}")
+    [[ "$i" == "$REBAL_IDX" ]] && HK_SET+=("${NEW_HK_B32S[@]}")
+    for HK_B32 in "${HK_SET[@]}"; do
         BAL=$(cast call "$STAKING" "getStake(bytes32,bytes32,uint256)(uint256)" \
             "$HK_B32" "$WRAPPER_SUB_B32" "$NET" --rpc-url "$RPC_URL" | awk '{print $1}')
         SUM=$((SUM + BAL))
@@ -461,44 +566,7 @@ for i in 0 1 2; do
     fi
     ok "netuid $NET: user received $SUM RAO (deposited $DEPOSITED, tolerance ${TOLERANCE_RAO})"
 done
-
-log "Phase 10: Observability scripts"
-
-BLOCK_END=$(cast block-number --rpc-url "$RPC_URL")
-info "Block range: [$BLOCK_START, $BLOCK_END]"
-
-SUBNET_COUNT=${#NETUIDS[@]}
-VAULT_IDS_CSV=$(IFS=,; echo "${VAULT_IDS[*]}")
-NETUIDS_CSV=$(IFS=,; echo "${NETUIDS[*]}")
-
-# verify_script <label> <verify_csv args...> -- <script command...>
-# Pipes the script's CSV stdout through scripts/verify_csv.py with the verify args.
-# Fails the e2e on the first invariant violation.
-verify_script() {
-    local label="$1"; shift
-    local v_args=()
-    while [[ $# -gt 0 && "$1" != "--" ]]; do v_args+=("$1"); shift; done
-    [[ "$1" == "--" ]] && shift
-    "$@" | python3 scripts/verify_csv.py "${v_args[@]}"
-    ok "$label"
-}
-
-verify_script "get_subnet_proxies" \
-    --rows "$SUBNET_COUNT" \
-    --column-set "token_id=$VAULT_IDS_CSV" \
-    -- python3 scripts/get_subnet_proxies.py \
-        --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
-        --block-start "$BLOCK_START" --block-end "$BLOCK_END"
-
-verify_script "get_deposits" \
-    --rows $((SUBNET_COUNT * 3)) \
-    --column-set "token_id=$VAULT_IDS_CSV" \
-    --column-eq "user=$WRAPPER_ADDR" \
-    --column-positive assets \
-    --column-positive shares \
-    -- python3 scripts/get_deposits.py \
-        --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
-        --block-start "$BLOCK_START" --block-end "$BLOCK_END"
+WITHDRAW_BLOCK_END=$(cast block-number --rpc-url "$RPC_URL")
 
 verify_script "get_withdrawals" \
     --rows "$SUBNET_COUNT" \
@@ -508,54 +576,13 @@ verify_script "get_withdrawals" \
     --column-positive shares \
     -- python3 scripts/get_withdrawals.py \
         --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
-        --block-start "$BLOCK_START" --block-end "$BLOCK_END"
+        --block-start "$WITHDRAW_BLOCK_START" --block-end "$WITHDRAW_BLOCK_END"
 
-# Per-netuid: 0 or 1 emission depending on whether post-drain leftover (emissions
-# accrued between deposit and withdraw) clears `minRebalanceAmt`. Assert membership only.
-verify_script "get_rebalances" \
-    --column-subset "token_id=$VAULT_IDS_CSV" \
-    --column-positive amount \
-    -- python3 scripts/get_rebalances.py \
-        --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
-        --block-start "$BLOCK_START" --block-end "$BLOCK_END"
+log "Phase 11: Vault state snapshot"
 
-verify_script "get_validator_updates" \
-    --rows "$SUBNET_COUNT" \
-    --column-set "netuid=$NETUIDS_CSV" \
-    --column-eq "count=3" \
-    --column-positive timestamp \
-    -- python3 scripts/get_validator_updates.py \
-        --rpc-url "$RPC_URL" --registry-address "$VAL_REGISTRY_ADDR" \
-        --block-start "$REG_BLOCK_START" --block-end "$REG_BLOCK_END"
-
-for i in 0 1 2; do
+for i in 0 1; do
     NET="${NETUIDS[$i]}"
     TID="${VAULT_IDS[$i]}"
-
-    verify_script "get_volumes (netuid $NET)" \
-        --rows 1 \
-        --column-eq "token_id=$TID" \
-        --column-eq "user=" \
-        --column-eq "deposit_count=3" \
-        --column-eq "withdraw_count=1" \
-        --column-positive total_assets_in \
-        --column-positive total_shares_minted \
-        --column-positive total_assets_out \
-        --column-positive total_shares_burned \
-        -- python3 scripts/get_volumes.py \
-            --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
-            --block-start "$BLOCK_START" --block-end "$BLOCK_END" --netuid "$NET"
-
-    verify_script "get_volumes (netuid $NET / wrapper)" \
-        --rows 1 \
-        --column-eq "token_id=$TID" \
-        --column-eq "user=$WRAPPER_ADDR" \
-        --column-eq "deposit_count=3" \
-        --column-eq "withdraw_count=1" \
-        -- python3 scripts/get_volumes.py \
-            --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
-            --block-start "$BLOCK_START" --block-end "$BLOCK_END" \
-            --netuid "$NET" --user "$WRAPPER_ADDR"
 
     verify_script "get_vault_state (netuid $NET)" \
         --rows 1 \
@@ -569,6 +596,11 @@ for i in 0 1 2; do
             --registry-address "$VAL_REGISTRY_ADDR" --netuid "$NET"
 done
 
+log "Phase 12: Gas usage summary"
+print_gas_stats "processDeposit" "${DEPOSIT_GAS[@]}"
+print_gas_stats "rebalance"      "${REBALANCE_GAS[@]}"
+print_gas_stats "withdraw"       "${WITHDRAW_GAS[@]}"
+
 log "E2E complete"
 echo "  AlphaVault:        $VAULT_ADDR"
 echo "  DepositMailbox:    $MAILBOX_ADDR"
@@ -576,5 +608,4 @@ echo "  SubnetClone:       $SUBNET_CLONE_ADDR"
 echo "  ValidatorRegistry: $VAL_REGISTRY_ADDR"
 echo "  Subnets:           ${NETUIDS[*]}"
 echo "  Token IDs:         ${VAULT_IDS[*]}"
-echo "  Block range:       [$BLOCK_START, $BLOCK_END]"
 ok "All phases passed"

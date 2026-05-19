@@ -19,11 +19,13 @@ Subcommands:
         Submit `SubtensorModule.transfer_stake` signed by //Alice. Works around
         btcli's SignedExtension mismatch with recent subtensor builds.
 
-    set_validators --rpc-url URL --registry ADDR --signer-pk PK --netuid N
-                   --hotkeys HK1,HK2,...  --weights W1,W2,...  [--deadline-secs N]
-        Build an EIP-712 WeightAttestation, sign it with `signer-pk`, and submit
-        `updateValidators(att, [sig])` to the ValidatorRegistry. Assumes the signer
-        is the sole registered signer with threshold = 1.
+    set_validators --rpc-url URL --registry ADDR --signer-pk PK [--signer-pk PK ...]
+                   --netuid N --hotkeys HK1,HK2,... --weights W1,W2,...
+                   [--deadline-secs N]
+        Build an EIP-712 WeightAttestation, sign it with every `--signer-pk`, sort
+        signatures by recovered signer address ascending (contract requirement),
+        and submit `updateValidators(att, sigs[])` to the ValidatorRegistry.
+        The first signer-pk also pays for the transaction.
 """
 
 import argparse
@@ -99,7 +101,7 @@ def transfer_stake(
 def set_validators(
     rpc_url: str,
     registry: str,
-    signer_pk: str,
+    signer_pks: list[str],
     netuid: int,
     hotkeys: list[str],
     weights: list[int],
@@ -123,7 +125,6 @@ def set_validators(
         sys.exit(1)
 
     registry = Web3.to_checksum_address(registry)
-    signer = Account.from_key(signer_pk)
 
     chain_id = w3.eth.chain_id
     registry_contract = w3.eth.contract(address=registry, abi=load_abi("ValidatorRegistry"))
@@ -166,28 +167,37 @@ def set_validators(
         },
     }
 
-    signed = Account.sign_typed_data(signer_pk, full_message=typed_data)
-    sig = bytes(signed.signature)
+    # Sign with every key, then sort by recovered signer address ascending (contract requirement).
+    pairs = []
+    for pk in signer_pks:
+        signer = Account.from_key(pk)
+        signed = Account.sign_typed_data(pk, full_message=typed_data)
+        pairs.append((signer.address.lower(), bytes(signed.signature)))
+    pairs.sort(key=lambda p: p[0])
+    sigs = [sig for _, sig in pairs]
+
+    # First-listed signer pays the transaction.
+    submitter_pk = signer_pks[0]
+    submitter = Account.from_key(submitter_pk)
 
     att_tuple = (netuid, hotkey_bytes, weights, next_nonce, deadline)
-    tx_nonce = w3.eth.get_transaction_count(signer.address)
-    tx = registry_contract.functions.updateValidators(att_tuple, [sig]).build_transaction(
+    tx_nonce = w3.eth.get_transaction_count(submitter.address)
+    tx = registry_contract.functions.updateValidators(att_tuple, sigs).build_transaction(
         {
-            "from": signer.address,
+            "from": submitter.address,
             "nonce": tx_nonce,
             "gas": 500_000,
-            "maxFeePerGas": w3.to_wei(10, "gwei"),
-            "maxPriorityFeePerGas": w3.to_wei(1, "gwei"),
+            "gasPrice": w3.to_wei(10, "gwei"),
             "chainId": chain_id,
         }
     )
-    signed_tx = w3.eth.account.sign_transaction(tx, signer_pk)
+    signed_tx = w3.eth.account.sign_transaction(tx, submitter_pk)
     tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
     receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
     if receipt.status != 1:
         print(f"updateValidators failed (tx {tx_hash.hex()})", file=sys.stderr)
         sys.exit(1)
-    print(f"ok netuid={netuid} nonce={next_nonce} tx={tx_hash.hex()}")
+    print(f"ok netuid={netuid} nonce={next_nonce} signers={len(sigs)} tx={tx_hash.hex()}")
 
 
 def main() -> None:
@@ -210,7 +220,8 @@ def main() -> None:
     p = sub.add_parser("set_validators")
     p.add_argument("--rpc-url", required=True)
     p.add_argument("--registry", required=True)
-    p.add_argument("--signer-pk", required=True)
+    p.add_argument("--signer-pk", required=True, action="append", dest="signer_pks",
+                   help="Repeat for each signer. First listed pays the transaction.")
     p.add_argument("--netuid", required=True, type=int)
     p.add_argument("--hotkeys", required=True, help="Comma-separated bytes32 hex hotkeys")
     p.add_argument("--weights", required=True, help="Comma-separated BPS weights summing to 10000")
@@ -234,7 +245,7 @@ def main() -> None:
         set_validators(
             rpc_url=args.rpc_url,
             registry=args.registry,
-            signer_pk=args.signer_pk,
+            signer_pks=args.signer_pks,
             netuid=args.netuid,
             hotkeys=args.hotkeys.split(","),
             weights=[int(w) for w in args.weights.split(",")],
