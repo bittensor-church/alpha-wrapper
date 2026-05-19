@@ -203,7 +203,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         address clone,
         uint16 netuid
     ) private {
-        (bytes32[3] memory hotkeys, uint16[3] memory weights, uint256 validatorCount) = _resolveValidators(netuid);
+        (bytes32[3] memory hotkeys,, uint256 validatorCount) = _resolveValidators(netuid);
         _sweepRotatedStake(tokenId, netuid, hotkeys);
         bytes32 subnetColdkey = _coldkeyOf(clone);
         (uint256[3] memory balances, uint256 totalAlpha) =
@@ -233,10 +233,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
             unchecked {
                 ++i;
             }
-        }
-
-        if (validatorCount >= 2) {
-            _rebalanceOnce(hotkeys, weights, validatorCount, tokenId);
         }
 
         emit Withdrawn(msg.sender, tokenId, shares, assets);
@@ -557,73 +553,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
                 ++i;
             }
         }
-    }
-
-    /// @dev At-most-one moveStake toward target weights. Caller must guarantee
-    ///      `validatorCount >= 2` and a deployed subnet clone.
-    function _rebalanceOnce(
-        bytes32[3] memory hotkeys,
-        uint16[3] memory weights,
-        uint256 validatorCount,
-        uint256 tokenId
-    ) private {
-        address clone = subnetClone[tokenId];
-        uint16 netuid = _netuid(tokenId);
-        bytes32 coldkey = _coldkeyOf(clone);
-
-        IStaking staking = IStaking(STAKING_PRECOMPILE);
-        uint256[3] memory balances;
-        uint256 total;
-        for (uint256 i; i < validatorCount;) {
-            if (hotkeys[i] == bytes32(0)) break;
-            balances[i] = staking.getStake(hotkeys[i], coldkey, netuid);
-            total += balances[i];
-            unchecked {
-                ++i;
-            }
-        }
-        if (total == 0) return;
-
-        // Distribute `total` across validators proportionally to `weights`;
-        // remainder to last slot so sum(targets) == total exactly.
-        uint256[3] memory targets;
-        uint256 assigned;
-        for (uint256 i; i < validatorCount;) {
-            if (i == validatorCount - 1) {
-                targets[i] = total - assigned;
-            } else {
-                targets[i] = (total * weights[i]) / BPS_BASE;
-                assigned += targets[i];
-            }
-            unchecked {
-                ++i;
-            }
-        }
-
-        // Pick the biggest over/under pair and move min(over, under) between them.
-        uint256 overIdx;
-        uint256 underIdx;
-        uint256 maxOver;
-        uint256 maxUnder;
-        for (uint256 i; i < validatorCount;) {
-            if (balances[i] > targets[i] && balances[i] - targets[i] > maxOver) {
-                maxOver = balances[i] - targets[i];
-                overIdx = i;
-            }
-            if (balances[i] < targets[i] && targets[i] - balances[i] > maxUnder) {
-                maxUnder = targets[i] - balances[i];
-                underIdx = i;
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        if (maxOver == 0 || maxUnder == 0 || overIdx == underIdx) return;
-
-        uint256 moveAmt = maxOver < maxUnder ? maxOver : maxUnder;
-        if (moveAmt < minRebalanceAmt) return;
-        SubnetClone(payable(clone)).moveStake(hotkeys[overIdx], hotkeys[underIdx], netuid, moveAmt);
-        emit Rebalanced(tokenId, hotkeys[overIdx], hotkeys[underIdx], moveAmt);
     }
 
     function _sharesFor(uint256 stake, uint256 supply, uint256 assets) private pure returns (uint256) {
