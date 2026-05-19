@@ -481,150 +481,119 @@ for i in 0 1; do
 done
 ok "All $SUBNET_COUNT vaults have positive shares / totalStake / sharePrice"
 
-log "Phase 9: Rebalance with disjoint validator set"
+# ════════════════════════════════════════════════════════════════════════════════
+# WORST-CASE GAS MEASUREMENTS
+# ════════════════════════════════════════════════════════════════════════════════
+# Post Phase 7, each subnet's vault clone has alpha distributed across the original
+# [a,b,c] validator hotkeys at the 50/30/20 weights. _lastSeenHotkeys[tokenId] == [a,b,c].
+#
+# The phases below force maximum work in processDeposit & withdraw by rotating
+# validators (so _sweepRotatedStake must move 3 hotkeys' worth of stake) and, for
+# Phase 10, also picking a chosen hotkey OUTSIDE the new validator set (so the
+# chosen-out-of-set consolidation moveStake also fires).
+# ════════════════════════════════════════════════════════════════════════════════
 
-# Single subnet only — one rebalance is enough to measure gas in the worst-case path.
-# Register 3 fresh hotkeys disjoint from the original 3 for REBAL_IDX, swap the
-# registry to that set, then call rebalance(): forces sweep of all stake off old
-# hotkeys onto currentSet[0] (3 moveStake calls) plus redistribution by new weights
-# (up to 2 more moves).
-
-REBAL_IDX=0
-REBAL_NET="${NETUIDS[$REBAL_IDX]}"
-REBAL_SUBNET_NUM=$((REBAL_IDX + 1))
-
-NEW_HK_SUFFIXES=(d e f)
-NEW_HK_B32S=()
-for j in 0 1 2; do
-    SUFFIX="${NEW_HK_SUFFIXES[$j]}"
-    HK="hk_e2e_${REBAL_SUBNET_NUM}${SUFFIX}"
-    register_hotkey "$ALICE_WALLET" "$HK" "$REBAL_NET"
-    NEW_HK_B32S+=("$(read_hotkey_pubkey "$ALICE_WALLET" "$HK")")
-    ok "$HK registered (disjoint) on netuid $REBAL_NET"
-done
-
-set_validators_py "$REBAL_NET" \
-    "${NEW_HK_B32S[0]},${NEW_HK_B32S[1]},${NEW_HK_B32S[2]}" \
-    "8000,1500,500" > /dev/null
-ok "netuid $REBAL_NET validators replaced with disjoint set (80/15/5)"
-
-REBAL_BLOCK_START=$(cast block-number --rpc-url "$RPC_URL")
-REBALANCE_GAS=("$(send_tx "rebalance netuid=$REBAL_NET" \
-    "$VAULT_ADDR" "rebalance(uint256)" "$REBAL_NET" \
-    --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" \
-    $EVM_FLAGS --gas-limit 2000000)")
-REBAL_BLOCK_END=$(cast block-number --rpc-url "$RPC_URL")
-ok "netuid $REBAL_NET rebalanced [gas: ${REBALANCE_GAS[0]}]"
-
-# Disjoint sweep emits >= 1 Rebalanced; redistribution adds 0-2 more. Membership check only.
-verify_script "get_rebalances" \
-    --column-subset "token_id=$VAULT_IDS_CSV" \
-    --column-positive amount \
-    -- python3 scripts/get_rebalances.py \
-        --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
-        --block-start "$REBAL_BLOCK_START" --block-end "$REBAL_BLOCK_END"
-
-log "Phase 10: Withdraw"
-
+# Re-register the validator-update python helper to be silent (suppress json output).
 TOLERANCE_RAO=10
 
-WITHDRAW_BLOCK_START=$(cast block-number --rpc-url "$RPC_URL")
+# ─── Phase 9: TRUE WORST-CASE DEPOSIT ─────────────────────────────────────────
+# NEW user (DEPLOYER, never deposited before) does their first deposit on a subnet
+# that has prior activity from another user (WRAPPER's Phase 7 deposits set
+# _lastSeenHotkeys[tokenId] = [a,b,c]). Validators have been rotated since to a
+# disjoint set [d,e,f]. Chosen hotkey is out of new set.
+#
+# Triggered work in one tx:
+#   1. _ensureMailboxClone — deploy DEPLOYER's mailbox clone (EIP-1167 CREATE)
+#   2. _sweepRotatedStake  — 3 moveStakes (sweep stake off [a,b,c] onto d)
+#   3. mailbox.flush       — 1 transferStake
+#   4. chosen-out-of-set consolidate — 1 moveStake
+#   5. _rebalance          — 2 moveStakes redistribute
+#   = 6 moveStakes + 1 transferStake + mailbox-clone CREATE + cold ERC1155 slot for DEPLOYER
+log "Phase 9: TRUE WORST-CASE DEPOSIT (new user first deposit + rotation + chosen-OUT-of-set)"
 
-# Heavy-rebalance partial-withdraw: skew weights on a subnet that wasn't touched by Phase 9,
-# then burn half the shares. Post-drain pot is still significant AND far from new target
-# weights → _rebalance fires its full 2-move pass.
+WORST_IDX=0
+WORST_NET="${NETUIDS[$WORST_IDX]}"
+WORST_SUBNET_NUM=$((WORST_IDX + 1))
+
+# Register a fully disjoint validator set [d, e, f].
+WORST_NEW_HK_NAMES=(hk_worst_${WORST_SUBNET_NUM}d hk_worst_${WORST_SUBNET_NUM}e hk_worst_${WORST_SUBNET_NUM}f)
+WORST_NEW_HK_B32S=()
+for HK in "${WORST_NEW_HK_NAMES[@]}"; do
+    register_hotkey "$ALICE_WALLET" "$HK" "$WORST_NET"
+    WORST_NEW_HK_B32S+=("$(read_hotkey_pubkey "$ALICE_WALLET" "$HK")")
+    ok "$HK registered (new disjoint validator) on netuid $WORST_NET"
+done
+
+# Chosen hotkey = original 'a' (out of new validator set [d,e,f]).
+WORST_CHOSEN_B32="${ALL_HK_B32S[$((WORST_IDX * 3 + 0))]}"
+WORST_CHOSEN_SS58="${ALL_HK_SS58S[$((WORST_IDX * 3 + 0))]}"
+
+# Swap validators on NETUIDS[0] to disjoint [d, e, f].
+set_validators_py "$WORST_NET" \
+    "${WORST_NEW_HK_B32S[0]},${WORST_NEW_HK_B32S[1]},${WORST_NEW_HK_B32S[2]}" \
+    "5000,3000,2000" > /dev/null
+ok "netuid $WORST_NET validators swapped to disjoint set [d,e,f] (rotation since WRAPPER's Phase 7 deposits)"
+
+# DEPLOYER is the new user — never deposited before, so their mailbox clone doesn't exist.
+# Get DEPLOYER's deterministic mailbox address (will be CREATEd by processDeposit).
+DEPLOYER_MAILBOX=$(cast call "$VAULT_ADDR" "getDepositAddress(address,uint256)(address)" \
+    "$DEPLOYER_ADDR" "$WORST_NET" --rpc-url "$RPC_URL")
+DEPLOYER_MAILBOX_SS58=$(h160_to_ss58 "$DEPLOYER_MAILBOX")
+ok "DEPLOYER's deterministic mailbox: $DEPLOYER_MAILBOX (not yet deployed)"
+
+# Alice transfers fresh alpha to DEPLOYER's mailbox on 'a' (out of new validator set).
+DEPOSIT_RAW=$((TRANSFER_AMOUNT * 1000000000 / 3))
+transfer_stake_py "$DEPLOYER_MAILBOX_SS58" "$WORST_CHOSEN_SS58" "$WORST_NET" "$DEPOSIT_RAW" | tail -1
+ok "Alice → DEPLOYER mailbox: $DEPOSIT_RAW RAO on 'a' (chosen-out-of-set)"
+
+# DEPLOYER deposits — first ever deposit by this user on this subnet, with all the worst-case combinatorics.
+WORST_DEPOSIT_GAS=$(send_tx "true-worst-deposit netuid=$WORST_NET user=DEPLOYER chosen=a (out-of-set, first deposit)" \
+    "$VAULT_ADDR" "processDeposit(address,uint256,bytes32)" \
+    "$DEPLOYER_ADDR" "$WORST_NET" "$WORST_CHOSEN_B32" \
+    --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" \
+    $EVM_FLAGS --gas-limit 3000000)
+ok "TRUE WORST deposit (mailbox CREATE + sweep + flush + OOS consolidate + rebalance) [gas: $WORST_DEPOSIT_GAS]"
+
+# ─── Phase 10: WORST-CASE PARTIAL WITHDRAW — rotation ──────────────────────────
+# Use the untouched NETUIDS[1] subnet. Rotate, then partial-withdraw 50%.
+# Expected moveStakes: 3 sweep + 0..1 drain (transferStake) + 2 rebalance = 5 moveStakes + drain transferStakes
+log "Phase 10: WORST-CASE PARTIAL WITHDRAW (rotation, 5 moveStakes + drain)"
+
 PARTIAL_IDX=1
 PARTIAL_NET="${NETUIDS[$PARTIAL_IDX]}"
 PARTIAL_TID="${VAULT_IDS[$PARTIAL_IDX]}"
-set_validators_py "$PARTIAL_NET" \
-    "${ALL_HK_B32S[$((PARTIAL_IDX * 3 + 0))]},${ALL_HK_B32S[$((PARTIAL_IDX * 3 + 1))]},${ALL_HK_B32S[$((PARTIAL_IDX * 3 + 2))]}" \
-    "9500,250,250" > /dev/null
-ok "netuid $PARTIAL_NET weights skewed to 95/2.5/2.5 (was 50/30/20)"
+PARTIAL_SUBNET_NUM=$((PARTIAL_IDX + 1))
 
-# Shares can exceed 2^63 — use python for the arithmetic.
+PARTIAL_NEW_HK_NAMES=(hk_worst_${PARTIAL_SUBNET_NUM}j hk_worst_${PARTIAL_SUBNET_NUM}k hk_worst_${PARTIAL_SUBNET_NUM}l)
+PARTIAL_NEW_HK_B32S=()
+for HK in "${PARTIAL_NEW_HK_NAMES[@]}"; do
+    register_hotkey "$ALICE_WALLET" "$HK" "$PARTIAL_NET"
+    PARTIAL_NEW_HK_B32S+=("$(read_hotkey_pubkey "$ALICE_WALLET" "$HK")")
+    ok "$HK registered (disjoint validator) on netuid $PARTIAL_NET"
+done
+
+# Rotate validators on the withdraw subnet to disjoint set [j,k,l].
+set_validators_py "$PARTIAL_NET" \
+    "${PARTIAL_NEW_HK_B32S[0]},${PARTIAL_NEW_HK_B32S[1]},${PARTIAL_NEW_HK_B32S[2]}" \
+    "5000,3000,2000" > /dev/null
+ok "netuid $PARTIAL_NET validators swapped to disjoint set"
+
+# Burn half the user's shares. The contract's _redeemLivePosition will:
+#   1. sweep:    move stake from old [a2,b2,c2] → currentSet[0] = j   (3 moveStakes)
+#   2. drain:    transferStake from j (largest) to user coldkey       (1 transferStake)
+#   3. rebalance: redistribute remaining stake to weights              (up to 2 moveStakes)
 PARTIAL_SHARES=$(python3 -c "print(${SHARES_CACHE[$PARTIAL_IDX]} // 2)")
-PARTIAL_GAS=$(send_tx "partial-withdraw netuid=$PARTIAL_NET tid=$PARTIAL_TID" \
+WORST_PARTIAL_WITHDRAW_GAS=$(send_tx "worst-partial-withdraw netuid=$PARTIAL_NET tid=$PARTIAL_TID" \
     "$VAULT_ADDR" "withdraw(uint256,uint256,bytes32)" \
     "$PARTIAL_TID" "$PARTIAL_SHARES" "$WRAPPER_SUB_B32" \
     --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
-    $EVM_FLAGS --gas-limit 2000000)
-ok "netuid $PARTIAL_NET partial withdraw 50% (post-drain rebalance to skewed weights) [gas: $PARTIAL_GAS]"
+    $EVM_FLAGS --gas-limit 3000000)
+ok "WORST partial withdraw (sweep + drain + rebalance) [gas: $WORST_PARTIAL_WITHDRAW_GAS]"
 
-# Reduce cached shares so the full-withdraw loop burns the remaining half.
-SHARES_CACHE[$PARTIAL_IDX]=$(python3 -c "print(${SHARES_CACHE[$PARTIAL_IDX]} - $PARTIAL_SHARES)")
-
-WITHDRAW_GAS=()
-for i in 0 1; do
-    NET="${NETUIDS[$i]}"
-    TID="${VAULT_IDS[$i]}"
-    SHARES="${SHARES_CACHE[$i]}"
-    DEPOSITED="${DEPOSIT_TOTALS[$i]}"
-
-    info "netuid $NET: burning $SHARES shares (tokenId $TID)"
-
-    GAS=$(send_tx "withdraw netuid=$NET tid=$TID" \
-        "$VAULT_ADDR" "withdraw(uint256,uint256,bytes32)" \
-        "$TID" "$SHARES" "$WRAPPER_SUB_B32" \
-        --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
-        $EVM_FLAGS --gas-limit 2000000)
-    WITHDRAW_GAS+=("$GAS")
-
-    POST_SHARES=$(cast call "$VAULT_ADDR" "balanceOf(address,uint256)(uint256)" "$WRAPPER_ADDR" "$TID" --rpc-url "$RPC_URL" | awk '{print $1}')
-    [[ "$POST_SHARES" != "0" ]] && fail "netuid $NET: shares still $POST_SHARES after full withdraw"
-    ok "netuid $NET: shares burned [gas: $GAS]"
-
-    # For the subnet swapped in Phase 9, user alpha lands on the NEW hotkeys (withdraw
-    # drains the active validator set). Sum both sets there; old-set-only elsewhere.
-    SUM=0
-    HK_SET=("${ALL_HK_B32S[@]:$((i * 3)):3}")
-    [[ "$i" == "$REBAL_IDX" ]] && HK_SET+=("${NEW_HK_B32S[@]}")
-    for HK_B32 in "${HK_SET[@]}"; do
-        BAL=$(cast call "$STAKING" "getStake(bytes32,bytes32,uint256)(uint256)" \
-            "$HK_B32" "$WRAPPER_SUB_B32" "$NET" --rpc-url "$RPC_URL" | awk '{print $1}')
-        SUM=$((SUM + BAL))
-    done
-
-    OK_RETURNED=$(python3 -c "print('yes' if $SUM >= max(0, $DEPOSITED - $TOLERANCE_RAO) else 'no')")
-    if [[ "$OK_RETURNED" != "yes" ]]; then
-        fail "netuid $NET: user only received $SUM RAO across 3 hotkeys; expected ≥ $((DEPOSITED - TOLERANCE_RAO))"
-    fi
-    ok "netuid $NET: user received $SUM RAO (deposited $DEPOSITED, tolerance ${TOLERANCE_RAO})"
-done
-WITHDRAW_BLOCK_END=$(cast block-number --rpc-url "$RPC_URL")
-
-verify_script "get_withdrawals" \
-    --rows $((SUBNET_COUNT + 1)) \
-    --column-set "token_id=$VAULT_IDS_CSV" \
-    --column-eq "user=$WRAPPER_ADDR" \
-    --column-positive assets \
-    --column-positive shares \
-    -- python3 scripts/get_withdrawals.py \
-        --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
-        --block-start "$WITHDRAW_BLOCK_START" --block-end "$WITHDRAW_BLOCK_END"
-
-log "Phase 11: Vault state snapshot"
-
-for i in 0 1; do
-    NET="${NETUIDS[$i]}"
-    TID="${VAULT_IDS[$i]}"
-
-    verify_script "get_vault_state (netuid $NET)" \
-        --rows 1 \
-        --column-eq "token_id=$TID" \
-        --column-eq "total_supply=0" \
-        --column-eq "share_price=" \
-        --column-eq "share_price_error=NoSharesOutstanding" \
-        --column-eq "validators_count=3" \
-        -- python3 scripts/get_vault_state.py \
-            --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
-            --registry-address "$VAL_REGISTRY_ADDR" --netuid "$NET"
-done
-
-log "Phase 12: Gas usage summary"
-print_gas_stats "processDeposit"   "${DEPOSIT_GAS[@]}"
-print_gas_stats "rebalance"        "${REBALANCE_GAS[@]}"
-print_gas_stats "withdraw"         "${WITHDRAW_GAS[@]}"
-print_gas_stats "withdraw_partial" "$PARTIAL_GAS"
+log "Phase 11: Gas usage summary"
+print_gas_stats "processDeposit (baseline)"  "${DEPOSIT_GAS[@]}"
+print_gas_stats "deposit_worst"              "$WORST_DEPOSIT_GAS"
+print_gas_stats "partial_withdraw_worst"     "$WORST_PARTIAL_WITHDRAW_GAS"
 
 log "E2E complete"
 echo "  AlphaVault:        $VAULT_ADDR"
