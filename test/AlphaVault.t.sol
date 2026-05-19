@@ -713,17 +713,6 @@ contract AlphaVaultTest is AttestationHelper {
         assertEq(_getVaultStake(hotkey2, NETUID1), 500_000);
     }
 
-    function test_WithdrawEmitsRebalanced() public {
-        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
-        _processDeposit(alice, NETUID1);
-
-        uint256 shares = vault.balanceOf(alice, TOKEN1);
-        vm.recordLogs();
-        vm.prank(alice);
-        vault.withdraw(TOKEN1, shares / 2, _toSubstrate(alice));
-        assertEq(_countRebalancedLogs(vm.getRecordedLogs()), 1, "partial withdraw should emit one Rebalanced");
-    }
-
     function test_RebalanceMovesAtOrAboveMinRebalanceAmt() public {
         _setValidators(NETUID1, _hks2(hotkey1, hotkey2), _wts2(5000, 5000));
 

@@ -87,6 +87,7 @@ set_validators_py() {
         --rpc-url "$RPC_URL" \
         --registry "$VAL_REGISTRY_ADDR" \
         --signer-pk "$DEPLOYER_PK" \
+        --signer-pk "$WRAPPER_PK" \
         --netuid "$1" \
         --hotkeys "$2" \
         --weights "$3"
@@ -277,11 +278,12 @@ VAULT_ADDR=$(forge create src/AlphaVault.sol:AlphaVault \
     | python3 -c "import json,sys; print(json.load(sys.stdin)['deployedTo'])")
 ok "AlphaVault: $VAULT_ADDR"
 
+# DEPLOYER (0x7bD3...) < WRAPPER (0xd103...) hex-ascending — required by ValidatorRegistry's sorted-signers check.
 VAL_REGISTRY_ADDR=$(forge create src/ValidatorRegistry.sol:ValidatorRegistry \
     --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" $FORGE_FLAGS --json \
-    --constructor-args "$DEPLOYER_ADDR" "[$DEPLOYER_ADDR]" 1 \
+    --constructor-args "$DEPLOYER_ADDR" "[$DEPLOYER_ADDR,$WRAPPER_ADDR]" 2 \
     | python3 -c "import json,sys; print(json.load(sys.stdin)['deployedTo'])")
-ok "ValidatorRegistry: $VAL_REGISTRY_ADDR (admin + sole signer: $DEPLOYER_ADDR)"
+ok "ValidatorRegistry: $VAL_REGISTRY_ADDR (admin=$DEPLOYER_ADDR, signers=[DEPLOYER,WRAPPER], threshold=2)"
 
 VAULT_IDS=()
 for NET in "${NETUIDS[@]}"; do
