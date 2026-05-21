@@ -733,6 +733,60 @@ contract AlphaVaultTest is AttestationHelper {
         assertEq(_getVaultStake(hotkey2, NETUID1), 4e6);
     }
 
+    // ────────────────── auto-rebalance event emission ────────────────────
+
+    /// @dev In-set chosen: no consolidate; rebalance loop emits N-1 events (2 here).
+    function test_ProcessDepositEmitsRebalancedWhenChosenInSet() public {
+        _simulateAlphaDepositHotkey(alice, NETUID1, 10 ether, hotkey1);
+
+        vm.expectEmit(true, true, true, true);
+        emit Rebalanced(TOKEN1, hotkey1, hotkey2, 3_333_000_000_000_000_000);
+        vm.expectEmit(true, true, true, true);
+        emit Rebalanced(TOKEN1, hotkey1, hotkey3, 3_333_000_000_000_000_000);
+        vm.recordLogs();
+        _processDepositHotkey(alice, NETUID1, hotkey1);
+        assertEq(_countRebalancedLogs(vm.getRecordedLogs()), 2);
+    }
+
+    /// @dev Out-of-set chosen: consolidate emits one Rebalanced, then rebalance loop emits 2 more.
+    function test_ProcessDepositEmitsRebalancedWhenChosenOutOfSet() public {
+        _simulateAlphaDepositHotkey(alice, NETUID1, 10 ether, hotkey4);
+
+        vm.expectEmit(true, true, true, true);
+        emit Rebalanced(TOKEN1, hotkey4, hotkey1, 10 ether);
+        vm.expectEmit(true, true, true, true);
+        emit Rebalanced(TOKEN1, hotkey1, hotkey2, 3_333_000_000_000_000_000);
+        vm.expectEmit(true, true, true, true);
+        emit Rebalanced(TOKEN1, hotkey1, hotkey3, 3_333_000_000_000_000_000);
+        vm.recordLogs();
+        _processDepositHotkey(alice, NETUID1, hotkey4);
+        assertEq(_countRebalancedLogs(vm.getRecordedLogs()), 3);
+    }
+
+    /// @dev Partial withdraw drains highest-balance hotkeys first; rebalance corrects the skew.
+    function test_WithdrawEmitsRebalanced() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _processDeposit(alice, NETUID1);
+
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        vm.recordLogs();
+        vm.prank(alice);
+        vault.withdraw(TOKEN1, shares / 2, _toSubstrate(alice));
+        assertGe(_countRebalancedLogs(vm.getRecordedLogs()), 1, "partial withdraw should rebalance");
+    }
+
+    /// @dev Full withdraw drains everything; post-drain total == 0 so rebalance returns early.
+    function test_WithdrawEmitsNoRebalancedWhenFullyDrained() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _processDeposit(alice, NETUID1);
+
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        vm.recordLogs();
+        vm.prank(alice);
+        vault.withdraw(TOKEN1, shares, _toSubstrate(alice));
+        assertEq(_countRebalancedLogs(vm.getRecordedLogs()), 0);
+    }
+
     // ────────────────── setValidatorRegistry ────────────────────────────
 
     function test_SetValidatorRegistry() public {
@@ -1581,15 +1635,18 @@ contract AlphaVaultTest is AttestationHelper {
     /// @dev Realistic-amount dust check. With D = 10_000_001 RAO and weights [3334, 3333, 3333],
     ///      each move clears subtensor's DefaultMinStake floor (~2e6 RAO). 1 RAO of dust ends up
     ///      stranded on the out-of-set chosen.
-    function test_ProcessDepositChosenOutOfSetStrandedDustExcludedFromAccounting() public {
+    /// @dev Chosen out of the active set: deposit consolidates onto hotkeys[0], then rebalance
+    ///      spreads per weights. No dust stranded on chosen; totalStake covers the full deposit.
+    function test_ProcessDepositChosenOutOfSetConsolidatesAndRebalances() public {
         _simulateAlphaDepositHotkey(alice, NETUID1, 10_000_001, hotkey4);
         _processDepositHotkey(alice, NETUID1, hotkey4);
 
-        assertEq(_getVaultStake(hotkey4, NETUID1), 1, "1 RAO of dust stranded on out-of-set chosen");
+        assertEq(_getVaultStake(hotkey4, NETUID1), 0, "no dust stranded on out-of-set chosen");
         assertEq(_getVaultStake(hotkey1, NETUID1), uint256(10_000_001) * 3334 / 10_000);
         assertEq(_getVaultStake(hotkey2, NETUID1), uint256(10_000_001) * 3333 / 10_000);
-        assertEq(_getVaultStake(hotkey3, NETUID1), uint256(10_000_001) * 3333 / 10_000);
-        assertEq(vault.totalStake(TOKEN1), 10_000_000, "totalStake counts in-set hotkeys only");
+        // Last slot absorbs rounding remainder.
+        assertEq(_getVaultStake(hotkey3, NETUID1), uint256(10_000_001) * 3333 / 10_000 + 1);
+        assertEq(vault.totalStake(TOKEN1), 10_000_001);
     }
 
     /// @dev count=1, chosen == the only validator: zero moves, all stake stays on chosen.
@@ -1635,14 +1692,18 @@ contract AlphaVaultTest is AttestationHelper {
         vault.processDeposit(alice, NETUID1, hotkey1);
     }
 
-    /// @dev D clears the flush floor but at least one per-slot move falls below it.
-    ///      Weights [3334, 3333, 3333] → smallest mover slice = D * 3333 / 10000. For D = 3e6,
-    ///      slice = 999_900 < 2e6 (default minRebalanceAmt). Reverts before any precompile call.
-    function test_RevertWhen_ProcessDepositWhenPerSlotMoveBelowMinRebalanceAmt() public {
+    /// @dev D clears the deposit floor but per-slot rebalance moves fall below it. With
+    ///      D = 3e6 and weights [3334, 3333, 3333] each slice ≈ 1e6 < 2e6 minRebalanceAmt, so
+    ///      rebalance breaks early. Deposit still succeeds and totalStake records the full amount.
+    function test_ProcessDepositAcceptsWhenPerSlotMoveBelowMinRebalanceAmt() public {
         _simulateAlphaDepositHotkey(alice, NETUID1, 3_000_000, hotkey4);
-        vm.prank(alice);
-        vm.expectRevert(AlphaVault.DepositTooSmall.selector);
-        vault.processDeposit(alice, NETUID1, hotkey4);
+        _processDepositHotkey(alice, NETUID1, hotkey4);
+
+        assertEq(vault.totalStake(TOKEN1), 3_000_000);
+        // Consolidated on hotkeys[0]; rebalance moves are below the floor so the spread stops.
+        assertEq(_getVaultStake(hotkey1, NETUID1), 3_000_000);
+        assertEq(_getVaultStake(hotkey2, NETUID1), 0);
+        assertEq(_getVaultStake(hotkey3, NETUID1), 0);
     }
 
     /// @dev Boundary: deposit exactly at minRebalanceAmt clears the flush check. With
