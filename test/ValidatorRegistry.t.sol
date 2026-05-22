@@ -160,6 +160,15 @@ contract ValidatorRegistryTest is AttestationHelper {
         new ValidatorRegistry(admin, init, 3);
     }
 
+    function test_RevertWhen_TooManyInitialSigners() public {
+        address[] memory init = new address[](17);
+        for (uint256 i; i < 17; ++i) {
+            init[i] = vm.addr(uint256(keccak256(abi.encode("init-signer", i))));
+        }
+        vm.expectRevert(ValidatorRegistry.TooManySigners.selector);
+        new ValidatorRegistry(admin, init, 2);
+    }
+
     function test_Constructor_AdminGrantedDefaultAdminRole() public view {
         assertTrue(registry.hasRole(registry.DEFAULT_ADMIN_ROLE(), admin));
     }
@@ -255,6 +264,24 @@ contract ValidatorRegistryTest is AttestationHelper {
         ns[1] = s2;
         vm.expectRevert(ValidatorRegistry.ThresholdExceedsSigners.selector);
         registry.setSigners(ns, 3);
+    }
+
+    function test_RevertWhen_SetSignersTooMany() public {
+        address[] memory ns = new address[](17);
+        for (uint256 i; i < 17; ++i) {
+            ns[i] = vm.addr(uint256(keccak256(abi.encode("set-signer", i))));
+        }
+        vm.expectRevert(ValidatorRegistry.TooManySigners.selector);
+        registry.setSigners(ns, 2);
+    }
+
+    function test_SetSigners_AcceptsMaxSigners() public {
+        address[] memory ns = new address[](16);
+        for (uint256 i; i < 16; ++i) {
+            ns[i] = vm.addr(uint256(keccak256(abi.encode("max-signer", i))));
+        }
+        registry.setSigners(ns, 2);
+        assertEq(registry.signers(15), ns[15]);
     }
 
     function test_SetSigners_RemovedSignersUnmarked() public {

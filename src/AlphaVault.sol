@@ -74,6 +74,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     error ZeroAmount();
     error ZeroAddress();
     error ZeroHotkey();
+    error ZeroColdkey();
     error InsufficientShares();
     error NoValidatorFound();
     error UnauthorizedCaller();
@@ -84,6 +85,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     error NoSharesOutstanding();
     error DepositTooSmall();
     error NetuidOutOfRange();
+    error ChosenHotkeyNotInSet();
 
     // ──────────────────── Constructor ───────────────────────────────────────────
     constructor(string memory _uri, address _mailboxLogic, address _subnetLogic) ERC1155(_uri) Ownable(msg.sender) {
@@ -129,20 +131,36 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     /// @notice Flush the user's mailbox stake under `chosenHotkey` to the subnet clone and
     ///         distribute it across the attested validator set in proportion to BPS weights.
     /// @dev    Caller-restriction prevents an attacker flushing the clone before the user is ready.
-    ///         `chosenHotkey` may be any hotkey on the subnet. If out-of-set, up to (count - 1)
-    ///         RAO of integer-division dust is stranded on it. Existing balances on other hotkeys
-    ///         are left untouched - call `rebalance(netuid)` to correct prior drift.
+    ///         The call flushes only the mailbox balance recorded under `chosenHotkey`; a mailbox
+    ///         holding stake under multiple hotkeys requires one `processDeposit` per hotkey.
+    ///         `chosenHotkey` must be in the current attested validator set; reverts with
+    ///         `ChosenHotkeyNotInSet` otherwise. Use `reclaimAlphaFromMailbox` to recover alpha
+    ///         parked under a non-attested hotkey. Existing balances on other hotkeys in the
+    ///         validator set are left untouched - call `rebalance(netuid)` to correct prior drift.
     function processDeposit(address user, uint256 netuid, bytes32 chosenHotkey) external nonReentrant {
         if (msg.sender != user && msg.sender != owner()) revert UnauthorizedCaller();
         if (chosenHotkey == bytes32(0)) revert ZeroHotkey();
 
         uint256 tokenId = currentTokenId(netuid);
-        address clone = subnetClone[tokenId];
-        if (clone == address(0)) clone = _deploySubnetClone(tokenId);
-
         // forge-lint: disable-next-line(unsafe-typecast)
         uint16 nid = uint16(netuid);
         (bytes32[3] memory hotkeys, uint16[3] memory weights, uint256 count) = _resolveValidators(nid);
+
+        bool inSet;
+        for (uint256 i; i < count;) {
+            if (hotkeys[i] == chosenHotkey) {
+                inSet = true;
+                break;
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        if (!inSet) revert ChosenHotkeyNotInSet();
+
+        address clone = subnetClone[tokenId];
+        if (clone == address(0)) clone = _deploySubnetClone(tokenId);
+
         address userClone = _ensureMailboxClone(user, netuid);
         _sweepRotatedStake(tokenId, nid, hotkeys);
 
@@ -158,7 +176,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
 
         (, uint256 totalAlpha) = _fetchBalances(hotkeys, count, destColdkey, nid);
 
-        // Clamp to avoid underflow: out-of-set dust + moveStake rounding can leave totalAlpha < totalDeposit.
+        // Clamp to avoid underflow: subtensor moveStake rounding can leave totalAlpha < totalDeposit.
         uint256 preStake = totalAlpha > totalDeposit ? totalAlpha - totalDeposit : 0;
         uint256 shares = _sharesFor(preStake, totalSupply(tokenId), totalDeposit);
         if (shares == 0) revert ZeroAmount();
@@ -473,6 +491,31 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         if (amount == 0) revert ZeroAmount();
         _ensureMailboxClone(msg.sender, netuid);
         DepositMailbox(payable(predicted)).withdrawTao(payable(msg.sender), amount);
+    }
+
+    /// @notice Reclaim alpha stake parked in the caller's mailbox back to a substrate coldkey.
+    /// @dev    Recovery path for any alpha sitting in the mailbox; works for in-set hotkeys
+    ///         (change of mind before depositing) and out-of-set hotkeys (wrong choice, or the
+    ///         set rotated before the user could deposit). Deploys the mailbox clone lazily;
+    ///         substrate stake can park on the mailbox coldkey before the EVM-side clone exists.
+    ///         Reverts with `ZeroAmount` if the mailbox holds no stake under `hotkey`.
+    /// @param  netuid               Subnet id whose mailbox should be drained for this hotkey.
+    /// @param  hotkey               Hotkey under which the stranded stake sits.
+    /// @param  destSubstrateColdkey Destination coldkey for the recovered alpha.
+    function reclaimAlphaFromMailbox(uint256 netuid, bytes32 hotkey, bytes32 destSubstrateColdkey)
+        external
+        nonReentrant
+    {
+        if (hotkey == bytes32(0)) revert ZeroHotkey();
+        if (destSubstrateColdkey == bytes32(0)) revert ZeroColdkey();
+
+        address predicted = getDepositAddress(msg.sender, netuid);
+        bytes32 mailboxColdkey = _coldkeyOf(predicted);
+        uint256 amount = IStaking(STAKING_PRECOMPILE).getStake(hotkey, mailboxColdkey, netuid);
+        if (amount == 0) revert ZeroAmount();
+
+        _ensureMailboxClone(msg.sender, netuid);
+        DepositMailbox(payable(predicted)).flush(destSubstrateColdkey, hotkey, netuid, amount);
     }
 
     // ──────────────────── Internal Helpers ──────────────────────────────────────

@@ -16,6 +16,9 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
 
     uint16 private constant BPS_BASE = 10_000;
     uint8 private constant MAX_VALIDATORS = 3;
+    /// @dev Bounds `_setSigners` churn so a careless or compromised admin can't install a set
+    ///      so large that subsequent rotation exceeds the block gas limit.
+    uint8 private constant MAX_SIGNERS = 16;
 
     struct WeightAttestation {
         uint256 netuid;
@@ -54,6 +57,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     error UnknownSigner(address signer);
     error SignersNotSorted();
     error InsufficientSigners();
+    error TooManySigners();
     error ThresholdTooLow();
     error ThresholdExceedsSigners();
 
@@ -108,6 +112,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     function _setSigners(address[] memory newSigners, uint8 newThreshold) private {
         uint256 newLen = newSigners.length;
         if (newLen < 2) revert InsufficientSigners();
+        if (newLen > MAX_SIGNERS) revert TooManySigners();
         if (newThreshold < 2) revert ThresholdTooLow();
         if (newThreshold > newLen) revert ThresholdExceedsSigners();
 

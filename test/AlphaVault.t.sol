@@ -963,6 +963,86 @@ contract AlphaVaultTest is AttestationHelper {
         assertEq(userClone.balance, 0);
     }
 
+    function test_ReclaimAlphaFromMailbox() public {
+        _simulateAlphaDepositHotkey(alice, NETUID1, 10 ether, hotkey4);
+        bytes32 aliceSub = _toSubstrate(alice);
+
+        vm.prank(alice);
+        vault.reclaimAlphaFromMailbox(NETUID1, hotkey4, aliceSub);
+
+        address mailbox = vault.getDepositAddress(alice, NETUID1);
+        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey4, _toSubstrate(mailbox), NETUID1), 0);
+        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey4, aliceSub, NETUID1), 10 ether);
+    }
+
+    function test_RevertWhen_ReclaimAlphaFromMailboxZeroHotkey() public {
+        bytes32 aliceSub = _toSubstrate(alice);
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.ZeroHotkey.selector);
+        vault.reclaimAlphaFromMailbox(NETUID1, bytes32(0), aliceSub);
+    }
+
+    function test_RevertWhen_ReclaimAlphaFromMailboxNoStake() public {
+        bytes32 aliceSub = _toSubstrate(alice);
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.ZeroAmount.selector);
+        vault.reclaimAlphaFromMailbox(NETUID1, hotkey4, aliceSub);
+    }
+
+    function test_RevertWhen_ReclaimAlphaFromMailboxZeroColdkey() public {
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.ZeroColdkey.selector);
+        vault.reclaimAlphaFromMailbox(NETUID1, hotkey4, bytes32(0));
+    }
+
+    function test_ReclaimAlphaFromMailboxAcceptsInSetHotkey() public {
+        _simulateAlphaDepositHotkey(alice, NETUID1, 10 ether, hotkey1);
+        bytes32 aliceSub = _toSubstrate(alice);
+
+        vm.prank(alice);
+        vault.reclaimAlphaFromMailbox(NETUID1, hotkey1, aliceSub);
+
+        address mailbox = vault.getDepositAddress(alice, NETUID1);
+        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey1, _toSubstrate(mailbox), NETUID1), 0);
+        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey1, aliceSub, NETUID1), 10 ether);
+    }
+
+    function test_ReclaimAlphaCleansStrandedHotkeyAlongsideValidDeposit() public {
+        _simulateAlphaDepositHotkey(alice, NETUID1, 10 ether, hotkey1);
+        _simulateAlphaDepositHotkey(alice, NETUID1, 5 ether, hotkey4);
+
+        _processDepositHotkey(alice, NETUID1, hotkey1);
+        assertEq(vault.totalStake(TOKEN1), 10 ether);
+
+        bytes32 aliceSub = _toSubstrate(alice);
+        vm.prank(alice);
+        vault.reclaimAlphaFromMailbox(NETUID1, hotkey4, aliceSub);
+
+        address mailbox = vault.getDepositAddress(alice, NETUID1);
+        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey4, _toSubstrate(mailbox), NETUID1), 0);
+        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey4, aliceSub, NETUID1), 5 ether);
+    }
+
+    function test_ReclaimAlphaFromMailboxRecoversAfterSetRotation() public {
+        _setNetuid1Set(hotkey1, hotkey2, hotkey4);
+        _simulateAlphaDepositHotkey(alice, NETUID1, 10 ether, hotkey4);
+
+        _setNetuid1Set(hotkey1, hotkey2, hotkey3);
+
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.ChosenHotkeyNotInSet.selector);
+        vault.processDeposit(alice, NETUID1, hotkey4);
+
+        bytes32 aliceSub = _toSubstrate(alice);
+        vm.prank(alice);
+        vault.reclaimAlphaFromMailbox(NETUID1, hotkey4, aliceSub);
+        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey4, aliceSub, NETUID1), 10 ether);
+
+        _simulateAlphaDepositHotkey(alice, NETUID1, 10 ether, hotkey1);
+        _processDepositHotkey(alice, NETUID1, hotkey1);
+        assertEq(vault.totalStake(TOKEN1), 10 ether);
+    }
+
     // ───────── currentTokenId ────────────────────────────────────────────────
 
     function test_CurrentTokenIdReflectsRegBlock() public view {
@@ -1565,31 +1645,11 @@ contract AlphaVaultTest is AttestationHelper {
         assertEq(vault.totalStake(TOKEN1), 30 ether);
     }
 
-    /// @dev hotkey4 is not in NETUID1's attested set. All of D is moved to in-set hotkeys.
-    ///      With 30e18 and weights [3334, 3333, 3333] there's no division dust either way.
-    function test_ProcessDepositChosenOutOfSetMovesAllAway() public {
+    function test_RevertWhen_ProcessDepositChosenOutOfSet() public {
         _simulateAlphaDepositHotkey(alice, NETUID1, 30 ether, hotkey4);
-        _processDepositHotkey(alice, NETUID1, hotkey4);
-
-        assertEq(_getVaultStake(hotkey4, NETUID1), 0, "chosen hotkey should be drained (no dust at this amount)");
-        assertEq(_getVaultStake(hotkey1, NETUID1), 30 ether * 3334 / 10_000);
-        assertEq(_getVaultStake(hotkey2, NETUID1), 30 ether * 3333 / 10_000);
-        assertEq(_getVaultStake(hotkey3, NETUID1), 30 ether * 3333 / 10_000);
-        assertEq(vault.totalStake(TOKEN1), 30 ether);
-    }
-
-    /// @dev Realistic-amount dust check. With D = 10_000_001 RAO and weights [3334, 3333, 3333],
-    ///      each move clears subtensor's DefaultMinStake floor (~2e6 RAO). 1 RAO of dust ends up
-    ///      stranded on the out-of-set chosen.
-    function test_ProcessDepositChosenOutOfSetStrandedDustExcludedFromAccounting() public {
-        _simulateAlphaDepositHotkey(alice, NETUID1, 10_000_001, hotkey4);
-        _processDepositHotkey(alice, NETUID1, hotkey4);
-
-        assertEq(_getVaultStake(hotkey4, NETUID1), 1, "1 RAO of dust stranded on out-of-set chosen");
-        assertEq(_getVaultStake(hotkey1, NETUID1), uint256(10_000_001) * 3334 / 10_000);
-        assertEq(_getVaultStake(hotkey2, NETUID1), uint256(10_000_001) * 3333 / 10_000);
-        assertEq(_getVaultStake(hotkey3, NETUID1), uint256(10_000_001) * 3333 / 10_000);
-        assertEq(vault.totalStake(TOKEN1), 10_000_000, "totalStake counts in-set hotkeys only");
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.ChosenHotkeyNotInSet.selector);
+        vault.processDeposit(alice, NETUID1, hotkey4);
     }
 
     /// @dev count=1, chosen == the only validator: zero moves, all stake stays on chosen.
@@ -1604,19 +1664,6 @@ contract AlphaVaultTest is AttestationHelper {
         assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey4, cloneCk, 99), 10 ether);
         assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey1, cloneCk, 99), 0);
         assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey2, cloneCk, 99), 0);
-    }
-
-    /// @dev count=1, chosen != the only validator: exactly one move, chosen ends with 0.
-    function test_ProcessDepositCount1ChosenNotValidatorSingleMove() public {
-        _setValidators(99, _hks1(hotkey4), _wts1(10_000));
-        _setRegBlock(99, 300);
-
-        _simulateAlphaDepositHotkey(alice, 99, 10 ether, hotkey1);
-        _processDepositHotkey(alice, 99, hotkey1);
-
-        bytes32 cloneCk = _toSubstrate(vault.subnetClone(vault.currentTokenId(99)));
-        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey4, cloneCk, 99), 10 ether);
-        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey1, cloneCk, 99), 0);
     }
 
     function test_RevertWhen_ProcessDepositZeroChosenHotkey() public {
@@ -1639,10 +1686,10 @@ contract AlphaVaultTest is AttestationHelper {
     ///      Weights [3334, 3333, 3333] → smallest mover slice = D * 3333 / 10000. For D = 3e6,
     ///      slice = 999_900 < 2e6 (default minRebalanceAmt). Reverts before any precompile call.
     function test_RevertWhen_ProcessDepositWhenPerSlotMoveBelowMinRebalanceAmt() public {
-        _simulateAlphaDepositHotkey(alice, NETUID1, 3_000_000, hotkey4);
+        _simulateAlphaDepositHotkey(alice, NETUID1, 3_000_000, hotkey1);
         vm.prank(alice);
         vm.expectRevert(AlphaVault.DepositTooSmall.selector);
-        vault.processDeposit(alice, NETUID1, hotkey4);
+        vault.processDeposit(alice, NETUID1, hotkey1);
     }
 
     /// @dev Boundary: deposit exactly at minRebalanceAmt clears the flush check. With
