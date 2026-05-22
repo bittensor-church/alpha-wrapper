@@ -1,9 +1,11 @@
-name: CI
+name: Coverage
 
 permissions:
   contents: read
 
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -11,13 +13,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  FOUNDRY_PROFILE: ci
-
 jobs:
-  check:
-    name: Unit tests
+  coverage:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:
@@ -35,17 +34,15 @@ jobs:
           path: |
             out
             cache
-          key: forge-${{ runner.os }}-ci-${{ hashFiles('foundry.toml', 'src/**/*.sol', 'test/**/*.sol', 'lib/**') }}
-          restore-keys: forge-${{ runner.os }}-ci-
+          key: forge-${{ runner.os }}-cov-${{ hashFiles('foundry.toml', 'src/**/*.sol', 'test/**/*.sol', 'lib/**') }}
+          restore-keys: forge-${{ runner.os }}-cov-
 
-      - name: Run Forge fmt
-        run: forge fmt --check
-
-      - name: Run Forge build
+      - name: Run forge coverage
         run: |
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          forge build --sizes | tee -a "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Run tests and check gas snapshot
-        run: forge snapshot --check --tolerance 1 -vvv
+          forge coverage \
+            --ir-minimum \
+            --no-match-coverage "(test|script)/" \
+            --report summary \
+            | tee /tmp/coverage.txt
+          echo '## Coverage' >> "$GITHUB_STEP_SUMMARY"
+          awk '/^\|/' /tmp/coverage.txt >> "$GITHUB_STEP_SUMMARY"
