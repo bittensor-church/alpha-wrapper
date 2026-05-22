@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/// @title MockStorageQuery
-/// @notice Minimal mock for the StorageQuery precompile at 0x0807.
 contract MockStorageQuery {
     bytes16 constant NETWORK_REGISTERED_AT = 0x271d29b9b717ce3d8c571f1cbc180fa2;
     bytes16 constant DISSOLVED_NETWORKS = 0x3c50391079e54f03a7c9354a58591931;
@@ -14,7 +12,6 @@ contract MockStorageQuery {
         registeredAt[netuid] = blockNumber;
     }
 
-    /// @notice Overwrite the entire DissolvedNetworks Vec<u16>. Pass an empty array to clear.
     function setDissolvedNetworks(uint16[] calldata netuids) external {
         delete _dissolvedNetworks;
         for (uint256 i = 0; i < netuids.length; i++) {

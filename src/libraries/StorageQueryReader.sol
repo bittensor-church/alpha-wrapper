@@ -52,14 +52,14 @@ library StorageQueryReader {
         return false;
     }
 
-    /// @dev Build a storage key: twox_128(pallet) ++ twox_128(item) ++ Identity(le_u16(netuid))
-    ///      Identity hasher means the key bytes are used directly (no hashing).
-    ///      NetUid is a u16 wrapper, SCALE-encoded as 2 bytes little-endian.
+    /// @dev Build a SubtensorModule storage key for the given item prefix and netuid.
     function _buildKey(bytes16 itemPrefix, uint16 netuid) private pure returns (bytes memory) {
         return abi.encodePacked(
             PALLET_PREFIX,
             itemPrefix,
+            // forge-lint: disable-next-line(unsafe-typecast)
             bytes1(uint8(netuid & 0xFF)), // low byte (little-endian)
+            // forge-lint: disable-next-line(unsafe-typecast)
             bytes1(uint8(netuid >> 8)) // high byte
         );
     }
@@ -72,11 +72,12 @@ library StorageQueryReader {
     }
 
     /// @dev Decode a SCALE-encoded u64 (8 bytes, little-endian) from the start of `data`.
-    function _decodeLEu64(bytes memory data) private pure returns (uint64) {
-        uint64 val;
-        for (uint256 i = 0; i < 8; i++) {
+    function _decodeLEu64(bytes memory data) private pure returns (uint64 val) {
+        for (uint8 i; i < 8;) {
             val |= uint64(uint8(data[i])) << (i * 8);
+            unchecked {
+                ++i;
+            }
         }
-        return val;
     }
 }

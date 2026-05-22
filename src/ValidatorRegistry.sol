@@ -2,116 +2,223 @@
 pragma solidity ^0.8.20;
 
 import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol";
+import { EIP712 } from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import { ECDSA } from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import { IValidatorRegistry } from "./interfaces/IValidatorRegistry.sol";
 
 /// @title ValidatorRegistry
-/// @notice Push-based registry for preferred validators per subnet with target weights.
-///         Off-chain bot selects best validators (e.g. by APY) and pushes hotkeys + weights.
-///         AlphaVault reads from this registry to decide stake distribution and rebalancing.
-///
-/// @dev Weights are in basis points (BPS). Sum of weights for a subnet MUST equal 10000 (100%).
-///      Example: 2 validators at 60/40 → weights = [6000, 4000].
-contract ValidatorRegistry is IValidatorRegistry, AccessControl {
-    bytes32 public constant UPDATER_ROLE = keccak256("UPDATER_ROLE");
+/// @notice Per-subnet validator hotkeys + BPS weights, updated by threshold-of-N
+///         off-chain attesters via EIP-712 signed payloads.
+contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
+    bytes32 public constant ATTESTATION_TYPEHASH = keccak256(
+        "WeightAttestation(uint256 netuid,bytes32[] hotkeys,uint256[] weights,uint256 nonce,uint256 deadline)"
+    );
 
-    uint16 public constant BPS_BASE = 10_000;
+    uint16 private constant BPS_BASE = 10_000;
+    uint8 private constant MAX_VALIDATORS = 3;
+    /// @dev Bounds `_setSigners` churn so a careless or compromised admin can't install a set
+    ///      so large that subsequent rotation exceeds the block gas limit.
+    uint8 private constant MAX_SIGNERS = 16;
+
+    struct WeightAttestation {
+        uint256 netuid;
+        bytes32[] hotkeys;
+        uint256[] weights;
+        uint256 nonce;
+        uint256 deadline;
+    }
 
     struct ValidatorSet {
         bytes32[3] hotkeys;
-        uint16[3] weights; // BPS, must sum to 10000
-        uint8 count;
-        uint256 updatedAt;
+        uint16[3] weights;
     }
 
-    mapping(uint256 => ValidatorSet) internal _validators;
+    mapping(address => bool) public isSigner;
+    address[] public signers;
+    uint8 public threshold;
 
-    event ValidatorsUpdated(uint256 indexed netuid, uint8 count, uint256 timestamp);
-    event ValidatorsBatchUpdated(uint256 subnetCount, uint256 timestamp);
+    mapping(uint256 => ValidatorSet) private _validators;
+    mapping(uint256 => uint256) public nonces;
 
-    error EmptyValidators();
-    error TooManyValidators();
-    error ZeroHotkey();
-    error WeightsMustSum10000();
+    event SignersUpdated(address[] newSigners, uint8 newThreshold);
+    event ValidatorsUpdated(uint256 indexed netuid, uint256 nonce, bytes32[] hotkeys, uint256[] weights);
+
+    error ZeroAddress();
+    error ZeroValue();
+    error ZeroWeight();
+    error DuplicateValue();
     error LengthMismatch();
+    error InvalidValidatorCount();
+    error NetuidOutOfRange();
+    error WeightsMustSum10000();
+    error StaleNonce();
+    error ExpiredAttestation();
+    error NotEnoughSignatures();
+    error UnknownSigner(address signer);
+    error SignersNotSorted();
+    error InsufficientSigners();
+    error TooManySigners();
+    error ThresholdTooLow();
+    error ThresholdExceedsSigners();
 
-    constructor(address _admin, address _updater) {
-        _grantRole(DEFAULT_ADMIN_ROLE, _admin);
-        _grantRole(UPDATER_ROLE, _updater);
-    }
-
-    /// @notice Set preferred validators + weights for a single subnet.
-    /// @param netuid The subnet ID.
-    /// @param hotkeys Array of validator hotkeys (1–3).
-    /// @param weights Target allocation in BPS per validator. Must sum to 10000.
-    function setValidators(uint256 netuid, bytes32[] calldata hotkeys, uint16[] calldata weights)
-        external
-        onlyRole(UPDATER_ROLE)
+    constructor(address admin, address[] memory initialSigners, uint8 initialThreshold)
+        EIP712("AlphaVault ValidatorRegistry", "1")
     {
-        _setValidators(netuid, hotkeys, weights);
-        emit ValidatorsUpdated(netuid, uint8(hotkeys.length), block.timestamp);
+        if (admin == address(0)) revert ZeroAddress();
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _setSigners(initialSigners, initialThreshold);
     }
 
-    /// @notice Batch-set preferred validators + weights for multiple subnets in one tx.
-    function setValidatorsBatch(
-        uint256[] calldata netuids,
-        bytes32[][] calldata hotkeySets,
-        uint16[][] calldata weightSets
-    ) external onlyRole(UPDATER_ROLE) {
-        if (netuids.length != hotkeySets.length || netuids.length != weightSets.length) {
-            revert LengthMismatch();
-        }
-
-        for (uint256 i = 0; i < netuids.length; i++) {
-            _setValidators(netuids[i], hotkeySets[i], weightSets[i]);
-        }
-
-        emit ValidatorsBatchUpdated(netuids.length, block.timestamp);
+    /// @param sigs Must be sorted by recovered signer address, ascending.
+    function updateValidators(WeightAttestation calldata att, bytes[] calldata sigs) external {
+        uint256 len = att.hotkeys.length;
+        _validatePayload(att, len);
+        _validateFreshness(att);
+        _verifySignatures(att, sigs);
+        _commit(att, len);
     }
 
-    // ──────────────────── IValidatorRegistry ─────────────────────────────────
+    /// @param sigs Per-attestation signatures; each entry must be sorted ascending by recovered address.
+    function updateValidatorsBatch(WeightAttestation[] calldata atts, bytes[][] calldata sigs) external {
+        uint256 n = atts.length;
+        if (n != sigs.length) revert LengthMismatch();
+        for (uint256 i; i < n;) {
+            uint256 len = atts[i].hotkeys.length;
+            _validatePayload(atts[i], len);
+            _validateFreshness(atts[i]);
+            _verifySignatures(atts[i], sigs[i]);
+            _commit(atts[i], len);
+            unchecked {
+                ++i;
+            }
+        }
+    }
 
+    /// @inheritdoc IValidatorRegistry
     function getValidators(uint256 netuid)
         external
         view
         override
-        returns (bytes32[3] memory hotkeys, uint16[3] memory weights, uint8 count)
+        returns (bytes32[3] memory hotkeys, uint16[3] memory weights)
     {
         ValidatorSet storage vs = _validators[netuid];
-        return (vs.hotkeys, vs.weights, vs.count);
+        return (vs.hotkeys, vs.weights);
     }
 
-    function hasValidators(uint256 netuid) external view override returns (bool) {
-        return _validators[netuid].count > 0;
+    function setSigners(address[] calldata newSigners, uint8 newThreshold) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _setSigners(newSigners, newThreshold);
     }
 
-    // ──────────────────── Internal ───────────────────────────────────────────
+    function _setSigners(address[] memory newSigners, uint8 newThreshold) private {
+        uint256 newLen = newSigners.length;
+        if (newLen < 2) revert InsufficientSigners();
+        if (newLen > MAX_SIGNERS) revert TooManySigners();
+        if (newThreshold < 2) revert ThresholdTooLow();
+        if (newThreshold > newLen) revert ThresholdExceedsSigners();
 
-    function _setValidators(uint256 netuid, bytes32[] calldata hotkeys, uint16[] calldata weights) internal {
-        if (hotkeys.length == 0) revert EmptyValidators();
-        if (hotkeys.length > 3) revert TooManyValidators();
-        if (hotkeys.length != weights.length) revert LengthMismatch();
-
-        uint16 totalWeight = 0;
-        for (uint8 i = 0; i < hotkeys.length; i++) {
-            if (hotkeys[i] == bytes32(0)) revert ZeroHotkey();
-            totalWeight += weights[i];
+        address[] memory cached = signers;
+        uint256 oldLen = cached.length;
+        for (uint256 i; i < oldLen;) {
+            isSigner[cached[i]] = false;
+            unchecked {
+                ++i;
+            }
         }
-        if (totalWeight != BPS_BASE) revert WeightsMustSum10000();
+        delete signers;
 
-        ValidatorSet storage vs = _validators[netuid];
-        // Clear
-        vs.hotkeys[0] = bytes32(0);
-        vs.hotkeys[1] = bytes32(0);
-        vs.hotkeys[2] = bytes32(0);
-        vs.weights[0] = 0;
-        vs.weights[1] = 0;
-        vs.weights[2] = 0;
-
-        for (uint8 i = 0; i < hotkeys.length; i++) {
-            vs.hotkeys[i] = hotkeys[i];
-            vs.weights[i] = weights[i];
+        for (uint256 i; i < newLen;) {
+            address s = newSigners[i];
+            if (s == address(0)) revert ZeroValue();
+            if (isSigner[s]) revert DuplicateValue();
+            isSigner[s] = true;
+            signers.push(s);
+            unchecked {
+                ++i;
+            }
         }
-        vs.count = uint8(hotkeys.length);
-        vs.updatedAt = block.timestamp;
+
+        threshold = newThreshold;
+
+        emit SignersUpdated(newSigners, newThreshold);
+    }
+
+    function _validatePayload(WeightAttestation calldata att, uint256 len) private pure {
+        if (att.netuid > type(uint16).max) revert NetuidOutOfRange();
+        if (len == 0 || len > MAX_VALIDATORS) revert InvalidValidatorCount();
+        if (len != att.weights.length) revert LengthMismatch();
+
+        uint256 sum;
+        for (uint256 i; i < len;) {
+            if (att.hotkeys[i] == bytes32(0)) revert ZeroValue();
+            if (att.weights[i] == 0) revert ZeroWeight();
+            for (uint256 j = i + 1; j < len;) {
+                if (att.hotkeys[i] == att.hotkeys[j]) revert DuplicateValue();
+                unchecked {
+                    ++j;
+                }
+            }
+            sum += att.weights[i];
+            unchecked {
+                ++i;
+            }
+        }
+        if (sum != BPS_BASE) revert WeightsMustSum10000();
+    }
+
+    function _validateFreshness(WeightAttestation calldata att) private view {
+        if (att.nonce != nonces[att.netuid] + 1) revert StaleNonce();
+        // forge-lint: disable-next-line(block-timestamp)
+        if (block.timestamp > att.deadline) revert ExpiredAttestation();
+    }
+
+    function _verifySignatures(WeightAttestation calldata att, bytes[] calldata sigs) private view {
+        uint256 sigCount = sigs.length;
+        if (sigCount < threshold) revert NotEnoughSignatures();
+
+        bytes32 digest = _hashAttestation(att);
+        address last;
+        for (uint256 i; i < sigCount;) {
+            address recovered = ECDSA.recover(digest, sigs[i]);
+            if (!isSigner[recovered]) revert UnknownSigner(recovered);
+            if (recovered <= last) revert SignersNotSorted();
+            last = recovered;
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function _commit(WeightAttestation calldata att, uint256 len) private {
+        nonces[att.netuid] = att.nonce;
+        ValidatorSet storage vs = _validators[att.netuid];
+        for (uint256 i; i < MAX_VALIDATORS;) {
+            bytes32 newHk;
+            uint16 newWt;
+            if (i < len) {
+                newHk = att.hotkeys[i];
+                newWt = uint16(att.weights[i]);
+            }
+            if (vs.hotkeys[i] != newHk) vs.hotkeys[i] = newHk;
+            if (vs.weights[i] != newWt) vs.weights[i] = newWt;
+            unchecked {
+                ++i;
+            }
+        }
+        emit ValidatorsUpdated(att.netuid, att.nonce, att.hotkeys, att.weights);
+    }
+
+    function _hashAttestation(WeightAttestation calldata att) private view returns (bytes32) {
+        return _hashTypedDataV4(
+            keccak256(
+                abi.encode(
+                    ATTESTATION_TYPEHASH,
+                    att.netuid,
+                    keccak256(abi.encodePacked(att.hotkeys)),
+                    keccak256(abi.encodePacked(att.weights)),
+                    att.nonce,
+                    att.deadline
+                )
+            )
+        );
     }
 }

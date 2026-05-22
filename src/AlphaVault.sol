@@ -22,7 +22,11 @@ import { StorageQueryReader } from "./libraries/StorageQueryReader.sol";
 ///   - Each vault tracks its own sharePrice independently: totalStake[netuid] / totalShares(netuid).
 ///   - EIP-1167 clones serve as deterministic "Mailbox" deposit addresses per (user, netuid).
 ///   - Validators + weights are read exclusively from ValidatorRegistry (no on-chain fallback).
-///   - Rebalances to target weights on every deposit and withdraw.
+///   - Deposits distribute the freshly-deposited delta across the attested set in proportion
+///     to weights; withdraws drain assets from hotkeys in descending-balance order without
+///     rebalancing. Drift on existing balances is corrected only by explicit `rebalance(netuid)`.
+///   - State-mutating calls sweep alpha off hotkeys dropped from the registry since the
+///     previous call. The per-token last-seen hotkey set is tracked in `_lastSeenHotkeys`.
 ///   - Value accrues as validator rewards increase totalStake[netuid] without minting new shares.
 ///   - Per-subnet clones isolate alpha and TAO.
 ///   - Dissolved subnets pay TAO on withdraw.
@@ -42,10 +46,14 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     IValidatorRegistry public validatorRegistry;
     mapping(uint256 => address) public subnetClone;
 
-    /// @notice Minimum RAO amount for a single rebalance move. Below this, `_rebalanceOnce`
-    ///         and `rebalance` skip the `moveStake` precompile call — substrate's alpha-pool
-    ///         round-trip can round tiny moves to zero and revert. Owner-tunable so it can
-    ///         track future subtensor changes without a redeploy.
+    /// @dev Hotkeys this token's clone is physically distributed across. Refreshed on every
+    ///      state-mutating call after sweeping any hotkey dropped from the registry.
+    mapping(uint256 => bytes32[3]) private _lastSeenHotkeys;
+
+    /// @notice Minimum RAO for any single `transferStake` / `moveStake` the vault initiates.
+    ///         Default `2e6` matches subtensor's `DefaultMinStake` so deposits + rebalances
+    ///         clear the `AmountTooLow` floor out of the box. Owner-tunable to track future
+    ///         subtensor changes without a redeploy.
     uint256 public minRebalanceAmt;
 
     // ──────────────────── Precision ─────────────────────────────────────────────
@@ -55,16 +63,18 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     uint16 private constant BPS_BASE = 10_000;
 
     // ──────────────────── Events ────────────────────────────────────────────────
-    event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares, bytes32 hotkey);
-    event Withdrawn(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 assets, bytes32 hotkey);
+    event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
+    event Withdrawn(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 assets);
     event ValidatorRegistryUpdated(address oldRegistry, address newRegistry);
     event MinRebalanceAmtUpdated(uint256 oldValue, uint256 newValue);
-    event Rebalanced(uint256 indexed tokenId, uint8 moveCount);
+    event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
 
     // ──────────────────── Errors ────────────────────────────────────────────────
     error ZeroAmount();
     error ZeroAddress();
+    error ZeroHotkey();
+    error ZeroColdkey();
     error InsufficientShares();
     error NoValidatorFound();
     error UnauthorizedCaller();
@@ -73,13 +83,16 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     error SubnetDissolved();
     error NothingToWithdraw();
     error NoSharesOutstanding();
+    error DepositTooSmall();
+    error NetuidOutOfRange();
+    error ChosenHotkeyNotInSet();
 
     // ──────────────────── Constructor ───────────────────────────────────────────
     constructor(string memory _uri, address _mailboxLogic, address _subnetLogic) ERC1155(_uri) Ownable(msg.sender) {
         if (_mailboxLogic == address(0) || _subnetLogic == address(0)) revert ZeroAddress();
         mailboxLogic = _mailboxLogic;
         subnetLogic = _subnetLogic;
-        minRebalanceAmt = 1e6;
+        minRebalanceAmt = 2e6;
     }
 
     // ──────────────────── Token ID & Subnet Proxy ────────────────────────────────
@@ -90,16 +103,17 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     /// @param  netuid Subnet id.
     /// @return tokenId Packed (regBlock << 16) | netuid identifier.
     function currentTokenId(uint256 netuid) public view returns (uint256) {
-        uint64 regBlock = StorageQueryReader.readNetworkRegisteredAt(uint16(netuid));
+        if (netuid > type(uint16).max) revert NetuidOutOfRange();
+        // forge-lint: disable-next-line(unsafe-typecast)
+        uint16 nid = uint16(netuid);
+        uint64 regBlock = StorageQueryReader.readNetworkRegisteredAt(nid);
         if (regBlock == 0) revert SubnetNotRegistered();
-        return uint256(uint16(netuid)) | (uint256(regBlock) << 16);
+        return uint256(nid) | (uint256(regBlock) << 16);
     }
 
     /// @notice Deploy the per-subnet clone that will hold this subnet's alpha under an isolated coldkey.
     /// @dev    Idempotent: returns silently if a clone already exists for the current tokenId.
-    ///         Reverts with `SubnetNotRegistered` if no subnet is currently registered at `netuid`.
-    /// @param  netuid Subnet id to create the clone for.
-    function createSubnetProxy(uint256 netuid) external nonReentrant {
+    function createSubnetProxy(uint256 netuid) external {
         uint256 tokenId = currentTokenId(netuid);
         if (subnetClone[tokenId] != address(0)) return;
         _deploySubnetClone(tokenId);
@@ -109,42 +123,60 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
 
     /// @notice Predict the mailbox clone address for a user on a subnet.
     function getDepositAddress(address user, uint256 netuid) public view returns (address) {
+        if (netuid > type(uint16).max) revert NetuidOutOfRange();
         bytes32 salt = _cloneSalt(user, netuid);
         return Clones.predictDeterministicAddress(mailboxLogic, salt, address(this));
     }
 
-    /// @notice Process a deposit: deploy clone (lazily), flush its alpha stake, mint shares.
-    ///         Only the user themselves or the contract owner can trigger this to prevent
-    ///         front-running attacks where an attacker flushes the clone before the user is ready.
-    function processDeposit(address user, uint256 netuid, bytes32 cloneSubstrateColdkey) external nonReentrant {
+    /// @notice Flush the user's mailbox stake under `chosenHotkey` to the subnet clone and
+    ///         distribute it across the attested validator set in proportion to BPS weights.
+    /// @dev    Caller-restriction prevents an attacker flushing the clone before the user is ready.
+    ///         The call flushes only the mailbox balance recorded under `chosenHotkey`; a mailbox
+    ///         holding stake under multiple hotkeys requires one `processDeposit` per hotkey.
+    ///         `chosenHotkey` must be in the current attested validator set; reverts with
+    ///         `ChosenHotkeyNotInSet` otherwise. Use `reclaimAlphaFromMailbox` to recover alpha
+    ///         parked under a non-attested hotkey. Existing balances on other hotkeys in the
+    ///         validator set are left untouched - call `rebalance(netuid)` to correct prior drift.
+    function processDeposit(address user, uint256 netuid, bytes32 chosenHotkey) external nonReentrant {
         if (msg.sender != user && msg.sender != owner()) revert UnauthorizedCaller();
+        if (chosenHotkey == bytes32(0)) revert ZeroHotkey();
 
         uint256 tokenId = currentTokenId(netuid);
-        if (subnetClone[tokenId] == address(0)) _deploySubnetClone(tokenId);
+        // forge-lint: disable-next-line(unsafe-typecast)
+        uint16 nid = uint16(netuid);
+        (bytes32[3] memory hotkeys, uint16[3] memory weights, uint256 count) = _resolveValidators(nid);
 
-        (bytes32[3] memory hotkeys,, uint8 count) = _resolveValidators(uint16(netuid));
-        address userClone = _ensureMailboxClone(user, netuid);
-
-        IStaking staking = IStaking(STAKING_PRECOMPILE);
-        bytes32 destColdkey = _subnetColdkey(tokenId);
-        uint256 totalDeposit = 0;
-
-        for (uint8 i = 0; i < count; i++) {
-            uint256 stakeUnderHk = staking.getStake(hotkeys[i], cloneSubstrateColdkey, netuid);
-            if (stakeUnderHk > 0) {
-                DepositMailbox(payable(userClone)).flush(destColdkey, hotkeys[i], netuid, stakeUnderHk);
-                totalDeposit += stakeUnderHk;
+        bool inSet;
+        for (uint256 i; i < count;) {
+            if (hotkeys[i] == chosenHotkey) {
+                inSet = true;
+                break;
+            }
+            unchecked {
+                ++i;
             }
         }
+        if (!inSet) revert ChosenHotkeyNotInSet();
+
+        address clone = subnetClone[tokenId];
+        if (clone == address(0)) clone = _deploySubnetClone(tokenId);
+
+        address userClone = _ensureMailboxClone(user, netuid);
+        _sweepRotatedStake(tokenId, nid, hotkeys);
+
+        bytes32 destColdkey = _coldkeyOf(clone);
+        bytes32 cloneSubstrateColdkey = _coldkeyOf(userClone);
+        uint256 totalDeposit = IStaking(STAKING_PRECOMPILE).getStake(chosenHotkey, cloneSubstrateColdkey, netuid);
         if (totalDeposit == 0) revert ZeroAmount();
+        _validateClearsMinStake(hotkeys, weights, count, chosenHotkey, totalDeposit);
 
-        (, uint256 totalAlpha) = _fetchBalances(hotkeys, count, destColdkey, uint16(netuid));
-        if (count >= 2 && totalAlpha > 0) {
-            _rebalanceOnce(hotkeys, count, tokenId);
-        }
+        DepositMailbox(payable(userClone)).flush(destColdkey, chosenHotkey, netuid, totalDeposit);
 
-        // Guard against rebalance rounding: moveStake on the real chain can lose 1 RAO,
-        // so totalAlpha may be < totalDeposit when preStake is 0.
+        _distributeNewFunds(hotkeys, weights, count, chosenHotkey, totalDeposit, tokenId);
+
+        (, uint256 totalAlpha) = _fetchBalances(hotkeys, count, destColdkey, nid);
+
+        // Clamp to avoid underflow: subtensor moveStake rounding can leave totalAlpha < totalDeposit.
         uint256 preStake = totalAlpha > totalDeposit ? totalAlpha - totalDeposit : 0;
         uint256 shares = _sharesFor(preStake, totalSupply(tokenId), totalDeposit);
         if (shares == 0) revert ZeroAmount();
@@ -152,7 +184,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         totalStake[tokenId] = totalAlpha;
         _mint(user, tokenId, shares, "");
 
-        emit Deposited(user, tokenId, totalDeposit, shares, hotkeys[0]);
+        emit Deposited(user, tokenId, totalDeposit, shares);
     }
 
     // ──────────────────── Withdraw Flow ─────────────────────────────────────────
@@ -189,11 +221,16 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         address clone,
         uint16 netuid
     ) private {
-        (bytes32[3] memory hotkeys,, uint8 validatorCount) = _resolveValidators(netuid);
-        bytes32 subnetColdkey = _subnetColdkey(tokenId);
+        (bytes32[3] memory hotkeys,, uint256 validatorCount) = _resolveValidators(netuid);
+        _sweepRotatedStake(tokenId, netuid, hotkeys);
+        bytes32 subnetColdkey = _coldkeyOf(clone);
         (uint256[3] memory balances, uint256 totalAlpha) =
             _fetchBalances(hotkeys, validatorCount, subnetColdkey, netuid);
         if (totalAlpha == 0) revert NothingToWithdraw();
+
+        // Sync stored stake to on-chain reality before pricing shares; otherwise emissions
+        // accrued since the last write would be paid to the wrong holders.
+        totalStake[tokenId] = totalAlpha;
 
         uint256 assets = _convertToAssets(tokenId, shares);
         if (assets == 0) revert ZeroAmount();
@@ -201,22 +238,22 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         _burn(msg.sender, tokenId, shares);
         totalStake[tokenId] -= assets;
 
-        uint8[3] memory drainOrder = _sortHotkeysByBalanceDesc(balances, validatorCount);
+        uint256[3] memory drainOrder = _sortHotkeysByBalanceDesc(balances, validatorCount);
         uint256 remaining = assets;
-        for (uint8 i = 0; i < validatorCount && remaining > 0; i++) {
-            uint8 idx = drainOrder[i];
+        for (uint256 i; i < validatorCount && remaining > 0;) {
+            uint256 idx = drainOrder[i];
+            if (hotkeys[idx] == bytes32(0)) break;
             uint256 takeAmount = remaining > balances[idx] ? balances[idx] : remaining;
             if (takeAmount > 0) {
                 SubnetClone(payable(clone)).flush(userSubstrateColdkey, hotkeys[idx], netuid, takeAmount);
                 remaining -= takeAmount;
             }
+            unchecked {
+                ++i;
+            }
         }
 
-        if (validatorCount >= 2) {
-            _rebalanceOnce(hotkeys, validatorCount, tokenId);
-        }
-
-        emit Withdrawn(msg.sender, tokenId, shares, assets, hotkeys[0]);
+        emit Withdrawn(msg.sender, tokenId, shares, assets);
     }
 
     function _redeemDissolvedPosition(uint256 tokenId, uint256 shares, address clone, uint16 netuid) private {
@@ -229,87 +266,102 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         _burn(msg.sender, tokenId, shares);
         if (userTao > 0) SubnetClone(payable(clone)).withdrawTao(payable(msg.sender), userTao);
         if (supplyBefore == shares) totalStake[tokenId] = 0;
-        emit Withdrawn(msg.sender, tokenId, shares, userTao, bytes32(0));
+        emit Withdrawn(msg.sender, tokenId, shares, userTao);
     }
 
-    function _sortHotkeysByBalanceDesc(uint256[3] memory balances, uint8 count)
+    /// @dev 3-element sorting network producing the drain order (largest balance first).
+    function _sortHotkeysByBalanceDesc(uint256[3] memory balances, uint256 count)
         private
         pure
-        returns (uint8[3] memory order)
+        returns (uint256[3] memory order)
     {
-        for (uint8 i = 0; i < count; i++) {
-            order[i] = i;
-        }
-        for (uint8 i = 0; i < count; i++) {
-            for (uint8 j = i + 1; j < count; j++) {
-                if (balances[order[j]] > balances[order[i]]) {
-                    uint8 tmp = order[i];
-                    order[i] = order[j];
-                    order[j] = tmp;
-                }
-            }
-        }
+        order[0] = 0;
+        order[1] = 1;
+        order[2] = 2;
+        if (count < 2) return order;
+        if (balances[order[1]] > balances[order[0]]) (order[0], order[1]) = (order[1], order[0]);
+        if (count < 3) return order;
+        if (balances[order[2]] > balances[order[0]]) (order[0], order[2]) = (order[2], order[0]);
+        if (balances[order[2]] > balances[order[1]]) (order[1], order[2]) = (order[2], order[1]);
     }
 
     // ──────────────────── Rebalance ───────────────────────────────────────────
 
     /// @notice Full rebalance of vault stake for a subnet to match registry target weights.
     ///         Anyone can call this (e.g. after validator registry update).
-    ///         Performs up to N-1 moveStake calls to align with target weights.
+    ///         Performs up to N-1 moveStake calls to align with target weights, and refreshes
+    ///         `totalStake[tokenId]` from on-chain so `sharePrice` / `previewWithdraw` reflect
+    ///         emissions accrued since the last state-mutating call.
     /// @param netuid The subnet to rebalance.
     function rebalance(uint256 netuid) external nonReentrant {
         uint256 tokenId = currentTokenId(netuid);
         address clone = subnetClone[tokenId];
         if (clone == address(0)) return;
 
-        (bytes32[3] memory hotkeys, uint16[3] memory weights, uint8 validatorCount) = _resolveValidators(uint16(netuid));
-
-        if (validatorCount < 2) return;
+        // forge-lint: disable-next-line(unsafe-typecast)
+        uint16 nid = uint16(netuid);
+        (bytes32[3] memory hotkeys, uint16[3] memory weights, uint256 validatorCount) = _resolveValidators(nid);
+        _sweepRotatedStake(tokenId, nid, hotkeys);
 
         IStaking staking = IStaking(STAKING_PRECOMPILE);
-        bytes32 coldkey = _subnetColdkey(tokenId);
+        bytes32 coldkey = _coldkeyOf(clone);
 
         uint256[3] memory balances;
-        uint256 total = 0;
-        for (uint8 i = 0; i < validatorCount; i++) {
+        uint256 total;
+        for (uint256 i; i < validatorCount;) {
+            if (hotkeys[i] == bytes32(0)) break;
             balances[i] = staking.getStake(hotkeys[i], coldkey, netuid);
             total += balances[i];
+            unchecked {
+                ++i;
+            }
         }
-        if (total == 0) return;
+
+        totalStake[tokenId] = total;
+
+        if (validatorCount < 2 || total == 0) return;
 
         // Compute target amounts from weights
         uint256[3] memory targets;
-        uint256 assigned = 0;
-        for (uint8 i = 0; i < validatorCount; i++) {
+        uint256 assigned;
+        for (uint256 i; i < validatorCount;) {
             if (i == validatorCount - 1) {
                 targets[i] = total - assigned; // remainder to last to avoid rounding dust
             } else {
                 targets[i] = (total * weights[i]) / BPS_BASE;
                 assigned += targets[i];
             }
+            unchecked {
+                ++i;
+            }
         }
 
         // Iterative rebalance: move from overweight to underweight
         // Max N-1 iterations for N validators
-        uint8 moveCount = 0;
-        for (uint8 round = 0; round < validatorCount - 1; round++) {
+        for (uint256 round; round < validatorCount - 1;) {
             // Find most overweight
-            uint8 overIdx = 0;
-            uint256 maxOver = 0;
-            for (uint8 i = 0; i < validatorCount; i++) {
+            uint256 overIdx;
+            uint256 maxOver;
+            for (uint256 i; i < validatorCount;) {
                 if (balances[i] > targets[i] && balances[i] - targets[i] > maxOver) {
                     maxOver = balances[i] - targets[i];
                     overIdx = i;
                 }
+                unchecked {
+                    ++i;
+                }
             }
 
             // Find most underweight
-            uint8 underIdx = 0;
-            uint256 maxUnder = 0;
-            for (uint8 i = 0; i < validatorCount; i++) {
+            uint256 underIdx;
+            uint256 maxUnder;
+            for (uint256 i; i < validatorCount;) {
                 if (balances[i] < targets[i] && targets[i] - balances[i] > maxUnder) {
                     maxUnder = targets[i] - balances[i];
                     underIdx = i;
+                }
+                unchecked {
+                    ++i;
                 }
             }
 
@@ -318,12 +370,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
             uint256 moveAmt = maxOver < maxUnder ? maxOver : maxUnder;
             if (moveAmt < minRebalanceAmt) break;
             SubnetClone(payable(clone)).moveStake(hotkeys[overIdx], hotkeys[underIdx], netuid, moveAmt);
+            emit Rebalanced(tokenId, hotkeys[overIdx], hotkeys[underIdx], moveAmt);
             balances[overIdx] -= moveAmt;
             balances[underIdx] += moveAmt;
-            moveCount++;
+            unchecked {
+                ++round;
+            }
         }
-
-        emit Rebalanced(tokenId, moveCount);
     }
 
     // ──────────────────── View Functions ────────────────────────────────────────
@@ -386,20 +439,24 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
             return (0, (cloneBalance * shares) / supply);
         }
 
-        (bytes32[3] memory hotkeys,, uint8 validatorCount) = _resolveValidators(netuid);
-        bytes32 subnetColdkey = _subnetColdkey(tokenId);
+        (bytes32[3] memory hotkeys,, uint256 validatorCount) = _resolveValidators(netuid);
+        bytes32 subnetColdkey = _coldkeyOf(clone);
         (, uint256 totalAlpha) = _fetchBalances(hotkeys, validatorCount, subnetColdkey, netuid);
         if (totalAlpha == 0) revert NothingToWithdraw();
         return (_convertToAssets(tokenId, shares), 0);
     }
 
     function getBestValidator(uint256 netuid) external view returns (bytes32) {
+        if (netuid > type(uint16).max) revert NetuidOutOfRange();
+        // forge-lint: disable-next-line(unsafe-typecast)
         (bytes32[3] memory hks,,) = _resolveValidators(uint16(netuid));
         return hks[0];
     }
 
     /// @notice Unused slots are bytes32(0).
     function getBestValidators(uint256 netuid) external view returns (bytes32[3] memory) {
+        if (netuid > type(uint16).max) revert NetuidOutOfRange();
+        // forge-lint: disable-next-line(unsafe-typecast)
         (bytes32[3] memory hks,,) = _resolveValidators(uint16(netuid));
         return hks;
     }
@@ -407,6 +464,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     // ──────────────────── Admin ─────────────────────────────────────────────────
 
     function setValidatorRegistry(address _registry) external onlyOwner {
+        if (_registry == address(0)) revert ZeroAddress();
         address old = address(validatorRegistry);
         validatorRegistry = IValidatorRegistry(_registry);
         emit ValidatorRegistryUpdated(old, _registry);
@@ -435,85 +493,109 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         DepositMailbox(payable(predicted)).withdrawTao(payable(msg.sender), amount);
     }
 
+    /// @notice Reclaim alpha stake parked in the caller's mailbox back to a substrate coldkey.
+    /// @dev    Recovery path for any alpha sitting in the mailbox; works for in-set hotkeys
+    ///         (change of mind before depositing) and out-of-set hotkeys (wrong choice, or the
+    ///         set rotated before the user could deposit). Deploys the mailbox clone lazily;
+    ///         substrate stake can park on the mailbox coldkey before the EVM-side clone exists.
+    ///         Reverts with `ZeroAmount` if the mailbox holds no stake under `hotkey`.
+    /// @param  netuid               Subnet id whose mailbox should be drained for this hotkey.
+    /// @param  hotkey               Hotkey under which the stranded stake sits.
+    /// @param  destSubstrateColdkey Destination coldkey for the recovered alpha.
+    function reclaimAlphaFromMailbox(uint256 netuid, bytes32 hotkey, bytes32 destSubstrateColdkey)
+        external
+        nonReentrant
+    {
+        if (hotkey == bytes32(0)) revert ZeroHotkey();
+        if (destSubstrateColdkey == bytes32(0)) revert ZeroColdkey();
+
+        address predicted = getDepositAddress(msg.sender, netuid);
+        bytes32 mailboxColdkey = _coldkeyOf(predicted);
+        uint256 amount = IStaking(STAKING_PRECOMPILE).getStake(hotkey, mailboxColdkey, netuid);
+        if (amount == 0) revert ZeroAmount();
+
+        _ensureMailboxClone(msg.sender, netuid);
+        DepositMailbox(payable(predicted)).flush(destSubstrateColdkey, hotkey, netuid, amount);
+    }
+
     // ──────────────────── Internal Helpers ──────────────────────────────────────
 
-    /// @dev Resolve validators and weights from the registry. Reverts if none configured.
+    /// @dev Reverts `NoValidatorFound` if the registry has no configured set for `netuid`.
     function _resolveValidators(uint16 netuid)
-        internal
+        private
         view
-        returns (bytes32[3] memory hotkeys, uint16[3] memory weights, uint8 count)
+        returns (bytes32[3] memory hotkeys, uint16[3] memory weights, uint256 count)
     {
         if (address(validatorRegistry) == address(0)) revert NoValidatorFound();
-        (hotkeys, weights, count) = validatorRegistry.getValidators(netuid);
-        if (count == 0) revert NoValidatorFound();
+        (hotkeys, weights) = validatorRegistry.getValidators(netuid);
+        if (weights[0] == 0) revert NoValidatorFound();
+        while (count < weights.length && weights[count] != 0) {
+            count++;
+        }
     }
 
     /// @dev Read live alpha balances per (subnet, coldkey) pair.
-    function _fetchBalances(bytes32[3] memory hotkeys, uint8 count, bytes32 coldkey, uint16 netuid)
+    function _fetchBalances(bytes32[3] memory hotkeys, uint256 count, bytes32 coldkey, uint16 netuid)
         private
         view
         returns (uint256[3] memory balances, uint256 total)
     {
         IStaking staking = IStaking(STAKING_PRECOMPILE);
-        for (uint8 i = 0; i < count; i++) {
+        for (uint256 i; i < count;) {
+            if (hotkeys[i] == bytes32(0)) break;
             balances[i] = staking.getStake(hotkeys[i], coldkey, netuid);
             total += balances[i];
+            unchecked {
+                ++i;
+            }
         }
     }
 
-    /// @dev At-most-one moveStake to pull the subnet clone's balances toward target
-    ///      weights. Self-contained: re-reads balances and weights from chain.
-    ///      Callers must guarantee `validatorCount >= 2` and a deployed subnet clone.
-    function _rebalanceOnce(bytes32[3] memory hotkeys, uint8 validatorCount, uint256 tokenId) internal {
+    /// @dev Revert if the deposit or any per-slot distribution move would fall below `minRebalanceAmt`.
+    function _validateClearsMinStake(
+        bytes32[3] memory hotkeys,
+        uint16[3] memory weights,
+        uint256 count,
+        bytes32 chosen,
+        uint256 amount
+    ) private view {
+        uint256 threshold = minRebalanceAmt;
+        if (amount < threshold) revert DepositTooSmall();
+        for (uint256 i; i < count;) {
+            if (hotkeys[i] == bytes32(0)) break;
+            if (hotkeys[i] != chosen) {
+                uint256 amt = (amount * weights[i]) / BPS_BASE;
+                if (amt > 0 && amt < threshold) revert DepositTooSmall();
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @dev Spread `amount` from `chosen` across the validator set per BPS weights.
+    function _distributeNewFunds(
+        bytes32[3] memory hotkeys,
+        uint16[3] memory weights,
+        uint256 count,
+        bytes32 chosen,
+        uint256 amount,
+        uint256 tokenId
+    ) private {
         address clone = subnetClone[tokenId];
         uint16 netuid = _netuid(tokenId);
-        bytes32 coldkey = _subnetColdkey(tokenId);
-
-        IStaking staking = IStaking(STAKING_PRECOMPILE);
-        uint256[3] memory balances;
-        uint256 total = 0;
-        for (uint8 i = 0; i < validatorCount; i++) {
-            balances[i] = staking.getStake(hotkeys[i], coldkey, netuid);
-            total += balances[i];
-        }
-        if (total == 0) return;
-
-        (, uint16[3] memory weights,) = _resolveValidators(netuid);
-
-        // Distribute `total` across validators proportionally to `weights`;
-        // remainder to last slot so sum(targets) == total exactly.
-        uint256[3] memory targets;
-        uint256 assigned = 0;
-        for (uint8 i = 0; i < validatorCount; i++) {
-            if (i == validatorCount - 1) {
-                targets[i] = total - assigned;
-            } else {
-                targets[i] = (total * weights[i]) / BPS_BASE;
-                assigned += targets[i];
+        for (uint256 i; i < count;) {
+            if (hotkeys[i] == bytes32(0)) break;
+            if (hotkeys[i] != chosen) {
+                uint256 amt = (amount * weights[i]) / BPS_BASE;
+                if (amt > 0) {
+                    SubnetClone(payable(clone)).moveStake(chosen, hotkeys[i], netuid, amt);
+                }
+            }
+            unchecked {
+                ++i;
             }
         }
-
-        // Pick the biggest over/under pair and move min(over, under) between them.
-        uint8 overIdx = 0;
-        uint8 underIdx = 0;
-        uint256 maxOver = 0;
-        uint256 maxUnder = 0;
-        for (uint8 i = 0; i < validatorCount; i++) {
-            if (balances[i] > targets[i] && balances[i] - targets[i] > maxOver) {
-                maxOver = balances[i] - targets[i];
-                overIdx = i;
-            }
-            if (balances[i] < targets[i] && targets[i] - balances[i] > maxUnder) {
-                maxUnder = targets[i] - balances[i];
-                underIdx = i;
-            }
-        }
-        if (maxOver == 0 || maxUnder == 0 || overIdx == underIdx) return;
-
-        uint256 moveAmt = maxOver < maxUnder ? maxOver : maxUnder;
-        if (moveAmt < minRebalanceAmt) return;
-        SubnetClone(payable(clone)).moveStake(hotkeys[overIdx], hotkeys[underIdx], netuid, moveAmt);
-        emit Rebalanced(tokenId, 1);
     }
 
     function _sharesFor(uint256 stake, uint256 supply, uint256 assets) private pure returns (uint256) {
@@ -524,16 +606,48 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         return (shares * (stake + VIRTUAL_ASSETS)) / (supply + VIRTUAL_SHARES);
     }
 
-    function _convertToShares(uint256 tokenId, uint256 assets) internal view returns (uint256) {
+    function _convertToShares(uint256 tokenId, uint256 assets) private view returns (uint256) {
         return _sharesFor(totalStake[tokenId], totalSupply(tokenId), assets);
     }
 
-    function _convertToAssets(uint256 tokenId, uint256 shares) internal view returns (uint256) {
+    function _convertToAssets(uint256 tokenId, uint256 shares) private view returns (uint256) {
         return _assetsFor(totalStake[tokenId], totalSupply(tokenId), shares);
     }
 
-    function _subnetColdkey(uint256 tokenId) private view returns (bytes32) {
-        return IAddressMapping(ADDRESS_MAPPING_PRECOMPILE).addressMapping(subnetClone[tokenId]);
+    function _coldkeyOf(address evmAddr) private view returns (bytes32) {
+        return IAddressMapping(ADDRESS_MAPPING_PRECOMPILE).addressMapping(evmAddr);
+    }
+
+    /// @dev Move stake off rotated-out hotkeys onto `currentSet[0]` and refresh the snapshot.
+    ///      Weight layout is restored by a subsequent rebalance, not here.
+    function _sweepRotatedStake(uint256 tokenId, uint16 netuid, bytes32[3] memory currentSet) private {
+        bytes32[3] storage seen = _lastSeenHotkeys[tokenId];
+        address clone = subnetClone[tokenId];
+        if (clone != address(0)) {
+            bytes32 coldkey = _coldkeyOf(clone);
+            uint256 threshold = minRebalanceAmt;
+            IStaking staking = IStaking(STAKING_PRECOMPILE);
+            for (uint256 i; i < 3;) {
+                bytes32 hk = seen[i];
+                if (hk != bytes32(0) && hk != currentSet[0] && hk != currentSet[1] && hk != currentSet[2]) {
+                    uint256 bal = staking.getStake(hk, coldkey, netuid);
+                    if (bal >= threshold) {
+                        SubnetClone(payable(clone)).moveStake(hk, currentSet[0], netuid, bal);
+                        emit Rebalanced(tokenId, hk, currentSet[0], bal);
+                    }
+                }
+                unchecked {
+                    ++i;
+                }
+            }
+        }
+        if (seen[0] != currentSet[0]) seen[0] = currentSet[0];
+        if (seen[1] != currentSet[1]) seen[1] = currentSet[1];
+        if (seen[2] != currentSet[2]) seen[2] = currentSet[2];
+    }
+
+    function lastSeenHotkeys(uint256 tokenId) external view returns (bytes32[3] memory) {
+        return _lastSeenHotkeys[tokenId];
     }
 
     function _ensureMailboxClone(address user, uint256 netuid) private returns (address userClone) {
@@ -547,7 +661,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     }
 
     /// @dev Salt = keccak256(user, netuid) — unique per (user, subnet) pair.
-    function _cloneSalt(address user, uint256 netuid) internal pure returns (bytes32) {
+    function _cloneSalt(address user, uint256 netuid) private pure returns (bytes32) {
         return keccak256(abi.encodePacked(user, netuid));
     }
 
@@ -559,10 +673,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     }
 
     function _netuid(uint256 tokenId) private pure returns (uint16) {
+        // forge-lint: disable-next-line(unsafe-typecast)
         return uint16(tokenId & 0xFFFF);
     }
 
     function _regBlock(uint256 tokenId) private pure returns (uint64) {
+        // forge-lint: disable-next-line(unsafe-typecast)
         return uint64(tokenId >> 16);
     }
 

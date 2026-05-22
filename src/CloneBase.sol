@@ -12,7 +12,6 @@ abstract contract CloneBase {
 
     error AlreadyInitialized();
     error NotWrapper();
-    error ZeroAddress();
     error UnauthorizedInitializer();
 
     /// @dev Lock the implementation contract itself so only fresh-storage clones can `initialize`.
@@ -27,12 +26,11 @@ abstract contract CloneBase {
 
     /// @notice One-shot initializer called by the wrapper right after cloning.
     /// @dev    Only the wrapper itself can initialize: enforced by `msg.sender == _wrapper`.
-    ///         Reverts with `AlreadyInitialized` if called twice, `ZeroAddress` on zero input,
-    ///         and `UnauthorizedInitializer` if the caller is not the passed wrapper.
+    ///         Reverts with `AlreadyInitialized` if called twice and `UnauthorizedInitializer`
+    ///         if the caller is not the passed wrapper.
     /// @param  _wrapper AlphaVault instance authorized to drive this clone.
     function initialize(address _wrapper) external {
         if (initialized) revert AlreadyInitialized();
-        if (_wrapper == address(0)) revert ZeroAddress();
         if (msg.sender != _wrapper) revert UnauthorizedInitializer();
         wrapper = _wrapper;
         initialized = true;
