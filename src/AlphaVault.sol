@@ -23,8 +23,8 @@ import { StorageQueryReader } from "./libraries/StorageQueryReader.sol";
 ///   - EIP-1167 clones serve as deterministic "Mailbox" deposit addresses per (user, netuid).
 ///   - Validators + weights are read exclusively from ValidatorRegistry (no on-chain fallback).
 ///   - Deposits distribute the freshly-deposited delta across the attested set in proportion
-///     to weights; withdraws redeem from the largest-balance hotkey then run one rebalance
-///     step. Prior drift on existing balances is corrected only by explicit `rebalance(netuid)`.
+///     to weights; withdraws drain assets from hotkeys in descending-balance order without
+///     rebalancing. Drift on existing balances is corrected only by explicit `rebalance(netuid)`.
 ///   - State-mutating calls sweep alpha off hotkeys dropped from the registry since the
 ///     previous call. The per-token last-seen hotkey set is tracked in `_lastSeenHotkeys`.
 ///   - Value accrues as validator rewards increase totalStake[netuid] without minting new shares.
