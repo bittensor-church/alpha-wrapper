@@ -69,6 +69,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     event MinRebalanceAmtUpdated(uint256 oldValue, uint256 newValue);
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
+    event WithdrawnForTao(
+        address indexed user, uint256 indexed tokenId, uint256 shares, uint256 assetsBurned, uint256 taoOut
+    );
+    event MailboxAlphaSoldForTao(
+        address indexed user, uint256 indexed netuid, bytes32 indexed hotkey, uint256 alpha, uint256 taoOut
+    );
 
     // ──────────────────── Errors ────────────────────────────────────────────────
     error ZeroAmount();
@@ -86,6 +92,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     error DepositTooSmall();
     error NetuidOutOfRange();
     error ChosenHotkeyNotInSet();
+    error SlippageExceeded(uint256 taoOut);
 
     // ──────────────────── Constructor ───────────────────────────────────────────
     constructor(string memory _uri, address _mailboxLogic, address _subnetLogic) ERC1155(_uri) Ownable(msg.sender) {
@@ -212,6 +219,51 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         } else {
             _redeemLivePosition(tokenId, shares, userSubstrateColdkey, clone, netuid);
         }
+    }
+
+    /// @notice Burn vault shares pro-rata and pay the caller native TAO from swapping the backing alpha.
+    /// @param  tokenId    Vault token id.
+    /// @param  shares     Shares to burn.
+    /// @param  minTaoOut  Slippage floor; revert if realized TAO is less.
+    function withdrawForTao(uint256 tokenId, uint256 shares, uint256 minTaoOut) external nonReentrant {
+        if (shares == 0) revert ZeroAmount();
+        if (balanceOf(msg.sender, tokenId) < shares) revert InsufficientShares();
+        address clone = subnetClone[tokenId];
+        if (clone == address(0)) revert NothingToWithdraw();
+        uint16 netuid = _netuid(tokenId);
+
+        (bytes32[6] memory hotkeys, uint256[6] memory balances, uint256 total) = _drainCandidates(tokenId, netuid);
+        // Dissolution permanently zeroes the alpha balance, so a non-zero total already implies
+        // a live subnet and a zero total cannot be exited via this rail regardless of cause.
+        if (total == 0) revert NothingToWithdraw();
+
+        totalStake[tokenId] = total;
+        uint256 assets = _convertToAssets(tokenId, shares);
+        if (assets == 0) revert ZeroAmount();
+
+        _burn(msg.sender, tokenId, shares);
+        totalStake[tokenId] -= assets;
+
+        uint256 balanceBefore = clone.balance;
+        uint256 remaining = assets;
+        for (uint256 i; i < 6;) {
+            if (remaining == 0) break;
+            uint256 bal = balances[i];
+            if (bal != 0) {
+                uint256 take = bal < remaining ? bal : remaining;
+                SubnetClone(payable(clone)).sellAlphaForTao(hotkeys[i], netuid, take);
+                remaining -= take;
+            }
+            unchecked {
+                ++i;
+            }
+        }
+
+        uint256 taoOut = clone.balance - balanceBefore;
+        if (taoOut < minTaoOut) revert SlippageExceeded(taoOut);
+
+        SubnetClone(payable(clone)).withdrawTao(payable(msg.sender), taoOut);
+        emit WithdrawnForTao(msg.sender, tokenId, shares, assets, taoOut);
     }
 
     function _redeemLivePosition(
@@ -518,6 +570,28 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         DepositMailbox(payable(predicted)).flush(destSubstrateColdkey, hotkey, netuid, amount);
     }
 
+    /// @notice Swap a user's mailbox alpha for native TAO and send it to the caller.
+    /// @param  netuid     Subnet id of the mailbox.
+    /// @param  hotkey     Hotkey under which the alpha sits in the mailbox.
+    /// @param  minTaoOut  Slippage floor; revert if realized TAO is less.
+    function reclaimMailboxAlphaAsTao(uint256 netuid, bytes32 hotkey, uint256 minTaoOut) external nonReentrant {
+        if (netuid > type(uint16).max) revert NetuidOutOfRange();
+        if (hotkey == bytes32(0)) revert ZeroHotkey();
+        address predicted = getDepositAddress(msg.sender, netuid);
+        bytes32 mailboxColdkey = _coldkeyOf(predicted);
+        uint256 amount = IStaking(STAKING_PRECOMPILE).getStake(hotkey, mailboxColdkey, netuid);
+        if (amount == 0) revert ZeroAmount();
+
+        _ensureMailboxClone(msg.sender, netuid);
+        uint256 balanceBefore = predicted.balance;
+        DepositMailbox(payable(predicted)).sellAlphaForTao(hotkey, netuid, amount);
+
+        uint256 taoOut = predicted.balance - balanceBefore;
+        if (taoOut < minTaoOut) revert SlippageExceeded(taoOut);
+        DepositMailbox(payable(predicted)).withdrawTao(payable(msg.sender), taoOut);
+        emit MailboxAlphaSoldForTao(msg.sender, netuid, hotkey, amount, taoOut);
+    }
+
     // ──────────────────── Internal Helpers ──────────────────────────────────────
 
     /// @dev Reverts `NoValidatorFound` if the registry has no configured set for `netuid`.
@@ -644,6 +718,57 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         if (seen[0] != currentSet[0]) seen[0] = currentSet[0];
         if (seen[1] != currentSet[1]) seen[1] = currentSet[1];
         if (seen[2] != currentSet[2]) seen[2] = currentSet[2];
+    }
+
+    function _drainCandidates(uint256 tokenId, uint16 netuid)
+        private
+        view
+        returns (bytes32[6] memory hotkeys, uint256[6] memory balances, uint256 totalStakeOut)
+    {
+        address clone = subnetClone[tokenId];
+        if (clone == address(0)) return (hotkeys, balances, 0);
+        if (address(validatorRegistry) == address(0)) revert NoValidatorFound();
+
+        (bytes32[3] memory current,) = validatorRegistry.getValidators(netuid);
+        bytes32[3] memory historical = _lastSeenHotkeys[tokenId];
+        bytes32 coldkey = _coldkeyOf(clone);
+        IStaking staking = IStaking(STAKING_PRECOMPILE);
+
+        uint256 n;
+        for (uint256 i; i < 3;) {
+            bytes32 hk = historical[i];
+            if (hk != bytes32(0)) {
+                hotkeys[n] = hk;
+                uint256 bal = staking.getStake(hk, coldkey, netuid);
+                balances[n] = bal;
+                totalStakeOut += bal;
+                unchecked {
+                    ++n;
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        // Validator registry guarantees no duplicates within the current validator set, so the dedup only
+        // needs to scan against the historical slots already collected above.
+        // Historical validator list was previously obtained from the validator registry contract, so it does
+        // contain duplicates.
+        for (uint256 i; i < 3;) {
+            bytes32 hk = current[i];
+            if (hk != bytes32(0) && hk != historical[0] && hk != historical[1] && hk != historical[2]) {
+                hotkeys[n] = hk;
+                uint256 bal = staking.getStake(hk, coldkey, netuid);
+                balances[n] = bal;
+                totalStakeOut += bal;
+                unchecked {
+                    ++n;
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     function lastSeenHotkeys(uint256 tokenId) external view returns (bytes32[3] memory) {

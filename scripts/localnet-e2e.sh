@@ -21,6 +21,9 @@
 #   7. processDeposit → mint ERC1155 shares
 #   8. Verify deposit balances
 #   9. Withdraw all shares → verify alpha returned to user's substrate coldkey
+#  10. Observability scripts → verify event-derived state
+#  11. Reclaim mailbox alpha for TAO → verify user receives native TAO
+#  12. Withdraw shares for TAO → verify user receives native TAO
 #
 # Usage:
 #   chmod +x scripts/localnet-e2e.sh
@@ -570,6 +573,114 @@ for i in 0 1 2; do
             --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
             --registry-address "$VAL_REGISTRY_ADDR" --netuid "$NET"
 done
+
+log "Phase 11: Reclaim mailbox alpha as TAO"
+
+RECLAIM_NET="${NETUIDS[0]}"
+RECLAIM_HK_IDX=0
+RECLAIM_HK_B32="${ALL_HK_B32S[$RECLAIM_HK_IDX]}"
+RECLAIM_HK_SS58="${ALL_HK_SS58S[$RECLAIM_HK_IDX]}"
+
+RECLAIM_MAILBOX=$(cast call "$VAULT_ADDR" "getDepositAddress(address,uint256)(address)" \
+    "$WRAPPER_ADDR" "$RECLAIM_NET" --rpc-url "$RPC_URL")
+RECLAIM_MAILBOX_SUB=$(h160_to_substrate_b32 "$RECLAIM_MAILBOX")
+RECLAIM_MAILBOX_SS58=$(h160_to_ss58 "$RECLAIM_MAILBOX")
+info "User mailbox on netuid $RECLAIM_NET: $RECLAIM_MAILBOX"
+
+RECLAIM_AMOUNT_RAW=$((TRANSFER_AMOUNT * 1000000000 / 3))
+info "Transferring $RECLAIM_AMOUNT_RAW RAO from Alice → mailbox under ${RECLAIM_HK_B32:0:18}..."
+transfer_stake_py "$RECLAIM_MAILBOX_SS58" "$RECLAIM_HK_SS58" "$RECLAIM_NET" "$RECLAIM_AMOUNT_RAW" | tail -1
+
+MAILBOX_ALPHA_PRE=$(cast call "$STAKING" "getStake(bytes32,bytes32,uint256)(uint256)" \
+    "$RECLAIM_HK_B32" "$RECLAIM_MAILBOX_SUB" "$RECLAIM_NET" --rpc-url "$RPC_URL" | awk '{print $1}')
+[[ "$MAILBOX_ALPHA_PRE" -gt 0 ]] || fail "mailbox has zero alpha before reclaim"
+ok "Mailbox stake before: $MAILBOX_ALPHA_PRE RAO"
+
+USER_TAO_PRE=$(cast balance "$WRAPPER_ADDR" --rpc-url "$RPC_URL" | awk '{print $1}')
+info "User EVM balance before: $USER_TAO_PRE wei"
+
+TX_JSON=$(cast send "$VAULT_ADDR" \
+    "reclaimMailboxAlphaAsTao(uint256,bytes32,uint256)" \
+    "$RECLAIM_NET" "$RECLAIM_HK_B32" 0 \
+    --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
+    $EVM_FLAGS --gas-limit 1500000 --json || true)
+STATUS=$(echo "$TX_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
+if [[ "$STATUS" != "0x1" ]]; then
+    echo "$TX_JSON"
+    fail "reclaimMailboxAlphaAsTao failed (status=$STATUS)"
+fi
+
+MAILBOX_ALPHA_POST=$(cast call "$STAKING" "getStake(bytes32,bytes32,uint256)(uint256)" \
+    "$RECLAIM_HK_B32" "$RECLAIM_MAILBOX_SUB" "$RECLAIM_NET" --rpc-url "$RPC_URL" | awk '{print $1}')
+[[ "$MAILBOX_ALPHA_POST" == "0" ]] || fail "mailbox still holds $MAILBOX_ALPHA_POST RAO after reclaim"
+ok "Mailbox alpha drained to 0"
+
+USER_TAO_POST=$(cast balance "$WRAPPER_ADDR" --rpc-url "$RPC_URL" | awk '{print $1}')
+info "User EVM balance after:  $USER_TAO_POST wei"
+GAINED=$(python3 -c "print($USER_TAO_POST - $USER_TAO_PRE)")
+# Bash arithmetic is signed 64-bit; wei deltas routinely exceed 2^63-1, so compare via Python.
+python3 -c "import sys; sys.exit(0 if $GAINED > 0 else 1)" \
+    || fail "user did not gain TAO from reclaim (net change: $GAINED wei)"
+ok "User gained $GAINED wei (net of gas)"
+
+log "Phase 12: Withdraw shares for TAO"
+
+WFT_NET="${NETUIDS[1]}"
+WFT_TID="${VAULT_IDS[1]}"
+WFT_HK_IDX=3
+WFT_HK_B32="${ALL_HK_B32S[$WFT_HK_IDX]}"
+WFT_HK_SS58="${ALL_HK_SS58S[$WFT_HK_IDX]}"
+
+WFT_MAILBOX=$(cast call "$VAULT_ADDR" "getDepositAddress(address,uint256)(address)" \
+    "$WRAPPER_ADDR" "$WFT_NET" --rpc-url "$RPC_URL")
+WFT_MAILBOX_SS58=$(h160_to_ss58 "$WFT_MAILBOX")
+info "User mailbox on netuid $WFT_NET: $WFT_MAILBOX"
+
+WFT_AMOUNT_RAW=$((TRANSFER_AMOUNT * 1000000000 / 3))
+info "Transferring $WFT_AMOUNT_RAW RAO from Alice → mailbox under ${WFT_HK_B32:0:18}..."
+transfer_stake_py "$WFT_MAILBOX_SS58" "$WFT_HK_SS58" "$WFT_NET" "$WFT_AMOUNT_RAW" | tail -1
+
+TX_JSON=$(cast send "$VAULT_ADDR" \
+    "processDeposit(address,uint256,bytes32)" \
+    "$WRAPPER_ADDR" "$WFT_NET" "$WFT_HK_B32" \
+    --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
+    $EVM_FLAGS --gas-limit 1500000 --json || true)
+STATUS=$(echo "$TX_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
+if [[ "$STATUS" != "0x1" ]]; then
+    echo "$TX_JSON"
+    fail "processDeposit for withdrawForTao setup failed (status=$STATUS)"
+fi
+
+WFT_SHARES=$(cast call "$VAULT_ADDR" "balanceOf(address,uint256)(uint256)" \
+    "$WRAPPER_ADDR" "$WFT_TID" --rpc-url "$RPC_URL" | awk '{print $1}')
+[[ "$WFT_SHARES" != "0" ]] || fail "no shares minted by processDeposit on netuid $WFT_NET"
+ok "Minted shares: $WFT_SHARES"
+
+USER_TAO_PRE=$(cast balance "$WRAPPER_ADDR" --rpc-url "$RPC_URL" | awk '{print $1}')
+info "User EVM balance before: $USER_TAO_PRE wei"
+
+TX_JSON=$(cast send "$VAULT_ADDR" \
+    "withdrawForTao(uint256,uint256,uint256)" \
+    "$WFT_TID" "$WFT_SHARES" 0 \
+    --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
+    $EVM_FLAGS --gas-limit 2500000 --json || true)
+STATUS=$(echo "$TX_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
+if [[ "$STATUS" != "0x1" ]]; then
+    echo "$TX_JSON"
+    fail "withdrawForTao failed (status=$STATUS)"
+fi
+
+WFT_SHARES_POST=$(cast call "$VAULT_ADDR" "balanceOf(address,uint256)(uint256)" \
+    "$WRAPPER_ADDR" "$WFT_TID" --rpc-url "$RPC_URL" | awk '{print $1}')
+[[ "$WFT_SHARES_POST" == "0" ]] || fail "shares still $WFT_SHARES_POST after withdrawForTao"
+ok "Shares burned to 0"
+
+USER_TAO_POST=$(cast balance "$WRAPPER_ADDR" --rpc-url "$RPC_URL" | awk '{print $1}')
+info "User EVM balance after:  $USER_TAO_POST wei"
+GAINED=$(python3 -c "print($USER_TAO_POST - $USER_TAO_PRE)")
+python3 -c "import sys; sys.exit(0 if $GAINED > 0 else 1)" \
+    || fail "user did not gain TAO from withdrawForTao (net change: $GAINED wei)"
+ok "User gained $GAINED wei (net of gas)"
 
 log "E2E complete"
 echo "  AlphaVault:        $VAULT_ADDR"
