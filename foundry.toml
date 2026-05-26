@@ -8,7 +8,13 @@ optimizer = true
 optimizer_runs = 200
 via_ir = true
 
-fuzz = { runs = 256, seed = "0x1" }
+fuzz = { runs = 256 }
+
+# Pin the fuzz seed in CI so the gas snapshot is stable across runs.
+# Locally we let fuzz pick a random seed for broader exploration.
+[profile.ci.fuzz]
+runs = 256
+seed = "0x1"
 
 
 [fmt]
