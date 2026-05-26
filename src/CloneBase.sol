@@ -56,5 +56,16 @@ abstract contract CloneBase {
         if (amount > 0) Address.sendValue(to, amount);
     }
 
+    /// @notice Convert alpha stake held by this clone into native TAO.
+    /// @dev    No-op when `amount == 0`. Callable only by the wrapper.
+    /// @param  hotkey Hotkey under which the alpha sits.
+    /// @param  netuid Subnet id.
+    /// @param  amount Alpha amount to swap.
+    function sellAlphaForTao(bytes32 hotkey, uint256 netuid, uint256 amount) external onlyWrapper {
+        if (amount > 0) {
+            IStaking(STAKING_PRECOMPILE).removeStake(hotkey, amount, netuid);
+        }
+    }
+
     receive() external payable { }
 }

@@ -24,6 +24,8 @@ interface IStaking {
     ) external payable;
 
     function getStake(bytes32 hotkey, bytes32 coldkey, uint256 netuid) external view returns (uint256);
+
+    function removeStake(bytes32 hotkey, uint256 amount, uint256 netuid) external payable;
 }
 
 /// @dev Staking precompile address on Bittensor EVM.
