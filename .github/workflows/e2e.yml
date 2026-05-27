@@ -9,6 +9,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: true
+
 env:
   FOUNDRY_PROFILE: ci
 
@@ -35,6 +39,15 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
         with:
           version: v1.7.0
+
+      - name: Cache forge artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            out
+            cache
+          key: forge-${{ runner.os }}-ci-${{ hashFiles('foundry.toml', 'src/**/*.sol', 'test/**/*.sol', 'lib/**') }}
+          restore-keys: forge-${{ runner.os }}-ci-
 
       - name: Set up Python
         uses: actions/setup-python@v5
