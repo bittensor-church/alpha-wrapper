@@ -1163,6 +1163,118 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(tao, 0);
     }
 
+    function test_PreviewWithdrawAccountsForLastSeenOrphan() public {
+        _simulateAlphaDeposit(alice, NETUID1, 30 ether);
+        _processDeposit(alice, NETUID1);
+
+        // Concentrate the vault's alpha on hotkey3, then rotate hotkey3 out.
+        bytes32 cloneCk = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneCk, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneCk, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneCk, NETUID1, 30 ether);
+
+        _setNetuid1Set(hotkey1, hotkey2, hotkey4);
+
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        (uint256 previewAlpha,) = vault.previewWithdraw(TOKEN1, shares);
+
+        bytes32 aliceSub = _toSubstrate(alice);
+        vm.prank(alice);
+        vault.withdraw(TOKEN1, shares, aliceSub);
+
+        uint256 actualAlpha = _getStake(hotkey1, alice, NETUID1) + _getStake(hotkey2, alice, NETUID1)
+            + _getStake(hotkey3, alice, NETUID1) + _getStake(hotkey4, alice, NETUID1);
+
+        assertEq(actualAlpha, 30 ether, "withdraw reclaims orphan and pays the full deposit");
+        assertEq(previewAlpha, actualAlpha, "preview must match what withdraw actually pays");
+    }
+
+    function test_PreviewWithdrawExcludesSubFloorOrphan() public {
+        _simulateAlphaDeposit(alice, NETUID1, 30 ether);
+        _processDeposit(alice, NETUID1);
+
+        // Drop hotkey3 to one RAO below the rebalance floor, then rotate it out.
+        uint256 floor = vault.minRebalanceAmt();
+        bytes32 cloneCk = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneCk, NETUID1, floor - 1);
+
+        _setNetuid1Set(hotkey1, hotkey2, hotkey4);
+
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        (uint256 previewAlpha,) = vault.previewWithdraw(TOKEN1, shares);
+
+        bytes32 aliceSub = _toSubstrate(alice);
+        vm.prank(alice);
+        vault.withdraw(TOKEN1, shares, aliceSub);
+
+        uint256 actualAlpha = _getStake(hotkey1, alice, NETUID1) + _getStake(hotkey2, alice, NETUID1)
+            + _getStake(hotkey3, alice, NETUID1) + _getStake(hotkey4, alice, NETUID1);
+
+        assertEq(previewAlpha, actualAlpha, "preview excludes sub-floor orphan, matches withdraw");
+    }
+
+    function test_PreviewWithdrawSurvivesFullRegistryRotationWithoutRebalance() public {
+        // Start with a single-validator subnet so the entire deposit lands on hotkey4 alone.
+        _setValidators(NETUID1, _hks1(hotkey4), _wts1(10_000));
+        _simulateAlphaDepositHotkey(alice, NETUID1, 30 ether, hotkey4);
+        _processDepositHotkey(alice, NETUID1, hotkey4);
+
+        _setValidators(NETUID1, _hks3(hotkey1, hotkey2, hotkey3), _wts3(3334, 3333, 3333));
+
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        (uint256 previewAlpha,) = vault.previewWithdraw(TOKEN1, shares);
+
+        bytes32 aliceSub = _toSubstrate(alice);
+        vm.prank(alice);
+        vault.withdraw(TOKEN1, shares, aliceSub);
+
+        uint256 actualAlpha = _getStake(hotkey1, alice, NETUID1) + _getStake(hotkey2, alice, NETUID1)
+            + _getStake(hotkey3, alice, NETUID1) + _getStake(hotkey4, alice, NETUID1);
+
+        assertEq(actualAlpha, 30 ether, "withdraw reclaims stake from the rotated-out validator");
+        assertEq(previewAlpha, actualAlpha, "preview matches what withdraw pays after registry rotation");
+    }
+
+    function test_PreviewWithdrawReflectsFreshEmissions() public {
+        _simulateAlphaDeposit(alice, NETUID1, 30 ether);
+        _processDeposit(alice, NETUID1);
+
+        // Simulate validator rewards accrued on hotkey1 since the last state-mutating call.
+        bytes32 cloneCk = _subnetColdkey(NETUID1);
+        uint256 hk1Before = _getVaultStake(hotkey1, NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneCk, NETUID1, hk1Before + 6 ether);
+
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        (uint256 previewAlpha,) = vault.previewWithdraw(TOKEN1, shares);
+
+        bytes32 aliceSub = _toSubstrate(alice);
+        vm.prank(alice);
+        vault.withdraw(TOKEN1, shares, aliceSub);
+
+        uint256 actualAlpha = _getStake(hotkey1, alice, NETUID1) + _getStake(hotkey2, alice, NETUID1)
+            + _getStake(hotkey3, alice, NETUID1);
+
+        assertApproxEqAbs(actualAlpha, 36 ether, 1, "withdraw pays deposit + accrued emissions");
+        assertEq(previewAlpha, actualAlpha, "preview reflects fresh on-chain balances incl. emissions");
+    }
+
+    function test_PreviewWithdrawReturnsZeroWhenVaultDrained() public {
+        _simulateAlphaDeposit(alice, NETUID1, 30 ether);
+        _processDeposit(alice, NETUID1);
+
+        // Drain every hotkey the vault currently tracks (current set + lastSeen).
+        bytes32 cloneCk = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneCk, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneCk, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneCk, NETUID1, 0);
+
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        (uint256 alpha, uint256 tao) = vault.previewWithdraw(TOKEN1, shares);
+
+        assertEq(alpha, 0);
+        assertEq(tao, 0);
+    }
+
     function test_RevertWhen_SharePriceForFullyDissolvedTokenId() public {
         _simulateAlphaDeposit(alice, NETUID1, 10 ether);
         _processDeposit(alice, NETUID1);
@@ -1326,7 +1438,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.previewDeposit(tokenId, 10 ether);
     }
 
-    function test_RevertWhen_PreviewWithdrawNothingToWithdrawOnDissolvedZeroBalance() public {
+    function test_RevertWhen_PreviewWithdrawDissolvedZeroBalance() public {
         _simulateAlphaDeposit(alice, NETUID1, 10 ether);
         _processDeposit(alice, NETUID1);
         uint256 tokenId = vault.currentTokenId(NETUID1);
@@ -1336,7 +1448,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateTaoAwardedOnDissolution(tokenId, 0);
         _simulateDissolutionCompleted(NETUID1);
 
-        vm.expectRevert(AlphaVault.NothingToWithdraw.selector);
+        vm.expectRevert(AlphaVault.SubnetDissolved.selector);
         vault.previewWithdraw(tokenId, shares);
     }
 

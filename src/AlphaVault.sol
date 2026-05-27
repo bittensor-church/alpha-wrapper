@@ -469,10 +469,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     }
 
     /// @notice Preview the redemption of `shares` for a position.
-    /// @dev    Returns input-edge sentinels `(0, 0)` for zero shares, unknown tokenId, or
-    ///         zero supply. Mirrors `withdraw` otherwise — reverts
-    ///         `SubnetInDissolutionBlackoutPeriod` during blackout and `NothingToWithdraw`
-    ///         on paths that would have nothing to pay out.
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, regBlock) position.
     /// @param  shares  Shares being previewed.
     /// @return alpha   Alpha redeemable on the live path.
@@ -489,15 +485,29 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
 
         if (_isIssuedForDissolvedSubnet(tokenId)) {
             uint256 cloneBalance = clone.balance;
-            if (cloneBalance == 0) revert NothingToWithdraw();
+            if (cloneBalance == 0) revert SubnetDissolved();
             return (0, (cloneBalance * shares) / supply);
         }
 
         (bytes32[3] memory hotkeys,, uint256 validatorCount) = _resolveValidators(netuid);
         bytes32 subnetColdkey = _coldkeyOf(clone);
-        uint256[3] memory balances = _fetchBalances(hotkeys, validatorCount, subnetColdkey, netuid);
-        if (_sumBalances(balances) == 0) revert NothingToWithdraw();
-        return (_convertToAssets(tokenId, shares), 0);
+        (, uint256 totalAlpha) = _fetchBalances(hotkeys, validatorCount, subnetColdkey, netuid);
+
+        bytes32[3] memory lastSeen = _lastSeenHotkeys[tokenId];
+        uint256 floor = minRebalanceAmt;
+        IStaking staking = IStaking(STAKING_PRECOMPILE);
+        for (uint256 i; i < 3;) {
+            bytes32 hk = lastSeen[i];
+            if (_isRotatedOut(hk, hotkeys)) {
+                uint256 bal = staking.getStake(hk, subnetColdkey, netuid);
+                if (bal >= floor) totalAlpha += bal;
+            }
+            unchecked {
+                ++i;
+            }
+        }
+
+        return (_assetsFor(totalAlpha, supply, shares), 0);
     }
 
     function getBestValidator(uint256 netuid) external view returns (bytes32) {
@@ -650,6 +660,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         return IAddressMapping(ADDRESS_MAPPING_PRECOMPILE).addressMapping(evmAddr);
     }
 
+    function _isRotatedOut(bytes32 hk, bytes32[3] memory currentSet) private pure returns (bool) {
+        return hk != bytes32(0) && hk != currentSet[0] && hk != currentSet[1] && hk != currentSet[2];
+    }
+
     /// @dev Move stake off rotated-out hotkeys onto `currentSet[0]` and refresh the snapshot.
     function _sweepRotatedStake(uint256 tokenId, address clone, bytes32 coldkey, bytes32[3] memory currentSet) private {
         bytes32[3] storage seen = _lastSeenHotkeys[tokenId];
@@ -659,7 +673,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
             IStaking staking = IStaking(STAKING_PRECOMPILE);
             for (uint256 i; i < 3;) {
                 bytes32 hk = seen[i];
-                if (hk != bytes32(0) && hk != currentSet[0] && hk != currentSet[1] && hk != currentSet[2]) {
+                if (_isRotatedOut(hk, currentSet)) {
                     uint256 bal = staking.getStake(hk, coldkey, netuid);
                     if (bal >= threshold) {
                         SubnetClone(payable(clone)).moveStake(hk, currentSet[0], netuid, bal);
