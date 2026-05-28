@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
           submodules: recursive
@@ -29,7 +29,7 @@ jobs:
           version: v1.7.0
 
       - name: Cache forge artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             out
