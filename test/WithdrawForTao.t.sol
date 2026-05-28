@@ -57,7 +57,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
 
         // Re-attest to a new validator without running any state-mutating vault call, so the
         // historical snapshot continues to point at the hotkeys that hold the deposit.
-        _setValidators(NETUID1, _hks1(hotkey4), _wts1(10000));
+        _setValidators(NETUID1, _hotkeys(hotkey4), _weights(10000));
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
@@ -134,7 +134,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
     // Single-validator set so the minimum-stake deposit isn't split across slots, then burn
     // one share to trigger the rounding-to-zero edge inherent to the share-price cushion.
     function test_RevertWhen_ProRataAssetsRoundsToZero() public {
-        _setValidators(NETUID1, _hks1(hotkey1), _wts1(10000));
+        _setValidators(NETUID1, _hotkeys(hotkey1), _weights(10000));
         _setRemoveStakeRate(1, 1);
         uint256 depositAmount = vault.minRebalanceAmt();
         _simulateAlphaDeposit(alice, NETUID1, depositAmount);
