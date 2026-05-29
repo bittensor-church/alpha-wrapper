@@ -1,0 +1,7 @@
+{
+  "processDeposit: first": "503098",
+  "processDeposit: subsequent": "258745",
+  "rebalance: after registry weight update": "118984",
+  "withdraw: full": "169889",
+  "withdraw: partial": "197600"
+}

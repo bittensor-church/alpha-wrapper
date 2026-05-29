@@ -49,3 +49,6 @@ jobs:
 
       - name: Run tests and check gas snapshot
         run: forge snapshot --check --tolerance 1 -vvv
+
+      - name: Check per-call gas snapshots have not drifted
+        run: git diff --exit-code snapshots/
