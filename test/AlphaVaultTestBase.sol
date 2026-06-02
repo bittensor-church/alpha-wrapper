@@ -7,6 +7,7 @@ import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
 import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
+import { MockAlpha } from "./mocks/MockAlpha.sol";
 import { MockAddressMapping } from "./mocks/MockAddressMapping.sol";
 import { MockStorageQuery } from "./mocks/MockStorageQuery.sol";
 import { AttestationHelper } from "./helpers/AttestationHelper.sol";
@@ -14,11 +15,12 @@ import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 import { ADDRESS_MAPPING_PRECOMPILE } from "src/interfaces/IAddressMapping.sol";
 
 address constant STORAGE_QUERY = 0x0000000000000000000000000000000000000807;
+address constant ALPHA_PRECOMPILE = 0x0000000000000000000000000000000000000808;
 
 abstract contract AlphaVaultTestBase is AttestationHelper {
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
-    event MinRebalanceAmtUpdated(uint256 oldValue, uint256 newValue);
+    event MinStakeTaoFloorUpdated(uint256 oldValue, uint256 newValue);
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
 
     AlphaVault public vault;
@@ -56,6 +58,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     function setUp() public virtual {
         vm.etch(STAKING_PRECOMPILE, address(new MockStaking()).code);
+        vm.etch(ALPHA_PRECOMPILE, address(new MockAlpha()).code);
         vm.etch(ADDRESS_MAPPING_PRECOMPILE, address(new MockAddressMapping()).code);
         vm.etch(STORAGE_QUERY, address(new MockStorageQuery()).code);
         MockStorageQuery(STORAGE_QUERY).setRegisteredAt(uint16(NETUID1), 100);
@@ -216,6 +219,10 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         uint16[] memory queue = new uint16[](1);
         queue[0] = uint16(netuid);
         MockStorageQuery(STORAGE_QUERY).setDissolvedNetworks(queue);
+    }
+
+    function _setAlphaPrice(uint256 netuid, uint256 priceE18) internal {
+        MockAlpha(ALPHA_PRECOMPILE).setAlphaPrice(uint16(netuid), priceE18);
     }
 
     function _setRemoveStakeRate(uint256 num, uint256 denom) internal {

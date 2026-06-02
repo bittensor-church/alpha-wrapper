@@ -356,7 +356,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     // ────────────────── Virtual shares prevent inflation attack ────────
 
     function test_FirstDepositorInflationAttack() public {
-        // Smallest D under default weights [3334, 3333, 3333] and minRebalanceAmt = 2e6
+        // Smallest D under default weights [3334, 3333, 3333] and minStakeTaoFloor = 2e6
         // where every per-slot move (D * 3333 / 10000) clears the floor: D ≥ 6_001_801.
         _simulateAlphaDeposit(alice, NETUID1, 6_001_802);
         _processDeposit(alice, NETUID1);
@@ -469,24 +469,24 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
     }
 
-    function test_MinRebalanceAmtConstructorDefault() public view {
-        assertEq(vault.minRebalanceAmt(), 2e6);
+    function test_MinStakeTaoFloorConstructorDefault() public view {
+        assertEq(vault.minStakeTaoFloor(), 2e6);
     }
 
-    function test_SetMinRebalanceAmt() public {
+    function test_SetMinStakeTaoFloor() public {
         vm.expectEmit(false, false, false, true);
-        emit MinRebalanceAmtUpdated(2e6, 5e9);
-        vault.setMinRebalanceAmt(5e9);
-        assertEq(vault.minRebalanceAmt(), 5e9);
+        emit MinStakeTaoFloorUpdated(2e6, 5e9);
+        vault.setMinStakeTaoFloor(5e9);
+        assertEq(vault.minStakeTaoFloor(), 5e9);
     }
 
-    function test_SetMinRebalanceAmtOnlyOwner() public {
+    function test_SetMinStakeTaoFloorOnlyOwner() public {
         vm.prank(alice);
         vm.expectRevert();
-        vault.setMinRebalanceAmt(0);
+        vault.setMinStakeTaoFloor(0);
     }
 
-    function test_RebalanceSkipsMoveBelowMinRebalanceAmt() public {
+    function test_RebalanceSkipsMoveBelowMinStakeTaoFloor() public {
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(5000, 5000));
 
         // Bootstrap with a deposit that clears the min-stake floor, then overwrite balances
@@ -506,7 +506,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey2, NETUID1), 500_000);
     }
 
-    function test_RebalanceMovesAtOrAboveMinRebalanceAmt() public {
+    function test_RebalanceMovesAtOrAboveMinStakeTaoFloor() public {
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(5000, 5000));
 
         // Override balances to total 8e6 / 0 with target 4e6 / 4e6, so the move amount of 4e6
@@ -1599,15 +1599,15 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.processDeposit(alice, NETUID1, bytes32(0));
     }
 
-    function test_RevertWhen_ProcessDepositWhenDepositBelowMinRebalanceAmt() public {
-        // minRebalanceAmt defaults to 2e6, stake one RAO under it.
+    function test_RevertWhen_ProcessDepositWhenDepositBelowMinStakeTaoFloor() public {
+        // minStakeTaoFloor defaults to 2e6, stake one RAO under it.
         _simulateAlphaDepositHotkey(alice, NETUID1, 1_999_999, hotkey1);
         vm.prank(alice);
         vm.expectRevert(AlphaVault.DepositTooSmall.selector);
         vault.processDeposit(alice, NETUID1, hotkey1);
     }
 
-    function test_ProcessDepositAcceptsExactlyMinRebalanceAmtCount1() public {
+    function test_ProcessDepositAcceptsExactlyMinStakeTaoFloorCount1() public {
         _setValidators(99, _hotkeys(hotkey4), _weights(10_000));
         _setRegBlock(99, 300);
 
@@ -1680,7 +1680,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _processDeposit(alice, NETUID1);
         uint256 hk3Before = _getVaultStake(hotkey3, NETUID1);
-        assertGt(hk3Before, vault.minRebalanceAmt());
+        assertGt(hk3Before, vault.minStakeTaoFloor());
 
         _setNetuid1Set(hotkey1, hotkey2, hotkey4);
 
@@ -1730,8 +1730,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _processDeposit(alice, NETUID1);
         uint256 hk2Before = _getVaultStake(hotkey2, NETUID1);
         uint256 hk3Before = _getVaultStake(hotkey3, NETUID1);
-        assertGt(hk2Before, vault.minRebalanceAmt());
-        assertGt(hk3Before, vault.minRebalanceAmt());
+        assertGt(hk2Before, vault.minStakeTaoFloor());
+        assertGt(hk3Before, vault.minStakeTaoFloor());
 
         // Two rotations in a row, no rebalance in between: drop hk3 then drop hk2.
         _setNetuid1Set(hotkey1, hotkey2, hotkey4);
@@ -1750,7 +1750,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         // Smallest deposit where every slice clears the 2e6 floor.
         // hk3 slice = D * 2 / 10000. Need D * 2 / 10000 >= 2e6 → D >= 1e10. Use 1e10.
-        // After deposit hk3 has exactly 2e6 RAO (at minRebalanceAmt).
+        // After deposit hk3 has exactly 2e6 RAO (at minStakeTaoFloor).
         _simulateAlphaDepositHotkey(alice, NETUID1, 1e10, hotkey1);
         _processDepositHotkey(alice, NETUID1, hotkey1);
         uint256 hk3Bal = _getVaultStake(hotkey3, NETUID1);
@@ -1911,9 +1911,9 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function testFuzz_DepositWithdrawRoundTripPreservesAlpha(uint256 d) public {
-        // Lower: minRebalanceAmt (below this the deposit reverts and the property is moot).
+        // Lower: minStakeTaoFloor (below this the deposit reverts and the property is moot).
         // Upper: u64 max (on-chain AlphaBalance ceiling; the mailbox holds a single u64 stake entry).
-        d = bound(d, vault.minRebalanceAmt(), type(uint64).max);
+        d = bound(d, vault.minStakeTaoFloor(), type(uint64).max);
 
         _simulateAlphaDeposit(alice, NETUID1, d);
         _processDeposit(alice, NETUID1);
@@ -1961,9 +1961,9 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function testFuzz_WithdrawConservesAlpha(uint256 b1, uint256 b2, uint256 b3, uint256 burnPct) public {
-        uint256 minAmt = vault.minRebalanceAmt();
+        uint256 minAmt = vault.minStakeTaoFloor();
         // Each component bounded so the aggregated deposit b1+b2+b3 stays within the u64 ceiling
-        // of a single on-chain stake entry. Lower: minRebalanceAmt (else deposit reverts).
+        // of a single on-chain stake entry. Lower: minStakeTaoFloor (else deposit reverts).
         uint256 perHotkeyMax = type(uint64).max / 3;
         b1 = bound(b1, minAmt, perHotkeyMax);
         b2 = bound(b2, minAmt, perHotkeyMax);
@@ -1986,6 +1986,16 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 expectedAssets = (burnShares * ((b1 + b2 + b3) + 1)) / (supply + 1e9);
 
         bytes32 aliceSub = _toSubstrate(alice);
+
+        // At price 1 the alpha floor equals minStakeTaoFloor; a request below it has no
+        // transferable slice and reverts rather than burning shares for nothing.
+        if (expectedAssets < minAmt) {
+            vm.prank(alice);
+            vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
+            vault.withdraw(TOKEN1, burnShares, aliceSub);
+            return;
+        }
+
         vm.prank(alice);
         vault.withdraw(TOKEN1, burnShares, aliceSub);
 
@@ -1993,12 +2003,13 @@ contract AlphaVaultTest is AlphaVaultTestBase {
             + _getStake(hotkey3, alice, NETUID1);
         uint256 vaultAfter = _totalVaultStakeAcrossHotkeys(NETUID1);
 
-        assertEq(userReceived, expectedAssets, "drain takes exactly the converted assets value");
         assertEq(vaultAfter + userReceived, b1 + b2 + b3, "withdraw conserves total alpha");
+        assertLe(userReceived, expectedAssets, "never over-delivers");
+        assertLt(expectedAssets - userReceived, minAmt, "under-delivery bounded by one floor");
     }
 
     function testFuzz_DepositLandsExactlyOnTargets(uint256 d) public {
-        uint256 minAmt = vault.minRebalanceAmt();
+        uint256 minAmt = vault.minStakeTaoFloor();
         // Smallest d such that the smallest weight slice clears the min-rebalance floor:
         //   d * smallestBps / BPS_BASE >= minAmt  =>  d >= ceil(minAmt * BPS_BASE / smallestBps).
         uint16 smallestBps = NETUID1_BPS_HK3;
@@ -2040,7 +2051,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         // Rotate hotkey3 out, hotkey4 in. Same weights.
         _setNetuid1Set(hotkey1, hotkey2, hotkey4);
 
-        uint256 minAmt = vault.minRebalanceAmt();
+        uint256 minAmt = vault.minStakeTaoFloor();
         bool sweptOrphan = b3 >= minAmt;
         uint256 expectedActiveTotal = sweptOrphan ? b1 + b2 + b3 : b1 + b2;
         uint256 expectedOrphanResidue = sweptOrphan ? 0 : b3;
@@ -2073,7 +2084,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneCk, NETUID1, b3);
 
         uint256 preTotal = b1 + b2 + b3;
-        uint256 minAmt = vault.minRebalanceAmt();
+        uint256 minAmt = vault.minStakeTaoFloor();
 
         vm.recordLogs();
         vault.rebalance(NETUID1);

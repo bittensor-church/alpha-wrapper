@@ -8,7 +8,9 @@ import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.s
 import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
 import { SubnetClone } from "./SubnetClone.sol";
 import { DepositMailbox } from "./DepositMailbox.sol";
+import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { IStaking, STAKING_PRECOMPILE } from "./interfaces/IStaking.sol";
+import { IAlpha, ALPHA_PRECOMPILE } from "./interfaces/IAlpha.sol";
 import { IValidatorRegistry } from "./interfaces/IValidatorRegistry.sol";
 import { IAddressMapping, ADDRESS_MAPPING_PRECOMPILE } from "./interfaces/IAddressMapping.sol";
 import { StorageQueryReader } from "./libraries/StorageQueryReader.sol";
@@ -44,11 +46,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     ///      state-mutating call after sweeping any hotkey dropped from the registry.
     mapping(uint256 => bytes32[3]) private _lastSeenHotkeys;
 
-    /// @notice Minimum RAO for any single `transferStake` / `moveStake` the vault initiates.
-    ///         Default `2e6` matches subtensor's `DefaultMinStake` so deposits + rebalances
-    ///         clear the `AmountTooLow` floor out of the box. Owner-tunable to track future
-    ///         subtensor changes without a redeploy.
-    uint256 public minRebalanceAmt;
+    /// @notice Minimum TAO-RAO value (`alpha * alpha_price`) for any single `transferStake` /
+    ///         `moveStake` the vault initiates. Mirrors subtensor's `DefaultMinStake`, the floor
+    ///         `transfer_stake_within_subnet` enforces on the tao-equivalent of a move. Default
+    ///         `2e6`. Owner-tunable to track future subtensor changes without a redeploy.
+    uint256 public minStakeTaoFloor;
 
     // ──────────────────── Precision ─────────────────────────────────────────────
     /// @dev Virtual shares/assets to prevent inflation attacks (ERC4626 pattern).
@@ -60,7 +62,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
     event Withdrawn(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 assets);
     event ValidatorRegistryUpdated(address oldRegistry, address newRegistry);
-    event MinRebalanceAmtUpdated(uint256 oldValue, uint256 newValue);
+    event MinStakeTaoFloorUpdated(uint256 oldValue, uint256 newValue);
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
     event WithdrawnForTao(
@@ -84,6 +86,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     error NothingToWithdraw();
     error NoSharesOutstanding();
     error DepositTooSmall();
+    error WithdrawTooSmall();
     error NetuidOutOfRange();
     error ChosenHotkeyNotInSet();
     error SlippageExceeded(uint256 taoOut);
@@ -93,7 +96,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         if (_mailboxLogic == address(0) || _subnetLogic == address(0)) revert ZeroAddress();
         mailboxLogic = _mailboxLogic;
         subnetLogic = _subnetLogic;
-        minRebalanceAmt = 2e6;
+        minStakeTaoFloor = 2e6;
     }
 
     // ──────────────────── Token ID & Subnet Proxy ────────────────────────────────
@@ -137,12 +140,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     ///         `chosenHotkey` must be in the current attested validator set; reverts with
     ///         `ChosenHotkeyNotInSet` otherwise. Use `reclaimAlphaFromMailbox` to recover alpha
     ///         parked under a non-attested hotkey.
-    ///         Per-slot rebalance moves smaller than `minRebalanceAmt` are skipped to avoid
-    ///         tripping subtensor's `AmountTooLow` floor on `moveStake`. Small deposits may
-    ///         therefore leave the position drifted from target weights by less than
-    ///         `minRebalanceAmt` per slot; the drift persists until a later deposit or
-    ///         withdraw produces a residual above the floor. Calling `rebalance()` does not
-    ///         clear sub-floor drift since it applies the same threshold.
+    ///         Per-slot rebalance moves whose tao-equivalent (`alpha * alpha_price`) falls below
+    ///         `minStakeTaoFloor` are skipped to avoid tripping subtensor's `AmountTooLow` floor
+    ///         on `moveStake`. Small deposits may therefore leave the position drifted from target
+    ///         weights; the drift persists until a later deposit or withdraw produces a residual
+    ///         above the floor. Calling `rebalance()` does not clear sub-floor drift since it
+    ///         applies the same floor.
     function processDeposit(address user, uint256 netuid, bytes32 chosenHotkey) external nonReentrant {
         if (msg.sender != user && msg.sender != owner()) revert UnauthorizedCaller();
         if (chosenHotkey == bytes32(0)) revert ZeroHotkey();
@@ -173,9 +176,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
 
         uint256 totalDeposit = IStaking(STAKING_PRECOMPILE).getStake(chosenHotkey, _coldkeyOf(userClone), netuid);
         if (totalDeposit == 0) revert ZeroAmount();
-        if (totalDeposit < minRebalanceAmt) revert DepositTooSmall();
 
-        DepositMailbox(payable(userClone)).flush(destColdkey, chosenHotkey, netuid, totalDeposit);
+        try DepositMailbox(payable(userClone)).flush(destColdkey, chosenHotkey, netuid, totalDeposit) { }
+        catch (bytes memory err) {
+            _requireSubFloorElseBubble(err, totalDeposit, nid);
+            revert DepositTooSmall();
+        }
 
         uint256 totalAlpha = _rebalance(tokenId, clone, hotkeys, weights, count, destColdkey);
 
@@ -279,10 +285,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         if (assets == 0) revert ZeroAmount();
         _burn(msg.sender, tokenId, shares);
 
-        _drainAssets(hotkeys, balances, validatorCount, clone, netuid, userSubstrateColdkey, assets);
+        uint256 delivered = _drainAssets(hotkeys, balances, validatorCount, clone, netuid, userSubstrateColdkey, assets);
+        // Burning shares for a zero-delivery transfer would forfeit the whole position; the
+        // request is non-transferable on the alpha rail, so revert and leave withdrawForTao.
+        if (delivered == 0) revert WithdrawTooSmall();
         _alignToWeights(tokenId, clone, hotkeys, weights, balances);
 
-        emit Withdrawn(msg.sender, tokenId, shares, assets);
+        emit Withdrawn(msg.sender, tokenId, shares, delivered);
     }
 
     /// @dev Drain `assets` alpha to `userColdkey` across the active validator set.
@@ -294,20 +303,24 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         uint16 netuid,
         bytes32 userColdkey,
         uint256 assets
-    ) private {
+    ) private returns (uint256 delivered) {
         uint256 remaining = assets;
         for (uint256 i; i < validatorCount && remaining > 0;) {
             if (hotkeys[i] == bytes32(0)) break;
             uint256 takeAmount = remaining > balances[i] ? balances[i] : remaining;
             if (takeAmount > 0) {
-                SubnetClone(payable(clone)).flush(userColdkey, hotkeys[i], netuid, takeAmount);
-                balances[i] -= takeAmount;
-                remaining -= takeAmount;
+                try SubnetClone(payable(clone)).flush(userColdkey, hotkeys[i], netuid, takeAmount) {
+                    balances[i] -= takeAmount;
+                    remaining -= takeAmount;
+                } catch (bytes memory err) {
+                    _requireSubFloorElseBubble(err, takeAmount, netuid);
+                }
             }
             unchecked {
                 ++i;
             }
         }
+        delivered = assets - remaining;
     }
 
     function _redeemDissolvedPosition(uint256 tokenId, uint256 shares, address clone, uint16 netuid) private {
@@ -381,10 +394,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
             targets[last] = total - assigned;
         }
 
-        uint256 threshold = minRebalanceAmt;
         // move from overweight to underweight. Max N-1 iterations for N validators.
         for (uint256 round; round < last;) {
-            if (!_rebalanceStep(tokenId, clone, hotkeys, balances, targets, threshold)) break;
+            if (!_rebalanceStep(tokenId, clone, hotkeys, balances, targets)) break;
             unchecked {
                 ++round;
             }
@@ -396,8 +408,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         address clone,
         bytes32[3] memory hotkeys,
         uint256[3] memory balances,
-        uint256[3] memory targets,
-        uint256 threshold
+        uint256[3] memory targets
     ) private returns (bool) {
         uint256 overIdx;
         uint256 maxOver;
@@ -425,12 +436,17 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         if (maxOver == 0 || maxUnder == 0) return false;
 
         uint256 moveAmt = maxOver < maxUnder ? maxOver : maxUnder;
-        if (moveAmt < threshold) return false;
-        SubnetClone(payable(clone)).moveStake(hotkeys[overIdx], hotkeys[underIdx], _netuid(tokenId), moveAmt);
-        emit Rebalanced(tokenId, hotkeys[overIdx], hotkeys[underIdx], moveAmt);
-        balances[overIdx] -= moveAmt;
-        balances[underIdx] += moveAmt;
-        return true;
+        uint16 netuid = _netuid(tokenId);
+        // moveAmt is the largest single move; if it is sub-floor every other pairing is too.
+        try SubnetClone(payable(clone)).moveStake(hotkeys[overIdx], hotkeys[underIdx], netuid, moveAmt) {
+            emit Rebalanced(tokenId, hotkeys[overIdx], hotkeys[underIdx], moveAmt);
+            balances[overIdx] -= moveAmt;
+            balances[underIdx] += moveAmt;
+            return true;
+        } catch (bytes memory err) {
+            _requireSubFloorElseBubble(err, moveAmt, netuid);
+            return false;
+        }
     }
 
     // ──────────────────── View Functions ────────────────────────────────────────
@@ -538,10 +554,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         _setURI(newUri);
     }
 
-    function setMinRebalanceAmt(uint256 newValue) external onlyOwner {
-        uint256 old = minRebalanceAmt;
-        minRebalanceAmt = newValue;
-        emit MinRebalanceAmtUpdated(old, newValue);
+    function setMinStakeTaoFloor(uint256 newValue) external onlyOwner {
+        uint256 old = minStakeTaoFloor;
+        minStakeTaoFloor = newValue;
+        emit MinStakeTaoFloorUpdated(old, newValue);
     }
 
     /// @notice Reclaim native TAO stuck in the caller's mailbox clone after subnet deregistration.
@@ -664,20 +680,41 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         return hk != bytes32(0) && hk != currentSet[0] && hk != currentSet[1] && hk != currentSet[2];
     }
 
+    // Truncated precompile price <= subtensor's full-precision price, so a real sub-floor move is
+    // never misclassified as some other failure.
+    function _isBelowMinStake(uint256 alpha, uint16 netuid) private view returns (bool) {
+        uint256 priceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
+        return Math.mulDiv(alpha, priceE18, 1e18) < minStakeTaoFloor;
+    }
+
+    function _requireSubFloorElseBubble(bytes memory err, uint256 alpha, uint16 netuid) private view {
+        if (!_isBelowMinStake(alpha, netuid)) _bubbleRevert(err);
+    }
+
+    function _bubbleRevert(bytes memory err) private pure {
+        assembly {
+            revert(add(err, 0x20), mload(err))
+        }
+    }
+
     /// @dev Move stake off rotated-out hotkeys onto `currentSet[0]` and refresh the snapshot.
     function _sweepRotatedStake(uint256 tokenId, address clone, bytes32 coldkey, bytes32[3] memory currentSet) private {
         bytes32[3] storage seen = _lastSeenHotkeys[tokenId];
         if (clone != address(0)) {
             uint16 netuid = _netuid(tokenId);
-            uint256 threshold = minRebalanceAmt;
             IStaking staking = IStaking(STAKING_PRECOMPILE);
             for (uint256 i; i < 3;) {
                 bytes32 hk = seen[i];
                 if (_isRotatedOut(hk, currentSet)) {
                     uint256 bal = staking.getStake(hk, coldkey, netuid);
-                    if (bal >= threshold) {
-                        SubnetClone(payable(clone)).moveStake(hk, currentSet[0], netuid, bal);
-                        emit Rebalanced(tokenId, hk, currentSet[0], bal);
+                    if (bal > 0) {
+                        // Sub-floor dust on a rotated-out hotkey is unrecoverable; drop it (the
+                        // snapshot overwrite below stops re-tracking) rather than reverting.
+                        try SubnetClone(payable(clone)).moveStake(hk, currentSet[0], netuid, bal) {
+                            emit Rebalanced(tokenId, hk, currentSet[0], bal);
+                        } catch (bytes memory err) {
+                            _requireSubFloorElseBubble(err, bal, netuid);
+                        }
                     }
                 }
                 unchecked {

@@ -136,7 +136,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
     function test_RevertWhen_ProRataAssetsRoundsToZero() public {
         _setValidators(NETUID1, _hotkeys(hotkey1), _weights(10000));
         _setRemoveStakeRate(1, 1);
-        uint256 depositAmount = vault.minRebalanceAmt();
+        uint256 depositAmount = vault.minStakeTaoFloor();
         _simulateAlphaDeposit(alice, NETUID1, depositAmount);
         _processDeposit(alice, NETUID1);
         uint256 shares = vault.balanceOf(alice, TOKEN1);
