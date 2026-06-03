@@ -491,7 +491,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
 
         (bytes32[3] memory hotkeys,, uint256 validatorCount) = _resolveValidators(netuid);
         bytes32 subnetColdkey = _coldkeyOf(clone);
-        (, uint256 totalAlpha) = _fetchBalances(hotkeys, validatorCount, subnetColdkey, netuid);
+        uint256 totalAlpha = _sumBalances(_fetchBalances(hotkeys, validatorCount, subnetColdkey, netuid));
 
         bytes32[3] memory lastSeen = _lastSeenHotkeys[tokenId];
         uint256 floor = minRebalanceAmt;

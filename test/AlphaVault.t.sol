@@ -1215,11 +1215,11 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     function test_PreviewWithdrawSurvivesFullRegistryRotationWithoutRebalance() public {
         // Start with a single-validator subnet so the entire deposit lands on hotkey4 alone.
-        _setValidators(NETUID1, _hks1(hotkey4), _wts1(10_000));
+        _setValidators(NETUID1, _hotkeys(hotkey4), _weights(10_000));
         _simulateAlphaDepositHotkey(alice, NETUID1, 30 ether, hotkey4);
         _processDepositHotkey(alice, NETUID1, hotkey4);
 
-        _setValidators(NETUID1, _hks3(hotkey1, hotkey2, hotkey3), _wts3(3334, 3333, 3333));
+        _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2, hotkey3), _weights(3334, 3333, 3333));
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         (uint256 previewAlpha,) = vault.previewWithdraw(TOKEN1, shares);
