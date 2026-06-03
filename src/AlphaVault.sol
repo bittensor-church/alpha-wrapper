@@ -510,13 +510,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         uint256 totalAlpha = _sumBalances(_fetchBalances(hotkeys, validatorCount, subnetColdkey, netuid));
 
         bytes32[3] memory lastSeen = _lastSeenHotkeys[tokenId];
-        uint256 floor = minRebalanceAmt;
         IStaking staking = IStaking(STAKING_PRECOMPILE);
         for (uint256 i; i < 3;) {
             bytes32 hk = lastSeen[i];
             if (_isRotatedOut(hk, hotkeys)) {
                 uint256 bal = staking.getStake(hk, subnetColdkey, netuid);
-                if (bal >= floor) totalAlpha += bal;
+                if (!_isBelowMinStake(bal, netuid)) totalAlpha += bal;
             }
             unchecked {
                 ++i;

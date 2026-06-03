@@ -1194,7 +1194,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _processDeposit(alice, NETUID1);
 
         // Drop hotkey3 to one RAO below the rebalance floor, then rotate it out.
-        uint256 floor = vault.minRebalanceAmt();
+        uint256 floor = vault.minStakeTaoFloor();
         bytes32 cloneCk = _subnetColdkey(NETUID1);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneCk, NETUID1, floor - 1);
 
