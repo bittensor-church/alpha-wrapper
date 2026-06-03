@@ -436,8 +436,8 @@ for i in 0 1 2; do
     info "netuid $NET: burning $SHARES shares (tokenId $TID)"
 
     TX_JSON=$(cast send "$VAULT_ADDR" \
-        "withdraw(uint256,uint256,bytes32)" \
-        "$TID" "$SHARES" "$WRAPPER_SUB_B32" \
+        "withdraw(uint256,uint256,bytes32,uint256)" \
+        "$TID" "$SHARES" "$WRAPPER_SUB_B32" 0 \
         --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
         $EVM_FLAGS --gas-limit 2000000 --json || true)
 
@@ -515,8 +515,9 @@ verify_script "get_withdrawals" \
         --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
         --block-start "$BLOCK_START" --block-end "$BLOCK_END"
 
-# Per-netuid: 0 or 1 emission depending on whether post-drain leftover (emissions
-# accrued between deposit and withdraw) clears `minRebalanceAmt`. Assert membership only.
+# Per-netuid: 0 or 1 emission depending on whether the post-drain leftover (emissions
+# accrued between deposit and withdraw) has a tao-equivalent above `minStakeTaoFloor`.
+# Assert membership only.
 verify_script "get_rebalances" \
     --column-subset "token_id=$VAULT_IDS_CSV" \
     --column-positive amount \

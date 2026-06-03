@@ -26,7 +26,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         uint256 shares = vault.balanceOf(alice, TOKEN1);
 
         vm.prank(alice);
-        vault.withdraw(TOKEN1, shares / 2, _toSubstrate(alice));
+        vault.withdraw(TOKEN1, shares / 2, _toSubstrate(alice), 0);
         vm.snapshotGasLastCall("AlphaVault", "withdraw: partial");
     }
 
@@ -36,7 +36,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         uint256 shares = vault.balanceOf(alice, TOKEN1);
 
         vm.prank(alice);
-        vault.withdraw(TOKEN1, shares, _toSubstrate(alice));
+        vault.withdraw(TOKEN1, shares, _toSubstrate(alice), 0);
         vm.snapshotGasLastCall("AlphaVault", "withdraw: full");
     }
 

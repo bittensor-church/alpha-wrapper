@@ -47,9 +47,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     mapping(uint256 => bytes32[3]) private _lastSeenHotkeys;
 
     /// @notice Minimum TAO-RAO value (`alpha * alpha_price`) for any single `transferStake` /
-    ///         `moveStake` the vault initiates. Mirrors subtensor's `DefaultMinStake`, the floor
-    ///         `transfer_stake_within_subnet` enforces on the tao-equivalent of a move. Default
-    ///         `2e6`. Owner-tunable to track future subtensor changes without a redeploy.
+    ///         `moveStake` the vault initiates.
     uint256 public minStakeTaoFloor;
 
     // ──────────────────── Precision ─────────────────────────────────────────────
@@ -89,7 +87,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     error WithdrawTooSmall();
     error NetuidOutOfRange();
     error ChosenHotkeyNotInSet();
-    error SlippageExceeded(uint256 taoOut);
+    error SlippageExceeded(uint256 amountOut);
 
     // ──────────────────── Constructor ───────────────────────────────────────────
     constructor(string memory _uri, address _mailboxLogic, address _subnetLogic) ERC1155(_uri) Ownable(msg.sender) {
@@ -208,7 +206,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     /// @param  tokenId              ERC1155 tokenId identifying the (netuid, regBlock) position.
     /// @param  shares               Shares to burn.
     /// @param  userSubstrateColdkey Destination coldkey for alpha on the live path (unused on dissolved path).
-    function withdraw(uint256 tokenId, uint256 shares, bytes32 userSubstrateColdkey) external nonReentrant {
+    /// @param  minAlphaOut          Live-path slippage floor: reverts `SlippageExceeded` when a sub-floor
+    ///                              remainder leaves delivery below it. Ignored on the dissolved path,
+    ///                              which pays exact pro-rata TAO.
+    function withdraw(uint256 tokenId, uint256 shares, bytes32 userSubstrateColdkey, uint256 minAlphaOut)
+        external
+        nonReentrant
+    {
         if (shares == 0) revert ZeroAmount();
         if (balanceOf(msg.sender, tokenId) < shares) revert InsufficientShares();
         address clone = subnetClone[tokenId];
@@ -217,7 +221,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         if (_isIssuedForDissolvedSubnet(tokenId)) {
             _redeemDissolvedPosition(tokenId, shares, clone, netuid);
         } else {
-            _redeemLivePosition(tokenId, shares, userSubstrateColdkey, clone, netuid);
+            _redeemLivePosition(tokenId, shares, userSubstrateColdkey, clone, netuid, minAlphaOut);
         }
     }
 
@@ -271,7 +275,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         uint256 shares,
         bytes32 userSubstrateColdkey,
         address clone,
-        uint16 netuid
+        uint16 netuid,
+        uint256 minAlphaOut
     ) private {
         (bytes32[3] memory hotkeys, uint16[3] memory weights, uint256 validatorCount) = _resolveValidators(netuid);
         bytes32 coldkey = _coldkeyOf(clone);
@@ -289,6 +294,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         // Burning shares for a zero-delivery transfer would forfeit the whole position; the
         // request is non-transferable on the alpha rail, so revert and leave withdrawForTao.
         if (delivered == 0) revert WithdrawTooSmall();
+        if (delivered < minAlphaOut) revert SlippageExceeded(delivered);
         _alignToWeights(tokenId, clone, hotkeys, weights, balances);
 
         emit Withdrawn(msg.sender, tokenId, shares, delivered);
@@ -687,10 +693,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     }
 
     function _requireSubFloorElseBubble(bytes memory err, uint256 alpha, uint16 netuid) private view {
-        if (!_isBelowMinStake(alpha, netuid)) _bubbleRevert(err);
-    }
-
-    function _bubbleRevert(bytes memory err) private pure {
+        if (_isBelowMinStake(alpha, netuid)) return;
         assembly {
             revert(add(err, 0x20), mload(err))
         }
@@ -707,8 +710,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
                 if (_isRotatedOut(hk, currentSet)) {
                     uint256 bal = staking.getStake(hk, coldkey, netuid);
                     if (bal > 0) {
-                        // Sub-floor dust on a rotated-out hotkey is unrecoverable; drop it (the
-                        // snapshot overwrite below stops re-tracking) rather than reverting.
+                        // Sub-floor dust on a rotated-out hotkey is unrecoverable
                         try SubnetClone(payable(clone)).moveStake(hk, currentSet[0], netuid, bal) {
                             emit Rebalanced(tokenId, hk, currentSet[0], bal);
                         } catch (bytes memory err) {

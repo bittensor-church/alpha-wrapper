@@ -95,7 +95,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
         assertEq(alice.balance - balanceBefore, 1 ether);
     }
 
-    function test_MinTaoOutEqualToRealizedAmount_DoesNotRevert() public {
+    function test_MinTaoOutEqualToRealizedAmount() public {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
         uint256 expected = _expectedTaoFor(100 ether);
@@ -166,7 +166,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
         bytes32 dest = keccak256("dest");
         vm.prank(alice);
         vm.expectRevert();
-        vault.withdraw(TOKEN1, shares, dest);
+        vault.withdraw(TOKEN1, shares, dest, 0);
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
@@ -267,7 +267,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
 
         bytes32 bobDest = keccak256("bobDest");
         vm.prank(bob);
-        vault.withdraw(TOKEN1, bobShares, bobDest);
+        vault.withdraw(TOKEN1, bobShares, bobDest, 0);
 
         assertEq(vault.balanceOf(bob, TOKEN1), 0);
     }
@@ -353,7 +353,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
 
         bytes32 dest = keccak256("alice-substrate");
         vm.prank(alice);
-        vault.withdraw(TOKEN1, shares - half, dest);
+        vault.withdraw(TOKEN1, shares - half, dest, 0);
 
         assertEq(vault.balanceOf(alice, TOKEN1), 0);
     }

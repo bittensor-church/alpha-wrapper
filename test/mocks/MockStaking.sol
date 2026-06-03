@@ -1,14 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-interface IMockAlphaPrice {
-    function getAlphaPrice(uint16 netuid) external view returns (uint256);
-}
+import { IAlpha, ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 
 /// @dev Uses keccak256("evm:", h160) for coldkey derivation instead of the real
 ///      blake2b, matching the test helper `_toSubstrate`.
 contract MockStaking {
-    address private constant ALPHA_PRECOMPILE = 0x0000000000000000000000000000000000000808;
     uint256 private constant MIN_STAKE = 2e6;
 
     mapping(bytes32 => mapping(bytes32 => mapping(uint256 => uint256))) public stakes;
@@ -29,7 +26,7 @@ contract MockStaking {
 
     // Mirrors subtensor transfer_stake_within_subnet: tao_equivalent = alpha * price, no bypass.
     function _belowMinStake(uint256 amount, uint256 netuid) private view returns (bool) {
-        uint256 priceE18 = IMockAlphaPrice(ALPHA_PRECOMPILE).getAlphaPrice(uint16(netuid));
+        uint256 priceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(uint16(netuid));
         return (amount * priceE18) / 1e18 < MIN_STAKE;
     }
 

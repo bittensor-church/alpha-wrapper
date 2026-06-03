@@ -2,6 +2,6 @@
   "processDeposit: first": "508354",
   "processDeposit: subsequent": "264004",
   "rebalance: after registry weight update": "123376",
-  "withdraw: full": "175410",
-  "withdraw: partial": "204025"
+  "withdraw: full": "175556",
+  "withdraw: partial": "204171"
 }
