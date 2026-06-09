@@ -18,12 +18,12 @@
 #   4. Deploy contracts (DepositMailbox, SubnetClone, AlphaVault, ValidatorRegistry)
 #   5. Fund user EVM account
 #   6. Alice transferStakes alpha → clone addresses (substrate-interface)
-#   7. processDeposit → mint ERC1155 shares
+#   7. wrap → mint ERC1155 shares
 #   8. Verify deposit balances
-#   9. Withdraw all shares → verify alpha returned to user's substrate coldkey
+#   9. Unwrap all shares → verify alpha returned to user's substrate coldkey
 #  10. Observability scripts → verify event-derived state
 #  11. Reclaim mailbox alpha for TAO → verify user receives native TAO
-#  12. Withdraw shares for TAO → verify user receives native TAO
+#  12. Unwrap shares for TAO → verify user receives native TAO
 #
 # Usage:
 #   chmod +x scripts/localnet-e2e.sh
@@ -383,7 +383,7 @@ for i in 0 1 2; do
         CHOSEN_HK="${ALL_HK_B32S[$IDX]}"
 
         TX_JSON=$(cast send "$VAULT_ADDR" \
-            "processDeposit(address,uint256,bytes32)" \
+            "wrap(address,uint256,bytes32)" \
             "$WRAPPER_ADDR" "$NET" "$CHOSEN_HK" \
             --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
             $EVM_FLAGS --gas-limit 1000000 --json || true)
@@ -391,7 +391,7 @@ for i in 0 1 2; do
         STATUS=$(echo "$TX_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
         if [[ "$STATUS" != "0x1" ]]; then
             echo "$TX_JSON"
-            fail "processDeposit for netuid $NET, hotkey ${CHOSEN_HK:0:18}... failed (status=$STATUS)"
+            fail "wrap for netuid $NET, hotkey ${CHOSEN_HK:0:18}... failed (status=$STATUS)"
         fi
         ok "netuid $NET deposited under ${CHOSEN_HK:0:18}..."
     done
@@ -414,16 +414,16 @@ for i in 0 1 2; do
     echo "    totalStake: $TOTAL RAO"
     echo "    sharePrice: $PRICE"
 
-    [[ "$SHARES" == "0" ]] && fail "netuid $NET: zero shares after processDeposit"
-    [[ "$TOTAL"  == "0" ]] && fail "netuid $NET: zero totalStake after processDeposit"
-    [[ "$PRICE"  == "0" ]] && fail "netuid $NET: zero sharePrice after processDeposit"
+    [[ "$SHARES" == "0" ]] && fail "netuid $NET: zero shares after wrap"
+    [[ "$TOTAL"  == "0" ]] && fail "netuid $NET: zero totalStake after wrap"
+    [[ "$PRICE"  == "0" ]] && fail "netuid $NET: zero sharePrice after wrap"
 
     SHARES_CACHE+=("$SHARES")
     DEPOSIT_TOTALS+=("$TOTAL")
 done
 ok "All 3 vaults have positive shares / totalStake / sharePrice"
 
-log "Phase 9: Withdraw all shares → verify alpha returned"
+log "Phase 9: Unwrap all shares → verify alpha returned"
 
 TOLERANCE_RAO=10
 
@@ -436,7 +436,7 @@ for i in 0 1 2; do
     info "netuid $NET: burning $SHARES shares (tokenId $TID)"
 
     TX_JSON=$(cast send "$VAULT_ADDR" \
-        "withdraw(uint256,uint256,bytes32)" \
+        "unwrap(uint256,uint256,bytes32)" \
         "$TID" "$SHARES" "$WRAPPER_SUB_B32" \
         --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
         $EVM_FLAGS --gas-limit 2000000 --json || true)
@@ -444,11 +444,11 @@ for i in 0 1 2; do
     STATUS=$(echo "$TX_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
     if [[ "$STATUS" != "0x1" ]]; then
         echo "$TX_JSON"
-        fail "withdraw for netuid $NET failed (status=$STATUS)"
+        fail "unwrap for netuid $NET failed (status=$STATUS)"
     fi
 
     POST_SHARES=$(cast call "$VAULT_ADDR" "balanceOf(address,uint256)(uint256)" "$WRAPPER_ADDR" "$TID" --rpc-url "$RPC_URL" | awk '{print $1}')
-    [[ "$POST_SHARES" != "0" ]] && fail "netuid $NET: shares still $POST_SHARES after full withdraw"
+    [[ "$POST_SHARES" != "0" ]] && fail "netuid $NET: shares still $POST_SHARES after full unwrap"
     ok "netuid $NET: shares burned"
 
     SUM=0
@@ -505,18 +505,18 @@ verify_script "get_deposits" \
         --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
         --block-start "$BLOCK_START" --block-end "$BLOCK_END"
 
-verify_script "get_withdrawals" \
+verify_script "get_unwraps" \
     --rows "$SUBNET_COUNT" \
     --column-set "token_id=$VAULT_IDS_CSV" \
     --column-eq "user=$WRAPPER_ADDR" \
     --column-positive assets \
     --column-positive shares \
-    -- python3 scripts/get_withdrawals.py \
+    -- python3 scripts/get_unwraps.py \
         --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
         --block-start "$BLOCK_START" --block-end "$BLOCK_END"
 
 # Per-netuid: 0 or 1 emission depending on whether post-drain leftover (emissions
-# accrued between deposit and withdraw) clears `minRebalanceAmt`. Assert membership only.
+# accrued between deposit and unwrap) clears `minRebalanceAmt`. Assert membership only.
 verify_script "get_rebalances" \
     --column-subset "token_id=$VAULT_IDS_CSV" \
     --column-positive amount \
@@ -542,7 +542,7 @@ for i in 0 1 2; do
         --column-eq "token_id=$TID" \
         --column-eq "user=" \
         --column-eq "deposit_count=3" \
-        --column-eq "withdraw_count=1" \
+        --column-eq "unwrap_count=1" \
         --column-positive total_assets_in \
         --column-positive total_shares_minted \
         --column-positive total_assets_out \
@@ -556,7 +556,7 @@ for i in 0 1 2; do
         --column-eq "token_id=$TID" \
         --column-eq "user=$WRAPPER_ADDR" \
         --column-eq "deposit_count=3" \
-        --column-eq "withdraw_count=1" \
+        --column-eq "unwrap_count=1" \
         -- python3 scripts/get_volumes.py \
             --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
             --block-start "$BLOCK_START" --block-end "$BLOCK_END" \
@@ -623,7 +623,7 @@ python3 -c "import sys; sys.exit(0 if $GAINED > 0 else 1)" \
     || fail "user did not gain TAO from reclaim (net change: $GAINED wei)"
 ok "User gained $GAINED wei (net of gas)"
 
-log "Phase 12: Withdraw shares for TAO"
+log "Phase 12: Unwrap shares for TAO"
 
 WFT_NET="${NETUIDS[1]}"
 WFT_TID="${VAULT_IDS[1]}"
@@ -641,45 +641,45 @@ info "Transferring $WFT_AMOUNT_RAW RAO from Alice → mailbox under ${WFT_HK_B32
 transfer_stake_py "$WFT_MAILBOX_SS58" "$WFT_HK_SS58" "$WFT_NET" "$WFT_AMOUNT_RAW" | tail -1
 
 TX_JSON=$(cast send "$VAULT_ADDR" \
-    "processDeposit(address,uint256,bytes32)" \
+    "wrap(address,uint256,bytes32)" \
     "$WRAPPER_ADDR" "$WFT_NET" "$WFT_HK_B32" \
     --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
     $EVM_FLAGS --gas-limit 1500000 --json || true)
 STATUS=$(echo "$TX_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
 if [[ "$STATUS" != "0x1" ]]; then
     echo "$TX_JSON"
-    fail "processDeposit for withdrawForTao setup failed (status=$STATUS)"
+    fail "wrap for unwrapForTao setup failed (status=$STATUS)"
 fi
 
 WFT_SHARES=$(cast call "$VAULT_ADDR" "balanceOf(address,uint256)(uint256)" \
     "$WRAPPER_ADDR" "$WFT_TID" --rpc-url "$RPC_URL" | awk '{print $1}')
-[[ "$WFT_SHARES" != "0" ]] || fail "no shares minted by processDeposit on netuid $WFT_NET"
+[[ "$WFT_SHARES" != "0" ]] || fail "no shares minted by wrap on netuid $WFT_NET"
 ok "Minted shares: $WFT_SHARES"
 
 USER_TAO_PRE=$(cast balance "$WRAPPER_ADDR" --rpc-url "$RPC_URL" | awk '{print $1}')
 info "User EVM balance before: $USER_TAO_PRE wei"
 
 TX_JSON=$(cast send "$VAULT_ADDR" \
-    "withdrawForTao(uint256,uint256,uint256)" \
+    "unwrapForTao(uint256,uint256,uint256)" \
     "$WFT_TID" "$WFT_SHARES" 0 \
     --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
     $EVM_FLAGS --gas-limit 2500000 --json || true)
 STATUS=$(echo "$TX_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
 if [[ "$STATUS" != "0x1" ]]; then
     echo "$TX_JSON"
-    fail "withdrawForTao failed (status=$STATUS)"
+    fail "unwrapForTao failed (status=$STATUS)"
 fi
 
 WFT_SHARES_POST=$(cast call "$VAULT_ADDR" "balanceOf(address,uint256)(uint256)" \
     "$WRAPPER_ADDR" "$WFT_TID" --rpc-url "$RPC_URL" | awk '{print $1}')
-[[ "$WFT_SHARES_POST" == "0" ]] || fail "shares still $WFT_SHARES_POST after withdrawForTao"
+[[ "$WFT_SHARES_POST" == "0" ]] || fail "shares still $WFT_SHARES_POST after unwrapForTao"
 ok "Shares burned to 0"
 
 USER_TAO_POST=$(cast balance "$WRAPPER_ADDR" --rpc-url "$RPC_URL" | awk '{print $1}')
 info "User EVM balance after:  $USER_TAO_POST wei"
 GAINED=$(python3 -c "print($USER_TAO_POST - $USER_TAO_PRE)")
 python3 -c "import sys; sys.exit(0 if $GAINED > 0 else 1)" \
-    || fail "user did not gain TAO from withdrawForTao (net change: $GAINED wei)"
+    || fail "user did not gain TAO from unwrapForTao (net change: $GAINED wei)"
 ok "User gained $GAINED wei (net of gas)"
 
 log "E2E complete"

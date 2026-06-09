@@ -3,11 +3,11 @@
 | Script | Description |
 |---|---|
 | `get_deposits.py` | `Deposited` events |
-| `get_withdrawals.py` | `Withdrawn` events |
+| `get_unwraps.py` | `Unwrapped` events |
 | `get_rebalances.py` | `Rebalanced` events |
 | `get_subnet_proxies.py` | `SubnetProxyCreated` events |
 | `get_validator_updates.py` | `ValidatorsUpdated` events |
-| `get_volumes.py` | Deposit/Withdraw totals for a subnet with optional user filter |
+| `get_volumes.py` | Deposit/Unwrap totals for a subnet with optional user filter |
 | `get_vault_state.py` | Returns on-chain data about an ERC-1155 token for a subnet |
 | `e2e_helpers.py` | Subcommands for `localnet-e2e.sh` (H160<->SS58, `transfer_stake`, `set_validators`) |
 | `localnet-e2e.sh` | Full end-to-end flow against a local subtensor |

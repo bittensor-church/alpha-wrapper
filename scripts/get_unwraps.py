@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Fetch AlphaVault `Withdrawn` events within a block range and print as CSV."""
+"""Fetch AlphaVault `Unwrapped` events within a block range and print as CSV."""
 
 import argparse
 import sys
@@ -10,7 +10,7 @@ from common import fetch_event_logs, get_web3_connection, write_dataclass_csv
 
 
 @dataclass
-class WithdrawnEvent:
+class UnwrappedEvent:
     tx_hash: str
     user: str
     token_id: int
@@ -28,7 +28,7 @@ def main() -> None:
 
     w3 = get_web3_connection(args.rpc_url)
     rows = [
-        WithdrawnEvent(
+        UnwrappedEvent(
             tx_hash=log["transactionHash"].to_0x_hex(),
             user=ev_args["user"],
             token_id=ev_args["tokenId"],
@@ -36,11 +36,11 @@ def main() -> None:
             assets=ev_args["assets"],
         )
         for log, ev_args in fetch_event_logs(
-            w3, args.vault_address, "AlphaVault", "Withdrawn",
+            w3, args.vault_address, "AlphaVault", "Unwrapped",
             args.block_start, args.block_end,
         )
     ]
-    write_dataclass_csv(sys.stdout, rows, WithdrawnEvent, "Withdrawn")
+    write_dataclass_csv(sys.stdout, rows, UnwrappedEvent, "Unwrapped")
 
 
 if __name__ == "__main__":
