@@ -52,7 +52,7 @@ abstract contract CloneBase {
     /// @dev    No-op when `amount == 0`. Callable only by the wrapper.
     /// @param  to     Recipient of the native TAO.
     /// @param  amount TAO (in wei) to send.
-    function withdrawTao(address payable to, uint256 amount) external onlyWrapper {
+    function unwrapTao(address payable to, uint256 amount) external onlyWrapper {
         if (amount > 0) Address.sendValue(to, amount);
     }
 

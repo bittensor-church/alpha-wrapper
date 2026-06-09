@@ -143,7 +143,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     function _simulateAlphaDeposit(address user, uint256 netuid, uint256 amount) internal {
         address cloneAddr = vault.getDepositAddress(user, netuid);
         bytes32 cloneSub = _toSubstrate(cloneAddr);
-        // Use the best validator hotkey for this subnet (matches what processDeposit will resolve)
+        // Use the best validator hotkey for this subnet (matches what wrap will resolve)
         bytes32 hotkey = vault.getBestValidator(netuid);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey, cloneSub, netuid, amount);
     }
@@ -154,13 +154,13 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey, cloneSub, netuid, amount);
     }
 
-    function _processDeposit(address user, uint256 netuid) internal {
-        _processDepositHotkey(user, netuid, vault.getBestValidator(netuid));
+    function _wrap(address user, uint256 netuid) internal {
+        _wrapHotkey(user, netuid, vault.getBestValidator(netuid));
     }
 
-    function _processDepositHotkey(address user, uint256 netuid, bytes32 chosenHotkey) internal {
+    function _wrapHotkey(address user, uint256 netuid, bytes32 chosenHotkey) internal {
         vm.prank(user);
-        vault.processDeposit(user, netuid, chosenHotkey);
+        vault.wrap(user, netuid, chosenHotkey);
     }
 
     function _getStake(bytes32 hotkey, address who, uint256 netuid) internal view returns (uint256) {
