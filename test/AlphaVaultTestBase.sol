@@ -145,16 +145,16 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     function _simulateAlphaDeposit(address user, uint256 netuid, uint256 amount) internal {
         address cloneAddr = vault.getDepositAddress(user, netuid);
-        bytes32 cloneSub = _toSubstrate(cloneAddr);
+        bytes32 cloneColdkey = _toSubstrate(cloneAddr);
         // Use the best validator hotkey for this subnet (matches what processDeposit will resolve)
         bytes32 hotkey = vault.getBestValidator(netuid);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey, cloneSub, netuid, amount);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey, cloneColdkey, netuid, amount);
     }
 
     function _simulateAlphaDepositHotkey(address user, uint256 netuid, uint256 amount, bytes32 hotkey) internal {
         address cloneAddr = vault.getDepositAddress(user, netuid);
-        bytes32 cloneSub = _toSubstrate(cloneAddr);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey, cloneSub, netuid, amount);
+        bytes32 cloneColdkey = _toSubstrate(cloneAddr);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey, cloneColdkey, netuid, amount);
     }
 
     function _processDeposit(address user, uint256 netuid) internal {
@@ -176,6 +176,25 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     function _getVaultStake(bytes32 hotkey, uint256 netuid) internal view returns (uint256) {
         return MockStaking(STAKING_PRECOMPILE).getStake(hotkey, _subnetColdkey(netuid), netuid);
+    }
+
+    function _setVaultStakes(uint256 netuid, uint256 a, uint256 b, uint256 c) internal returns (uint256 total) {
+        bytes32 cloneColdkey = _subnetColdkey(netuid);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneColdkey, netuid, a);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneColdkey, netuid, b);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneColdkey, netuid, c);
+        total = a + b + c;
+    }
+
+    // Smallest share count whose pro-rata assets equal `targetAssets` under the share-price cushion.
+    function _sharesForExactAssets(uint256 tokenId, uint256 targetAssets, uint256 totalAlpha)
+        internal
+        view
+        returns (uint256 shares)
+    {
+        uint256 scaledSupply = vault.totalSupply(tokenId) + 1e9;
+        shares = (targetAssets * scaledSupply + totalAlpha) / (totalAlpha + 1);
+        require((shares * (totalAlpha + 1)) / scaledSupply == targetAssets, "no share count hits target assets");
     }
 
     function _totalVaultStakeAcrossHotkeys(uint256 netuid) internal view returns (uint256) {

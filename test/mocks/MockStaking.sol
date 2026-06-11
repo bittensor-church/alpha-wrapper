@@ -86,8 +86,13 @@ contract MockStaking {
         if (removeStakeReverts) {
             revert("MockStaking: removeStake reverted");
         }
-        stakes[hotkey][_senderColdkey()][netuid] -= alphaAmount;
+        uint256 staked = stakes[hotkey][_senderColdkey()][netuid];
         uint256 taoOut = (alphaAmount * taoPerAlpha) / taoPerAlphaDenom;
+        // Mirrors subtensor validate_remove_stake: the floor binds only when stake remains after.
+        if (alphaAmount != staked && taoOut < MIN_STAKE) {
+            revert("MockStaking: AmountTooLow");
+        }
+        stakes[hotkey][_senderColdkey()][netuid] = staked - alphaAmount;
         (bool ok,) = msg.sender.call{ value: taoOut }("");
         require(ok, "MockStaking: TAO credit failed");
     }

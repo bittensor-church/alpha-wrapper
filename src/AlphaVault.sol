@@ -226,6 +226,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     }
 
     /// @notice Burn vault shares pro-rata and pay the caller native TAO from swapping the backing alpha.
+    /// @dev    Subtensor rejects a partial unstake worth less than the min-stake floor (full drains
+    ///         are exempt). When the split across validators ends in such a tail, the tail is grown
+    ///         to the nearest legal size and the growth shaved off an earlier full slice, keeping
+    ///         the total sold exactly the burned assets. Reverts `WithdrawTooSmall` when no slice
+    ///         can absorb the shave.
     /// @param  tokenId    Vault token id.
     /// @param  shares     Shares to burn.
     /// @param  minTaoOut  Slippage floor; revert if realized TAO is less.
@@ -249,14 +254,23 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         totalStake[tokenId] -= assets;
 
         uint256 balanceBefore = clone.balance;
-        uint256 remaining = assets;
+        (uint256[6] memory takes, uint256 tailIdx) = _planDrainSlices(balances, assets);
+
+        // Only the tail slice can be a partial unstake, the only kind subtensor floor-checks.
+        // Sell it first so the floor check runs before our own full drains move the pool price.
+        uint256 tailTake = takes[tailIdx];
+        if (tailTake < balances[tailIdx]) {
+            try SubnetClone(payable(clone)).sellAlphaForTao(hotkeys[tailIdx], netuid, tailTake) { }
+            catch (bytes memory err) {
+                _requireSubFloorElseBubble(err, tailTake, netuid);
+                _sellSubFloorTail(clone, hotkeys, balances, takes, tailIdx, netuid);
+            }
+            takes[tailIdx] = 0;
+        }
+
         for (uint256 i; i < 6;) {
-            if (remaining == 0) break;
-            uint256 bal = balances[i];
-            if (bal != 0) {
-                uint256 take = bal < remaining ? bal : remaining;
-                SubnetClone(payable(clone)).sellAlphaForTao(hotkeys[i], netuid, take);
-                remaining -= take;
+            if (takes[i] != 0) {
+                SubnetClone(payable(clone)).sellAlphaForTao(hotkeys[i], netuid, takes[i]);
             }
             unchecked {
                 ++i;
@@ -268,6 +282,64 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
 
         SubnetClone(payable(clone)).withdrawTao(payable(msg.sender), taoOut);
         emit WithdrawnForTao(msg.sender, tokenId, shares, assets, taoOut);
+    }
+
+    /// @dev Split `assets` greedily across drain candidates in preference order. Every slice
+    ///      except the last one touched (`tailIdx`) is a full drain; the tail is partial whenever
+    ///      the split does not land exactly on a candidate's balance.
+    function _planDrainSlices(uint256[6] memory balances, uint256 assets)
+        private
+        pure
+        returns (uint256[6] memory takes, uint256 tailIdx)
+    {
+        uint256 remaining = assets;
+        for (uint256 i; i < 6;) {
+            if (remaining == 0) break;
+            uint256 bal = balances[i];
+            if (bal != 0) {
+                takes[i] = bal < remaining ? bal : remaining;
+                tailIdx = i;
+                remaining -= takes[i];
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @dev Recovery for a tail slice rejected by subtensor's partial-unstake floor: grow the
+    ///      tail to the nearest legal size (its full balance, or a partial safely above the
+    ///      floor) and shave the growth off an earlier full slice, so the total sold stays
+    ///      exactly the burned assets. The shaved slice must itself stay above the floor; when
+    ///      no slice can absorb the shave the position cannot be exited and the withdrawal
+    ///      reverts.
+    function _sellSubFloorTail(
+        address clone,
+        bytes32[6] memory hotkeys,
+        uint256[6] memory balances,
+        uint256[6] memory takes,
+        uint256 tailIdx,
+        uint16 netuid
+    ) private {
+        uint256 minLegalPartial = _minLegalPartialAlpha(netuid);
+        uint256 tailBalance = balances[tailIdx];
+        uint256 target = tailBalance < minLegalPartial ? tailBalance : minLegalPartial;
+        uint256 shortfall = target - takes[tailIdx];
+
+        for (uint256 j = tailIdx; j > 0;) {
+            unchecked {
+                --j;
+            }
+            if (takes[j] != 0 && balances[j] >= minLegalPartial + shortfall) {
+                SubnetClone(payable(clone)).sellAlphaForTao(hotkeys[tailIdx], netuid, target);
+                // The shaved slice turns partial; sell it before the remaining full drains so
+                // its floor margin holds at the price just observed.
+                SubnetClone(payable(clone)).sellAlphaForTao(hotkeys[j], netuid, takes[j] - shortfall);
+                takes[j] = 0;
+                return;
+            }
+        }
+        revert WithdrawTooSmall();
     }
 
     function _redeemLivePosition(
@@ -690,6 +762,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     function _isBelowMinStake(uint256 alpha, uint16 netuid) private view returns (bool) {
         uint256 priceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
         return Math.mulDiv(alpha, priceE18, 1e18) < minStakeTaoFloor;
+    }
+
+    // Sized at 2x the floor so swap fees and the truncated precompile price cannot drag the
+    // realized TAO output below subtensor's floor validation.
+    function _minLegalPartialAlpha(uint16 netuid) private view returns (uint256) {
+        uint256 priceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
+        return Math.mulDiv(2 * minStakeTaoFloor, 1e18, priceE18, Math.Rounding.Ceil);
     }
 
     function _requireSubFloorElseBubble(bytes memory err, uint256 alpha, uint16 netuid) private view {

@@ -42,8 +42,8 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, 99, 4e6, hotkey4);
         _processDepositHotkey(alice, 99, hotkey4);
 
-        bytes32 cloneCk = _toSubstrate(vault.subnetClone(vault.currentTokenId(99)));
-        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey4, cloneCk, 99), 4e6);
+        bytes32 cloneColdkey = _toSubstrate(vault.subnetClone(vault.currentTokenId(99)));
+        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey4, cloneColdkey, 99), 4e6);
         assertGt(vault.balanceOf(alice, vault.currentTokenId(99)), 0);
     }
 

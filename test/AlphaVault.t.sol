@@ -493,9 +493,9 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         // to a 1-RAO imbalance below the rebalance threshold.
         _simulateAlphaDepositHotkey(alice, NETUID1, 4e6, hotkey1);
         _processDepositHotkey(alice, NETUID1, hotkey1);
-        bytes32 cloneCk = _subnetColdkey(NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneCk, NETUID1, 500_001);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneCk, NETUID1, 500_000);
+        bytes32 cloneColdkey = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneColdkey, NETUID1, 500_001);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneColdkey, NETUID1, 500_000);
 
         vm.recordLogs();
         vault.rebalance(NETUID1);
@@ -513,9 +513,9 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         // clears the 2e6 default rebalance threshold.
         _simulateAlphaDepositHotkey(alice, NETUID1, 4e6, hotkey1);
         _processDepositHotkey(alice, NETUID1, hotkey1);
-        bytes32 cloneCk = _subnetColdkey(NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneCk, NETUID1, 8e6);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneCk, NETUID1, 0);
+        bytes32 cloneColdkey = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneColdkey, NETUID1, 8e6);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneColdkey, NETUID1, 0);
 
         uint256 tokenId = vault.currentTokenId(NETUID1);
         vm.expectEmit(true, true, true, true);
@@ -1168,10 +1168,10 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _processDeposit(alice, NETUID1);
 
         // Concentrate the vault's alpha on hotkey3, then rotate hotkey3 out.
-        bytes32 cloneCk = _subnetColdkey(NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneCk, NETUID1, 0);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneCk, NETUID1, 0);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneCk, NETUID1, 30 ether);
+        bytes32 cloneColdkey = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneColdkey, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneColdkey, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneColdkey, NETUID1, 30 ether);
 
         _setNetuid1Set(hotkey1, hotkey2, hotkey4);
 
@@ -1195,8 +1195,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         // Drop hotkey3 to one RAO below the rebalance floor, then rotate it out.
         uint256 floor = vault.minStakeTaoFloor();
-        bytes32 cloneCk = _subnetColdkey(NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneCk, NETUID1, floor - 1);
+        bytes32 cloneColdkey = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneColdkey, NETUID1, floor - 1);
 
         _setNetuid1Set(hotkey1, hotkey2, hotkey4);
 
@@ -1240,9 +1240,9 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _processDeposit(alice, NETUID1);
 
         // Simulate validator rewards accrued on hotkey1 since the last state-mutating call.
-        bytes32 cloneCk = _subnetColdkey(NETUID1);
+        bytes32 cloneColdkey = _subnetColdkey(NETUID1);
         uint256 hk1Before = _getVaultStake(hotkey1, NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneCk, NETUID1, hk1Before + 6 ether);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneColdkey, NETUID1, hk1Before + 6 ether);
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         (uint256 previewAlpha,) = vault.previewWithdraw(TOKEN1, shares);
@@ -1263,10 +1263,10 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _processDeposit(alice, NETUID1);
 
         // Drain every hotkey the vault currently tracks (current set + lastSeen).
-        bytes32 cloneCk = _subnetColdkey(NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneCk, NETUID1, 0);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneCk, NETUID1, 0);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneCk, NETUID1, 0);
+        bytes32 cloneColdkey = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneColdkey, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneColdkey, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneColdkey, NETUID1, 0);
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         (uint256 alpha, uint256 tao) = vault.previewWithdraw(TOKEN1, shares);
@@ -1587,10 +1587,10 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, 99, 10 ether, hotkey4);
         _processDepositHotkey(alice, 99, hotkey4);
 
-        bytes32 cloneCk = _toSubstrate(vault.subnetClone(vault.currentTokenId(99)));
-        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey4, cloneCk, 99), 10 ether);
-        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey1, cloneCk, 99), 0);
-        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey2, cloneCk, 99), 0);
+        bytes32 cloneColdkey = _toSubstrate(vault.subnetClone(vault.currentTokenId(99)));
+        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey4, cloneColdkey, 99), 10 ether);
+        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey1, cloneColdkey, 99), 0);
+        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey2, cloneColdkey, 99), 0);
     }
 
     function test_RevertWhen_ProcessDepositZeroChosenHotkey() public {
@@ -1614,8 +1614,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, 99, 2e6, hotkey4);
         _processDepositHotkey(alice, 99, hotkey4);
 
-        bytes32 cloneCk = _toSubstrate(vault.subnetClone(vault.currentTokenId(99)));
-        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey4, cloneCk, 99), 2e6);
+        bytes32 cloneColdkey = _toSubstrate(vault.subnetClone(vault.currentTokenId(99)));
+        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey4, cloneColdkey, 99), 2e6);
     }
 
     function test_RevertWhen_ProcessDepositWhenChosenHasZeroStakeEvenIfOtherHotkeyFunded() public {
@@ -1941,10 +1941,10 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _processDeposit(alice, NETUID1);
 
-        bytes32 cloneCk = _subnetColdkey(NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneCk, NETUID1, b1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneCk, NETUID1, b2);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneCk, NETUID1, b3);
+        bytes32 cloneColdkey = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneColdkey, NETUID1, b1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneColdkey, NETUID1, b2);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneColdkey, NETUID1, b3);
 
         vault.rebalance(NETUID1);
         uint256 b1After = _getVaultStake(hotkey1, NETUID1);
@@ -1974,10 +1974,10 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, NETUID1, d, hotkey1);
         _processDepositHotkey(alice, NETUID1, hotkey1);
 
-        bytes32 cloneCk = _subnetColdkey(NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneCk, NETUID1, b1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneCk, NETUID1, b2);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneCk, NETUID1, b3);
+        bytes32 cloneColdkey = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneColdkey, NETUID1, b1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneColdkey, NETUID1, b2);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneColdkey, NETUID1, b3);
 
         uint256 supply = vault.totalSupply(TOKEN1);
         uint256 burnShares = vault.balanceOf(alice, TOKEN1) * burnPct / 100;
@@ -2054,11 +2054,11 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _processDeposit(alice, NETUID1);
 
         // Overwrite chain-side balances with fuzzed values; ensure hk4 starts clean.
-        bytes32 cloneCk = _subnetColdkey(NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneCk, NETUID1, b1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneCk, NETUID1, b2);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneCk, NETUID1, b3);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, cloneCk, NETUID1, 0);
+        bytes32 cloneColdkey = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneColdkey, NETUID1, b1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneColdkey, NETUID1, b2);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneColdkey, NETUID1, b3);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, cloneColdkey, NETUID1, 0);
 
         // Rotate hotkey3 out, hotkey4 in. Same weights.
         _setNetuid1Set(hotkey1, hotkey2, hotkey4);
@@ -2090,10 +2090,10 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _processDeposit(alice, NETUID1);
 
-        bytes32 cloneCk = _subnetColdkey(NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneCk, NETUID1, b1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneCk, NETUID1, b2);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneCk, NETUID1, b3);
+        bytes32 cloneColdkey = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneColdkey, NETUID1, b1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneColdkey, NETUID1, b2);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneColdkey, NETUID1, b3);
 
         uint256 preTotal = b1 + b2 + b3;
         uint256 minAmt = vault.minStakeTaoFloor();

@@ -40,6 +40,31 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         vm.snapshotGasLastCall("AlphaVault", "withdraw: full");
     }
 
+    function test_gas_withdrawForTao_partialTailAboveFloor() public {
+        _setRemoveStakeRate(1, 1);
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _processDeposit(alice, NETUID1);
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+
+        vm.prank(alice);
+        vault.withdrawForTao(TOKEN1, shares / 2, 0);
+        vm.snapshotGasLastCall("AlphaVault", "withdrawForTao: partial tail above floor");
+    }
+
+    function test_gas_withdrawForTao_subFloorTailShave() public {
+        _setRemoveStakeRate(1, 1);
+        _simulateAlphaDeposit(alice, NETUID1, 100 ether);
+        _processDeposit(alice, NETUID1);
+
+        uint256 total = _setVaultStakes(NETUID1, 60 ether, 0, 40 ether);
+        // The 1e6 tail on hotkey3 is sub-floor and forces the grow-and-shave branch.
+        uint256 shares = _sharesForExactAssets(TOKEN1, 60 ether + 1e6, total);
+
+        vm.prank(alice);
+        vault.withdrawForTao(TOKEN1, shares, 0);
+        vm.snapshotGasLastCall("AlphaVault", "withdrawForTao: sub-floor tail shave");
+    }
+
     function test_gas_rebalance() public {
         _simulateAlphaDeposit(alice, NETUID1, 100 ether);
         _processDeposit(alice, NETUID1);
