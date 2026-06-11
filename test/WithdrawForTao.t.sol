@@ -385,7 +385,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
 
     // A tail validator holding less than the 4e6 floor target cannot host a legal partial,
     // so its balance is drained in full (full unstakes are floor-exempt).
-    function test_SubFloorTail_TinyTailValidator_DrainedInFullViaShave() public {
+    function test_SubFloorTailOnTinyValidator_DrainedInFullViaShave() public {
         _setRemoveStakeRate(1, 1);
         _depositForAlice(100 ether);
         uint256 total = _setVaultStakes(NETUID1, 60 ether, 3e6, 0);
@@ -403,7 +403,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
 
     // The donor scan must skip a slice too small to stay above the floor after the shave
     // and settle on an earlier one that can absorb it.
-    function test_SubFloorTail_ShaveSkipsIneligibleDonor_UsesEarlierSlice() public {
+    function test_SubFloorTail_ShavedFromNearestEligibleDonor() public {
         _setRemoveStakeRate(1, 1);
         _depositForAlice(100 ether);
         uint256 total = _setVaultStakes(NETUID1, 60 ether, 5e6, 40 ether);
@@ -440,7 +440,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
 
     // A full drain below the floor must be sold untouched: subtensor exempts it, and growing
     // it would only waste the exemption.
-    function test_SubFloorFullDrain_FloorExempt_SoldUntouched() public {
+    function test_SubFloorFullDrain_SoldViaFullUnstakeExemption() public {
         _setRemoveStakeRate(1, 1);
         _depositForAlice(100 ether);
         uint256 total = _setVaultStakes(NETUID1, 1e6, 40 ether, 0);
@@ -508,7 +508,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
 
     // Documented escape hatch for a dust position: top up with one more deposit to lift the
     // position above the floor, then exit everything in a single withdrawal at full value.
-    function test_DustPosition_TopUpThenFullExit_RecoversFullValue() public {
+    function test_DustPosition_TopUpEnablesFullValueExit() public {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
 

@@ -58,7 +58,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
 
     // ──────────────────── Events ────────────────────────────────────────────────
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
-    event Withdrawn(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 assets);
+    event Withdrawn(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 amountOut);
     event ValidatorRegistryUpdated(address oldRegistry, address newRegistry);
     event MinStakeTaoFloorUpdated(uint256 oldValue, uint256 newValue);
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
@@ -364,7 +364,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
 
         uint256 delivered = _drainAssets(hotkeys, balances, validatorCount, clone, netuid, userSubstrateColdkey, assets);
         // Burning shares for a zero-delivery transfer would forfeit the whole position; the
-        // request is non-transferable on the alpha rail, so revert and leave withdrawForTao.
+        // request is non-transferable on the alpha rail, so revert here and let the holder
+        // exit via withdrawForTao instead.
         if (delivered == 0) revert WithdrawTooSmall();
         if (delivered < minAlphaOut) revert SlippageExceeded(delivered);
         _alignToWeights(tokenId, clone, hotkeys, weights, balances);

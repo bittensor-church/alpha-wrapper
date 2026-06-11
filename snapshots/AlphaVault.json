@@ -1,9 +1,9 @@
 {
-  "processDeposit: first": "508321",
-  "processDeposit: subsequent": "263971",
-  "rebalance: after registry weight update": "123376",
-  "withdraw: full": "175523",
-  "withdraw: partial": "204138",
-  "withdrawForTao: partial tail above floor": "141919",
-  "withdrawForTao: sub-floor tail shave": "170463"
+  "processDeposit: first": "508800",
+  "processDeposit: subsequent": "264450",
+  "rebalance: after registry weight update": "125801",
+  "withdraw: full": "175685",
+  "withdraw: partial": "204573",
+  "withdrawForTao: partial tail above floor": "142120",
+  "withdrawForTao: sub-floor tail shave": "170691"
 }

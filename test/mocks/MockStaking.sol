@@ -51,6 +51,12 @@ contract MockStaking {
         moveStakeRoundingLoss = loss;
     }
 
+    bool public moveStakeReverts;
+
+    function setMoveStakeReverts(bool v) external {
+        moveStakeReverts = v;
+    }
+
     function moveStake(
         bytes32 origin_hotkey,
         bytes32 destination_hotkey,
@@ -58,6 +64,9 @@ contract MockStaking {
         uint256 destination_netuid,
         uint256 amount
     ) external payable {
+        if (moveStakeReverts) {
+            revert("MockStaking: moveStake reverted");
+        }
         if (_belowMinStake(amount, origin_netuid)) {
             revert("MockStaking: AmountTooLow");
         }

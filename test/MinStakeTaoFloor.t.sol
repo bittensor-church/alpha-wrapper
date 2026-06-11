@@ -64,6 +64,40 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey2, NETUID1), 2e6);
     }
 
+    // The floor classifier must only swallow failures whose amount is genuinely sub-floor at
+    // the current price; an above-floor moveStake failure has some other cause and must bubble.
+    function test_Rebalance_RevertsWhenAboveFloorMoveFails() public {
+        _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(5000, 5000));
+        _simulateAlphaDepositHotkey(alice, NETUID1, 8e6, hotkey1);
+        _processDepositHotkey(alice, NETUID1, hotkey1);
+
+        // Target is 4e6 / 4e6; the corrective move of 2e6 alpha equals the floor at price 1.0.
+        _setStake(hotkey1, NETUID1, 6e6);
+        _setStake(hotkey2, NETUID1, 2e6);
+        MockStaking(STAKING_PRECOMPILE).setMoveStakeReverts(true);
+
+        vm.expectRevert(bytes("MockStaking: moveStake reverted"));
+        vault.rebalance(NETUID1);
+    }
+
+    // With the same forced revert but a sub-floor move amount, the classifier still attributes
+    // the failure to the floor and skips the move instead of reverting the rebalance.
+    function test_Rebalance_SkipsSubFloorMoveOnAnyFailureReason() public {
+        _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(5000, 5000));
+        _simulateAlphaDepositHotkey(alice, NETUID1, 8e6, hotkey1);
+        _processDepositHotkey(alice, NETUID1, hotkey1);
+
+        _setAlphaPrice(NETUID1, PRICE_HALF);
+        _setStake(hotkey1, NETUID1, 6e6);
+        _setStake(hotkey2, NETUID1, 2e6);
+        MockStaking(STAKING_PRECOMPILE).setMoveStakeReverts(true);
+
+        vault.rebalance(NETUID1);
+
+        assertEq(_getVaultStake(hotkey1, NETUID1), 6e6, "sub-floor move skipped, rebalance not reverted");
+        assertEq(_getVaultStake(hotkey2, NETUID1), 2e6);
+    }
+
     function test_Rebalance_DropsRotatedOutSubFloorDust() public {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _processDeposit(alice, NETUID1);
