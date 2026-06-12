@@ -262,7 +262,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         if (tailTake < balances[tailIdx]) {
             try SubnetClone(payable(clone)).sellAlphaForTao(hotkeys[tailIdx], netuid, tailTake) { }
             catch (bytes memory err) {
-                _requireSubFloorElseBubble(err, tailTake, netuid);
+                _requireRemoveSubFloorElseBubble(err, tailTake, netuid);
                 _sellSubFloorTail(clone, hotkeys, balances, takes, tailIdx, netuid);
             }
             takes[tailIdx] = 0;
@@ -564,6 +564,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     }
 
     /// @notice Preview the redemption of `shares` for a position.
+    /// @dev    Live-path delivery may fall short of the preview by floor-bounded dust.
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, regBlock) position.
     /// @param  shares  Shares being previewed.
     /// @return alpha   Alpha redeemable on the live path.
@@ -758,11 +759,24 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         return hk != bytes32(0) && hk != currentSet[0] && hk != currentSet[1] && hk != currentSet[2];
     }
 
-    // Truncated precompile price <= subtensor's full-precision price, so a real sub-floor move is
-    // never misclassified as some other failure.
+    // Spot-price floor check for the fee-free transfer/move rails, which subtensor floors on
+    // `alpha * current_price` with no swap. The precompile price is a truncation (<= the chain's
+    // full-precision price), so a genuine sub-floor transfer/move is never misread as another
+    // failure. The removeStake rail is floored on post-fee swap output instead; classify it with
+    // `_removeStakeOutputBelowFloor`, not this.
     function _isBelowMinStake(uint256 alpha, uint16 netuid) private view returns (bool) {
         uint256 priceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
         return Math.mulDiv(alpha, priceE18, 1e18) < minStakeTaoFloor;
+    }
+
+    // removeStake (the withdrawForTao rail) is rejected when the unstake's post-fee TAO output is
+    // below the floor. Spot price omits the swap fee and slippage, so it would clear amounts the
+    // chain rejects; classify against the same swap simulation the chain validates against.
+    function _removeStakeOutputBelowFloor(uint256 alpha, uint16 netuid) private view returns (bool) {
+        // `alpha` is a stake balance read from getStake (u64 on-chain), so the downcast cannot truncate.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        uint256 taoOut = IAlpha(ALPHA_PRECOMPILE).simSwapAlphaForTao(netuid, uint64(alpha));
+        return taoOut < minStakeTaoFloor;
     }
 
     // Sized at 2x the floor so swap fees and the truncated precompile price cannot drag the
@@ -773,7 +787,14 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     }
 
     function _requireSubFloorElseBubble(bytes memory err, uint256 alpha, uint16 netuid) private view {
-        if (_isBelowMinStake(alpha, netuid)) return;
+        if (!_isBelowMinStake(alpha, netuid)) _bubble(err);
+    }
+
+    function _requireRemoveSubFloorElseBubble(bytes memory err, uint256 alpha, uint16 netuid) private view {
+        if (!_removeStakeOutputBelowFloor(alpha, netuid)) _bubble(err);
+    }
+
+    function _bubble(bytes memory err) private pure {
         assembly {
             revert(add(err, 0x20), mload(err))
         }
@@ -838,10 +859,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
                 ++i;
             }
         }
-        // Validator registry guarantees no duplicates within the current validator set, so the dedup only
-        // needs to scan against the historical slots already collected above.
-        // Historical validator list was previously obtained from the validator registry contract, so it does
-        // contain duplicates.
+        // Both lists are individually duplicate-free: the registry rejects duplicate hotkeys within a
+        // validator set, and the historical snapshot is a past copy of such a set. So only the
+        // current-vs-historical overlap needs removing, which the guard below does.
         for (uint256 i; i < 3;) {
             bytes32 hk = current[i];
             if (hk != bytes32(0) && hk != historical[0] && hk != historical[1] && hk != historical[2]) {

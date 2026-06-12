@@ -438,6 +438,59 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey3, NETUID1), 40 ether - 4e6);
     }
 
+    // An ordinary ~0.05% fee, not a crashed pool: the 2.001e6 tail clears the 2e6 spot floor (a
+    // spot classifier would wrongly bubble) yet its post-fee output is a hair under the floor, so
+    // only the swap-aware classifier recovers the exit.
+    function test_SubFloorTail_RecoveredWhenBaseFeeOutputBelowFloor() public {
+        _setRemoveStakeRate(9995, 10_000); // 0.05% fee
+        _depositForAlice(100 ether);
+        uint256 total = _setVaultStakes(NETUID1, 60 ether, 0, 40 ether);
+        uint256 assets = 60 ether + 2_001_000;
+        uint256 shares = _sharesForExactAssets(TOKEN1, assets, total);
+        uint256 expectedTao = _expectedTaoFor(assets);
+
+        uint256 balanceBefore = alice.balance;
+        vm.prank(alice);
+        vault.withdrawForTao(TOKEN1, shares, expectedTao);
+
+        assertEq(alice.balance - balanceBefore, expectedTao, "full value recovered despite sub-floor output");
+        assertEq(_getVaultStake(hotkey3, NETUID1), 40 ether - 4e6, "tail grown to the 4e6 floor target");
+        assertEq(vault.totalStake(TOKEN1), total - assets);
+    }
+
+    // The bound spans the band where recovery must hold: the 2.001e6 tail's output dips below the
+    // floor past ~0.05% fee, while its 4e6 grown size still clears the floor up to 50%. Asserts the
+    // invariant (full-value delivery), not a hand-picked split.
+    function testFuzz_SubFloorTail_RecoversAcrossFeeBand(uint256 feeBps) public {
+        feeBps = bound(feeBps, 5, 5000); // 0.05% .. 50% combined fee+slippage
+        _setRemoveStakeRate(10_000 - feeBps, 10_000);
+        _depositForAlice(100 ether);
+        uint256 total = _setVaultStakes(NETUID1, 60 ether, 0, 40 ether);
+        uint256 assets = 60 ether + 2_001_000;
+        uint256 shares = _sharesForExactAssets(TOKEN1, assets, total);
+        uint256 expectedTao = _expectedTaoFor(assets);
+
+        uint256 balanceBefore = alice.balance;
+        vm.prank(alice);
+        vault.withdrawForTao(TOKEN1, shares, expectedTao);
+
+        assertEq(alice.balance - balanceBefore, expectedTao, "full value recovered, no under-delivery");
+        assertEq(vault.totalStake(TOKEN1), total - assets, "exactly the burned assets left the vault");
+    }
+
+    function test_SubFloorTail_BubblesFailureWhoseOutputClearsFloor() public {
+        _setRemoveStakeRate(1, 1);
+        _depositForAlice(100 ether);
+        uint256 total = _setVaultStakes(NETUID1, 60 ether, 0, 40 ether);
+        uint256 assets = 60 ether + 5e6;
+        uint256 shares = _sharesForExactAssets(TOKEN1, assets, total);
+        _setRemoveStakeReverts(true);
+
+        vm.prank(alice);
+        vm.expectRevert(bytes("MockStaking: removeStake reverted"));
+        vault.withdrawForTao(TOKEN1, shares, 0);
+    }
+
     // A full drain below the floor must be sold untouched: subtensor exempts it, and growing
     // it would only waste the exemption.
     function test_SubFloorFullDrain_SoldViaFullUnstakeExemption() public {
