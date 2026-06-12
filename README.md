@@ -9,7 +9,6 @@ Bittensor alpha-token wrapper (ERC-1155 vault + staking precompile integration).
 - `src/ValidatorRegistry.sol` — admin-managed registry of target validator weights per subnet
 - `src/interfaces/` — Bittensor precompile interfaces (IStaking, IMetagraph, IAddressMapping) + IValidatorRegistry
 - `test/` — Foundry tests + mocks for the precompiles
-- `frontend/` — wrap/unwrap dApp (Vite + React)
 
 ## Build
 ```bash
@@ -17,9 +16,4 @@ forge install foundry-rs/forge-std --no-commit
 forge install OpenZeppelin/openzeppelin-contracts --no-commit
 forge build
 forge test
-```
-
-## Frontend
-```bash
-cd frontend && npm install && npm run dev
 ```
