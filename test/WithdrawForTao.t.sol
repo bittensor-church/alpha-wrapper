@@ -6,6 +6,7 @@ import { AlphaVault } from "src/AlphaVault.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 import { RevertingReceiver, WithdrawForTaoReentrantReceiver } from "./helpers/TaoRailReceivers.sol";
+import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 contract WithdrawForTaoTest is AlphaVaultTestBase {
     event WithdrawnForTao(
@@ -18,7 +19,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
         shares = vault.balanceOf(alice, TOKEN1);
     }
 
-    function test_SingleHotkey_BurnAllShares_PaysFullAlphaAsTao() public {
+    function test_BurnAllShares_PaysFullAlphaAsTao() public {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
         uint256 aliceBalanceBefore = alice.balance;
@@ -221,8 +222,8 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
         assertEq(vault.balanceOf(address(receiver), TOKEN1), shares);
     }
 
-    // The reentrancy guard must stop a recipient whose receive hook tries to call back in.
-    function test_RevertWhen_CallerReceiverReentersWithdrawForTao() public {
+    // The reentrancy guard must reject a recipient whose receive hook tries to call back in.
+    function test_ReentrantWithdrawForTaoIsRejectedByGuard() public {
         _setRemoveStakeRate(1, 1);
         WithdrawForTaoReentrantReceiver receiver = new WithdrawForTaoReentrantReceiver();
         _simulateAlphaDeposit(address(receiver), NETUID1, 100 ether);
@@ -231,8 +232,15 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
         receiver.arm(vault, TOKEN1, shares);
 
         vm.prank(address(receiver));
-        vm.expectRevert();
         vault.withdrawForTao(TOKEN1, shares, 0);
+
+        // The re-entry was rejected specifically by the guard, not by some incidental revert.
+        assertEq(
+            receiver.reentryError(), abi.encodeWithSelector(ReentrancyGuard.ReentrancyGuardReentrantCall.selector)
+        );
+        assertFalse(receiver.reentrySucceeded());
+        // The legitimate (outer) withdrawal still completed: all shares were burned.
+        assertEq(vault.balanceOf(address(receiver), TOKEN1), 0);
     }
 
     function test_MultipleUsers_ProRataConsistentAcrossSequentialWithdrawals() public {
@@ -270,6 +278,10 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
         vault.withdraw(TOKEN1, bobShares, bobDest);
 
         assertEq(vault.balanceOf(bob, TOKEN1), 0);
+        uint256 bobReceived = MockStaking(STAKING_PRECOMPILE).getStake(hotkey1, bobDest, NETUID1)
+            + MockStaking(STAKING_PRECOMPILE).getStake(hotkey2, bobDest, NETUID1)
+            + MockStaking(STAKING_PRECOMPILE).getStake(hotkey3, bobDest, NETUID1);
+        assertApproxEqAbs(bobReceived, 100 ether, 1e9);
     }
 
     // Validator emissions grow the clone's stake above the original deposit; the share-price
@@ -305,17 +317,16 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
         vault.withdrawForTao(TOKEN1, shares, 0);
     }
 
-    function test_WithdrawForTao_NonUnitRate_PaysExactExpectedTao() public {
+    function test_PartialBurnAtNonUnitRatePaysScaledProportionalTao() public {
         _setRemoveStakeRate(1, 2);
         uint256 shares = _depositForAlice(100 ether);
-        uint256 expected = _expectedTaoFor(100 ether);
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
-        vault.withdrawForTao(TOKEN1, shares, 0);
+        vault.withdrawForTao(TOKEN1, shares / 2, 0);
 
-        assertEq(alice.balance - balanceBefore, expected);
-        assertEq(expected, 50 ether);
+        // Half the shares realize ~50 ether of alpha; the 1/2 rate scales that to 25 ether TAO.
+        assertEq(alice.balance - balanceBefore, 25 ether);
     }
 
     // Once the requested amount has been drained, later hotkeys must be left untouched.
@@ -356,6 +367,10 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
         vault.withdraw(TOKEN1, shares - half, dest);
 
         assertEq(vault.balanceOf(alice, TOKEN1), 0);
+        uint256 received = MockStaking(STAKING_PRECOMPILE).getStake(hotkey1, dest, NETUID1)
+            + MockStaking(STAKING_PRECOMPILE).getStake(hotkey2, dest, NETUID1)
+            + MockStaking(STAKING_PRECOMPILE).getStake(hotkey3, dest, NETUID1);
+        assertApproxEqAbs(received, 50 ether, 1e9);
     }
 
     // After a partial TAO-rail withdrawal the on-chain stake is reduced; rebalance must
@@ -368,6 +383,11 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
         vault.withdrawForTao(TOKEN1, shares / 2, 0);
 
         vault.rebalance(NETUID1);
+
+        assertApproxEqAbs(vault.totalStake(TOKEN1), 50 ether, 1e9);
+        assertApproxEqAbs(_getVaultStake(hotkey1, NETUID1), _weighted(50 ether, NETUID1_BPS_HK1), 1e9);
+        assertApproxEqAbs(_getVaultStake(hotkey2, NETUID1), _weighted(50 ether, NETUID1_BPS_HK2), 1e9);
+        assertApproxEqAbs(_getVaultStake(hotkey3, NETUID1), _weighted(50 ether, NETUID1_BPS_HK3), 1e9);
     }
 
     receive() external payable { }

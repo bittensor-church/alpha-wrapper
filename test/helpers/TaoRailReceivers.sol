@@ -15,12 +15,16 @@ contract RevertingReceiver {
     }
 }
 
-/// @dev On receiving TAO, re-enters `withdrawForTao` to exercise the reentrancy guard on the
-///      vault path. Holds ERC1155 shares so it needs the acceptance hook.
+/// @dev On receiving TAO, re-enters `withdrawForTao` and captures the revert (instead of
+///      propagating it) so the outer call completes and the test can assert the reentrancy guard
+///      specifically rejected the re-entry. Holds ERC1155 shares so it needs the acceptance hook.
 contract WithdrawForTaoReentrantReceiver {
     AlphaVault target;
     uint256 tokenId;
     uint256 shares;
+    bytes public reentryError;
+    bool public reentrySucceeded;
+    bool private entered;
 
     function arm(AlphaVault t, uint256 tid, uint256 s) external {
         target = t;
@@ -33,16 +37,26 @@ contract WithdrawForTaoReentrantReceiver {
     }
 
     receive() external payable {
-        target.withdrawForTao(tokenId, shares, 0);
+        if (entered) return;
+        entered = true;
+        try target.withdrawForTao(tokenId, shares, 0) {
+            reentrySucceeded = true;
+        } catch (bytes memory err) {
+            reentryError = err;
+        }
     }
 }
 
-/// @dev On receiving TAO, re-enters `reclaimMailboxAlphaAsTao` to exercise the reentrancy guard
-///      on the mailbox path. No ERC1155 mints occur on this path, so no acceptance hook needed.
+/// @dev On receiving TAO, re-enters `reclaimMailboxAlphaAsTao` and captures the revert (instead of
+///      propagating it) so the outer call completes and the test can assert the reentrancy guard
+///      specifically rejected the re-entry. No ERC1155 mints occur on this path.
 contract ReclaimMailboxReentrantReceiver {
     AlphaVault target;
     uint256 netuid;
     bytes32 hotkey;
+    bytes public reentryError;
+    bool public reentrySucceeded;
+    bool private entered;
 
     function arm(AlphaVault t, uint256 n, bytes32 h) external {
         target = t;
@@ -51,6 +65,12 @@ contract ReclaimMailboxReentrantReceiver {
     }
 
     receive() external payable {
-        target.reclaimMailboxAlphaAsTao(netuid, hotkey, 0);
+        if (entered) return;
+        entered = true;
+        try target.reclaimMailboxAlphaAsTao(netuid, hotkey, 0) {
+            reentrySucceeded = true;
+        } catch (bytes memory err) {
+            reentryError = err;
+        }
     }
 }
