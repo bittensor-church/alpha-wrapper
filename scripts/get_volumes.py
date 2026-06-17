@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Print a one-row CSV summary of deposit + withdrawal volumes for an AlphaVault token."""
+"""Print a one-row CSV summary of deposit + unwrap volumes for an AlphaVault token."""
 
 import argparse
 import sys
@@ -39,7 +39,7 @@ def main() -> None:
         to_block=args.block_end,
         argument_filters=arg_filters,
     )
-    withdraw_logs = vault.events.Withdrawn.get_logs(
+    unwrap_logs = vault.events.Unwrapped.get_logs(
         from_block=args.block_start,
         to_block=args.block_end,
         argument_filters=arg_filters,
@@ -51,9 +51,9 @@ def main() -> None:
         "deposit_count": len(deposit_logs),
         "total_assets_in": sum(log["args"]["assets"] for log in deposit_logs),
         "total_shares_minted": sum(log["args"]["shares"] for log in deposit_logs),
-        "withdraw_count": len(withdraw_logs),
-        "total_shares_burned": sum(log["args"]["shares"] for log in withdraw_logs),
-        "total_assets_out": sum(log["args"]["assets"] for log in withdraw_logs),
+        "unwrap_count": len(unwrap_logs),
+        "total_shares_burned": sum(log["args"]["shares"] for log in unwrap_logs),
+        "total_assets_out": sum(log["args"]["assets"] for log in unwrap_logs),
     }
 
     writer = make_csv_writer(sys.stdout, list(row))

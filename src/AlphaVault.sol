@@ -22,7 +22,7 @@ import { StorageQueryReader } from "./libraries/StorageQueryReader.sol";
 ///   - Each vault tracks its own sharePrice independently: totalStake[netuid] / totalShares(netuid).
 ///   - EIP-1167 clones serve as deterministic "Mailbox" deposit addresses per (user, netuid).
 ///   - Validators + weights are read exclusively from ValidatorRegistry (no on-chain fallback).
-///   - Deposits and withdraws run a full rebalance (up to N-1 `moveStake`s) toward the
+///   - Deposits and unwraps run a full rebalance (up to N-1 `moveStake`s) toward the
 ///     attested weights.
 ///   - Explicit `rebalance(netuid)` is still callable if rebalancing is desired immediately.
 ///   - State-mutating calls sweep alpha off hotkeys dropped from the registry since the
@@ -58,12 +58,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
 
     // ──────────────────── Events ────────────────────────────────────────────────
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
-    event Withdrawn(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 assets);
+    event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 assets);
     event ValidatorRegistryUpdated(address oldRegistry, address newRegistry);
     event MinRebalanceAmtUpdated(uint256 oldValue, uint256 newValue);
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
-    event WithdrawnForTao(
+    event UnwrappedForTao(
         address indexed user, uint256 indexed tokenId, uint256 shares, uint256 assetsBurned, uint256 taoOut
     );
     event MailboxAlphaSoldForTao(
@@ -81,7 +81,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     error SubnetNotRegistered();
     error SubnetInDissolutionBlackoutPeriod();
     error SubnetDissolved();
-    error NothingToWithdraw();
+    error NothingToUnwrap();
     error NoSharesOutstanding();
     error DepositTooSmall();
     error NetuidOutOfRange();
@@ -133,7 +133,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     ///         rebalance the position to the attested BPS weights.
     /// @dev    Caller-restriction prevents an attacker flushing the clone before the user is ready.
     ///         The call flushes only the mailbox balance recorded under `chosenHotkey`; a mailbox
-    ///         holding stake under multiple hotkeys requires one `processDeposit` per hotkey.
+    ///         holding stake under multiple hotkeys requires one `wrap` per hotkey.
     ///         `chosenHotkey` must be in the current attested validator set; reverts with
     ///         `ChosenHotkeyNotInSet` otherwise. Use `reclaimAlphaFromMailbox` to recover alpha
     ///         parked under a non-attested hotkey.
@@ -141,9 +141,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     ///         tripping subtensor's `AmountTooLow` floor on `moveStake`. Small deposits may
     ///         therefore leave the position drifted from target weights by less than
     ///         `minRebalanceAmt` per slot; the drift persists until a later deposit or
-    ///         withdraw produces a residual above the floor. Calling `rebalance()` does not
+    ///         unwrap produces a residual above the floor. Calling `rebalance()` does not
     ///         clear sub-floor drift since it applies the same threshold.
-    function processDeposit(address user, uint256 netuid, bytes32 chosenHotkey) external nonReentrant {
+    function wrap(address user, uint256 netuid, bytes32 chosenHotkey) external nonReentrant {
         if (msg.sender != user && msg.sender != owner()) revert UnauthorizedCaller();
         if (chosenHotkey == bytes32(0)) revert ZeroHotkey();
 
@@ -188,7 +188,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         emit Deposited(user, tokenId, totalDeposit, shares);
     }
 
-    // ──────────────────── Withdraw Flow ─────────────────────────────────────────
+    // ──────────────────── Unwrap Flow ─────────────────────────────────────────
 
     /// @notice Burn shares and redeem the underlying position.
     /// @dev    Dispatches on subnet state:
@@ -202,7 +202,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     /// @param  tokenId              ERC1155 tokenId identifying the (netuid, regBlock) position.
     /// @param  shares               Shares to burn.
     /// @param  userSubstrateColdkey Destination coldkey for alpha on the live path (unused on dissolved path).
-    function withdraw(uint256 tokenId, uint256 shares, bytes32 userSubstrateColdkey) external nonReentrant {
+    function unwrap(uint256 tokenId, uint256 shares, bytes32 userSubstrateColdkey) external nonReentrant {
         if (shares == 0) revert ZeroAmount();
         if (balanceOf(msg.sender, tokenId) < shares) revert InsufficientShares();
         address clone = subnetClone[tokenId];
@@ -219,17 +219,17 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     /// @param  tokenId    Vault token id.
     /// @param  shares     Shares to burn.
     /// @param  minTaoOut  Slippage floor; revert if realized TAO is less.
-    function withdrawForTao(uint256 tokenId, uint256 shares, uint256 minTaoOut) external nonReentrant {
+    function unwrapForTao(uint256 tokenId, uint256 shares, uint256 minTaoOut) external nonReentrant {
         if (shares == 0) revert ZeroAmount();
         if (balanceOf(msg.sender, tokenId) < shares) revert InsufficientShares();
         address clone = subnetClone[tokenId];
-        if (clone == address(0)) revert NothingToWithdraw();
+        if (clone == address(0)) revert NothingToUnwrap();
         uint16 netuid = _netuid(tokenId);
 
         (bytes32[6] memory hotkeys, uint256[6] memory balances, uint256 total) = _drainCandidates(tokenId, netuid);
         // Dissolution permanently zeroes the alpha balance, so a non-zero total already implies
         // a live subnet and a zero total cannot be exited via this rail regardless of cause.
-        if (total == 0) revert NothingToWithdraw();
+        if (total == 0) revert NothingToUnwrap();
 
         totalStake[tokenId] = total;
         uint256 assets = _convertToAssets(tokenId, shares);
@@ -256,8 +256,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         uint256 taoOut = clone.balance - balanceBefore;
         if (taoOut < minTaoOut) revert SlippageExceeded(taoOut);
 
-        SubnetClone(payable(clone)).withdrawTao(payable(msg.sender), taoOut);
-        emit WithdrawnForTao(msg.sender, tokenId, shares, assets, taoOut);
+        SubnetClone(payable(clone)).unwrapTao(payable(msg.sender), taoOut);
+        emit UnwrappedForTao(msg.sender, tokenId, shares, assets, taoOut);
     }
 
     function _redeemLivePosition(
@@ -273,7 +273,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
 
         uint256[3] memory balances = _fetchBalances(hotkeys, validatorCount, coldkey, netuid);
         uint256 totalAlpha = _sumBalances(balances);
-        if (totalAlpha == 0) revert NothingToWithdraw();
+        if (totalAlpha == 0) revert NothingToUnwrap();
 
         uint256 assets = _assetsFor(totalAlpha, totalSupply(tokenId), shares);
         if (assets == 0) revert ZeroAmount();
@@ -282,7 +282,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         _drainAssets(hotkeys, balances, validatorCount, clone, netuid, userSubstrateColdkey, assets);
         _alignToWeights(tokenId, clone, hotkeys, weights, balances);
 
-        emit Withdrawn(msg.sender, tokenId, shares, assets);
+        emit Unwrapped(msg.sender, tokenId, shares, assets);
     }
 
     /// @dev Drain `assets` alpha to `userColdkey` across the active validator set.
@@ -312,14 +312,14 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     function _redeemDissolvedPosition(uint256 tokenId, uint256 shares, address clone, uint16 netuid) private {
         if (StorageQueryReader.isNetuidInDissolvedQueue(netuid)) revert SubnetInDissolutionBlackoutPeriod();
         uint256 cloneBalance = clone.balance;
-        if (cloneBalance == 0) revert NothingToWithdraw();
+        if (cloneBalance == 0) revert NothingToUnwrap();
 
         uint256 supplyBefore = totalSupply(tokenId);
         uint256 userTao = (cloneBalance * shares) / supplyBefore;
         _burn(msg.sender, tokenId, shares);
-        if (userTao > 0) SubnetClone(payable(clone)).withdrawTao(payable(msg.sender), userTao);
+        if (userTao > 0) SubnetClone(payable(clone)).unwrapTao(payable(msg.sender), userTao);
         if (supplyBefore == shares) totalStake[tokenId] = 0;
-        emit Withdrawn(msg.sender, tokenId, shares, userTao);
+        emit Unwrapped(msg.sender, tokenId, shares, userTao);
     }
 
     // ──────────────────── Rebalance ───────────────────────────────────────────
@@ -459,7 +459,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, regBlock) position.
     /// @param  assets  Amount of alpha being deposited.
     /// @return Number of shares that would be minted.
-    function previewDeposit(uint256 tokenId, uint256 assets) external view returns (uint256) {
+    function previewWrap(uint256 tokenId, uint256 assets) external view returns (uint256) {
         if (StorageQueryReader.isNetuidInDissolvedQueue(_netuid(tokenId))) {
             revert SubnetInDissolutionBlackoutPeriod();
         }
@@ -472,7 +472,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     /// @param  shares  Shares being previewed.
     /// @return alpha   Alpha redeemable on the live path.
     /// @return tao     Native TAO redeemable on the dissolved path.
-    function previewWithdraw(uint256 tokenId, uint256 shares) external view returns (uint256 alpha, uint256 tao) {
+    function previewUnwrap(uint256 tokenId, uint256 shares) external view returns (uint256 alpha, uint256 tao) {
         if (shares == 0) return (0, 0);
         address clone = subnetClone[tokenId];
         if (clone == address(0)) return (0, 0);
@@ -553,7 +553,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         uint256 amount = predicted.balance;
         if (amount == 0) revert ZeroAmount();
         _ensureMailboxClone(msg.sender, netuid);
-        DepositMailbox(payable(predicted)).withdrawTao(payable(msg.sender), amount);
+        DepositMailbox(payable(predicted)).unwrapTao(payable(msg.sender), amount);
     }
 
     /// @notice Reclaim alpha stake parked in the caller's mailbox back to a substrate coldkey.
@@ -599,7 +599,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
 
         uint256 taoOut = predicted.balance - balanceBefore;
         if (taoOut < minTaoOut) revert SlippageExceeded(taoOut);
-        DepositMailbox(payable(predicted)).withdrawTao(payable(msg.sender), taoOut);
+        DepositMailbox(payable(predicted)).unwrapTao(payable(msg.sender), taoOut);
         emit MailboxAlphaSoldForTao(msg.sender, netuid, hotkey, amount, taoOut);
     }
 

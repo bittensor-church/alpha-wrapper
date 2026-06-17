@@ -5,17 +5,17 @@ import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
-import { RevertingReceiver, WithdrawForTaoReentrantReceiver } from "./helpers/TaoRailReceivers.sol";
+import { RevertingReceiver, UnwrapForTaoReentrantReceiver } from "./helpers/TaoRailReceivers.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-contract WithdrawForTaoTest is AlphaVaultTestBase {
-    event WithdrawnForTao(
+contract UnwrapForTaoTest is AlphaVaultTestBase {
+    event UnwrappedForTao(
         address indexed user, uint256 indexed tokenId, uint256 shares, uint256 assetsBurned, uint256 taoOut
     );
 
     function _depositForAlice(uint256 amount) internal returns (uint256 shares) {
         _simulateAlphaDeposit(alice, NETUID1, amount);
-        _processDeposit(alice, NETUID1);
+        _wrap(alice, NETUID1);
         shares = vault.balanceOf(alice, TOKEN1);
     }
 
@@ -25,7 +25,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
         uint256 aliceBalanceBefore = alice.balance;
 
         vm.prank(alice);
-        vault.withdrawForTao(TOKEN1, shares, 0);
+        vault.unwrapForTao(TOKEN1, shares, 0);
 
         assertEq(vault.balanceOf(alice, TOKEN1), 0);
         assertEq(alice.balance - aliceBalanceBefore, 100 ether);
@@ -47,7 +47,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
         uint256 balanceBefore = alice.balance;
 
         vm.prank(alice);
-        vault.withdrawForTao(TOKEN1, half, 0);
+        vault.unwrapForTao(TOKEN1, half, 0);
 
         assertEq(alice.balance - balanceBefore, 50 ether);
     }
@@ -62,7 +62,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
-        vault.withdrawForTao(TOKEN1, shares, 0);
+        vault.unwrapForTao(TOKEN1, shares, 0);
 
         assertEq(alice.balance - balanceBefore, 100 ether);
     }
@@ -81,7 +81,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
-        vault.withdrawForTao(TOKEN1, shares, 0);
+        vault.unwrapForTao(TOKEN1, shares, 0);
 
         assertEq(alice.balance - balanceBefore, 100 ether);
     }
@@ -92,7 +92,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
-        vault.withdrawForTao(TOKEN1, shares, 0);
+        vault.unwrapForTao(TOKEN1, shares, 0);
         assertEq(alice.balance - balanceBefore, 1 ether);
     }
 
@@ -103,7 +103,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
-        vault.withdrawForTao(TOKEN1, shares, expected);
+        vault.unwrapForTao(TOKEN1, shares, expected);
         assertEq(alice.balance - balanceBefore, expected);
     }
 
@@ -111,14 +111,14 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
         _depositForAlice(100 ether);
         vm.prank(alice);
         vm.expectRevert(AlphaVault.ZeroAmount.selector);
-        vault.withdrawForTao(TOKEN1, 0, 0);
+        vault.unwrapForTao(TOKEN1, 0, 0);
     }
 
     function test_RevertWhen_SharesExceedCallerBalance() public {
         uint256 shares = _depositForAlice(100 ether);
         vm.prank(alice);
         vm.expectRevert(AlphaVault.InsufficientShares.selector);
-        vault.withdrawForTao(TOKEN1, shares + 1, 0);
+        vault.unwrapForTao(TOKEN1, shares + 1, 0);
     }
 
     // After dissolution zeroes the alpha and credits a TAO refund to the clone, this rail must
@@ -128,8 +128,8 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
         _simulateNewNetworkRegistered(TOKEN1, 999, 5 ether);
 
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.NothingToWithdraw.selector);
-        vault.withdrawForTao(TOKEN1, shares, 0);
+        vm.expectRevert(AlphaVault.NothingToUnwrap.selector);
+        vault.unwrapForTao(TOKEN1, shares, 0);
     }
 
     // Single-validator set so the minimum-stake deposit isn't split across slots, then burn
@@ -139,13 +139,13 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
         _setRemoveStakeRate(1, 1);
         uint256 depositAmount = vault.minRebalanceAmt();
         _simulateAlphaDeposit(alice, NETUID1, depositAmount);
-        _processDeposit(alice, NETUID1);
+        _wrap(alice, NETUID1);
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         require(shares > 1, "test requires shares > 1 after deposit");
 
         vm.prank(alice);
         vm.expectRevert(AlphaVault.ZeroAmount.selector);
-        vault.withdrawForTao(TOKEN1, 1, 0);
+        vault.unwrapForTao(TOKEN1, 1, 0);
     }
 
     function test_RevertWhen_RealizedTaoBelowMinTaoOut() public {
@@ -155,7 +155,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(AlphaVault.SlippageExceeded.selector, expected));
-        vault.withdrawForTao(TOKEN1, shares, expected + 1);
+        vault.unwrapForTao(TOKEN1, shares, expected + 1);
     }
 
     function test_SucceedsWhenAlphaRailBlockedByTransferToggle() public {
@@ -167,11 +167,11 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
         bytes32 dest = keccak256("dest");
         vm.prank(alice);
         vm.expectRevert();
-        vault.withdraw(TOKEN1, shares, dest);
+        vault.unwrap(TOKEN1, shares, dest);
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
-        vault.withdrawForTao(TOKEN1, shares, 0);
+        vault.unwrapForTao(TOKEN1, shares, 0);
         assertEq(alice.balance - balanceBefore, 100 ether);
     }
 
@@ -184,7 +184,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert();
-        vault.withdrawForTao(TOKEN1, shares, 0);
+        vault.unwrapForTao(TOKEN1, shares, 0);
 
         assertEq(vault.balanceOf(alice, TOKEN1), shares);
     }
@@ -200,7 +200,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
-        vault.withdrawForTao(TOKEN1, shares, 0);
+        vault.unwrapForTao(TOKEN1, shares, 0);
 
         assertEq(alice.balance - balanceBefore, 100 ether);
         assertEq(clone.balance, 5 ether);
@@ -212,70 +212,70 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
         _setRemoveStakeRate(1, 1);
         RevertingReceiver receiver = new RevertingReceiver();
         _simulateAlphaDeposit(address(receiver), NETUID1, 100 ether);
-        _processDeposit(address(receiver), NETUID1);
+        _wrap(address(receiver), NETUID1);
         uint256 shares = vault.balanceOf(address(receiver), TOKEN1);
 
         vm.prank(address(receiver));
         vm.expectRevert();
-        vault.withdrawForTao(TOKEN1, shares, 0);
+        vault.unwrapForTao(TOKEN1, shares, 0);
 
         assertEq(vault.balanceOf(address(receiver), TOKEN1), shares);
     }
 
     // The reentrancy guard must reject a recipient whose receive hook tries to call back in.
-    function test_ReentrantWithdrawForTaoIsRejectedByGuard() public {
+    function test_ReentrantUnwrapForTaoIsRejectedByGuard() public {
         _setRemoveStakeRate(1, 1);
-        WithdrawForTaoReentrantReceiver receiver = new WithdrawForTaoReentrantReceiver();
+        UnwrapForTaoReentrantReceiver receiver = new UnwrapForTaoReentrantReceiver();
         _simulateAlphaDeposit(address(receiver), NETUID1, 100 ether);
-        _processDeposit(address(receiver), NETUID1);
+        _wrap(address(receiver), NETUID1);
         uint256 shares = vault.balanceOf(address(receiver), TOKEN1);
         receiver.arm(vault, TOKEN1, shares);
 
         vm.prank(address(receiver));
-        vault.withdrawForTao(TOKEN1, shares, 0);
+        vault.unwrapForTao(TOKEN1, shares, 0);
 
         // The re-entry was rejected specifically by the guard, not by some incidental revert.
         assertEq(
             receiver.reentryError(), abi.encodeWithSelector(ReentrancyGuard.ReentrancyGuardReentrantCall.selector)
         );
         assertFalse(receiver.reentrySucceeded());
-        // The legitimate (outer) withdrawal still completed: all shares were burned.
+        // The legitimate (outer) unwrap still completed: all shares were burned.
         assertEq(vault.balanceOf(address(receiver), TOKEN1), 0);
     }
 
-    function test_MultipleUsers_ProRataConsistentAcrossSequentialWithdrawals() public {
+    function test_MultipleUsers_ProRataConsistentAcrossSequentialUnwraps() public {
         _setRemoveStakeRate(1, 1);
         uint256 aliceShares = _depositForAlice(100 ether);
 
         _simulateAlphaDeposit(bob, NETUID1, 100 ether);
-        _processDeposit(bob, NETUID1);
+        _wrap(bob, NETUID1);
         uint256 bobShares = vault.balanceOf(bob, TOKEN1);
 
         uint256 aliceBalanceBefore = alice.balance;
         vm.prank(alice);
-        vault.withdrawForTao(TOKEN1, aliceShares, 0);
+        vault.unwrapForTao(TOKEN1, aliceShares, 0);
         assertEq(alice.balance - aliceBalanceBefore, 100 ether);
 
         uint256 bobBalanceBefore = bob.balance;
         vm.prank(bob);
-        vault.withdrawForTao(TOKEN1, bobShares, 0);
+        vault.unwrapForTao(TOKEN1, bobShares, 0);
         assertEq(bob.balance - bobBalanceBefore, 100 ether);
     }
 
-    function test_AlphaRailWithdrawRemainsWorkingAfterTaoWithdrawByDifferentHolder() public {
+    function test_AlphaRailUnwrapRemainsWorkingAfterTaoUnwrapByDifferentHolder() public {
         _setRemoveStakeRate(1, 1);
         uint256 aliceShares = _depositForAlice(100 ether);
 
         _simulateAlphaDeposit(bob, NETUID1, 100 ether);
-        _processDeposit(bob, NETUID1);
+        _wrap(bob, NETUID1);
         uint256 bobShares = vault.balanceOf(bob, TOKEN1);
 
         vm.prank(alice);
-        vault.withdrawForTao(TOKEN1, aliceShares, 0);
+        vault.unwrapForTao(TOKEN1, aliceShares, 0);
 
         bytes32 bobDest = keccak256("bobDest");
         vm.prank(bob);
-        vault.withdraw(TOKEN1, bobShares, bobDest);
+        vault.unwrap(TOKEN1, bobShares, bobDest);
 
         assertEq(vault.balanceOf(bob, TOKEN1), 0);
         uint256 bobReceived = MockStaking(STAKING_PRECOMPILE).getStake(hotkey1, bobDest, NETUID1)
@@ -285,8 +285,8 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
     }
 
     // Validator emissions grow the clone's stake above the original deposit; the share-price
-    // recalibration must capture this so the withdrawer is paid the appreciated value.
-    function test_WithdrawForTao_PaysOutAccruedEmissionsAboveOriginalDeposit() public {
+    // recalibration must capture this so the unwrapper is paid the appreciated value.
+    function test_UnwrapForTao_PaysOutAccruedEmissionsAboveOriginalDeposit() public {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
 
@@ -297,7 +297,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
-        vault.withdrawForTao(TOKEN1, shares, 0);
+        vault.unwrapForTao(TOKEN1, shares, 0);
 
         // The share-price cushion trims a couple of wei off the nominal 110 ether; the
         // tolerance pins the value while accommodating that rounding.
@@ -305,16 +305,16 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
     }
 
     // Event payload must carry every field off-chain indexers rely on.
-    function test_WithdrawForTao_EmitsWithdrawnForTaoEvent() public {
+    function test_UnwrapForTao_EmitsUnwrappedForTaoEvent() public {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
         uint256 expectedTao = _expectedTaoFor(100 ether);
 
         vm.expectEmit(true, true, false, true, address(vault));
-        emit WithdrawnForTao(alice, TOKEN1, shares, 100 ether, expectedTao);
+        emit UnwrappedForTao(alice, TOKEN1, shares, 100 ether, expectedTao);
 
         vm.prank(alice);
-        vault.withdrawForTao(TOKEN1, shares, 0);
+        vault.unwrapForTao(TOKEN1, shares, 0);
     }
 
     function test_PartialBurnAtNonUnitRatePaysScaledProportionalTao() public {
@@ -323,7 +323,7 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
-        vault.withdrawForTao(TOKEN1, shares / 2, 0);
+        vault.unwrapForTao(TOKEN1, shares / 2, 0);
 
         // Half the shares realize ~50 ether of alpha; the 1/2 rate scales that to 25 ether TAO.
         assertEq(alice.balance - balanceBefore, 25 ether);
@@ -343,28 +343,28 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
-        vault.withdrawForTao(TOKEN1, sharesForThirty, 0);
+        vault.unwrapForTao(TOKEN1, sharesForThirty, 0);
 
         assertEq(alice.balance - balanceBefore, 30 ether);
         assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey2, cloneCk, NETUID1), 40 ether);
         assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey1, cloneCk, NETUID1), 30 ether);
     }
 
-    // A single user who withdraws half their shares via the TAO rail must be able to
-    // withdraw the remainder via the alpha rail without share accounting errors.
-    function test_SingleUser_CanWithdrawHalfViaTaoRailThenHalfViaAlphaRail() public {
+    // A single user who unwraps half their shares via the TAO rail must be able to
+    // unwrap the remainder via the alpha rail without share accounting errors.
+    function test_SingleUser_CanUnwrapHalfViaTaoRailThenHalfViaAlphaRail() public {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
         uint256 half = shares / 2;
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
-        vault.withdrawForTao(TOKEN1, half, 0);
+        vault.unwrapForTao(TOKEN1, half, 0);
         assertEq(alice.balance - balanceBefore, 50 ether);
 
         bytes32 dest = keccak256("alice-substrate");
         vm.prank(alice);
-        vault.withdraw(TOKEN1, shares - half, dest);
+        vault.unwrap(TOKEN1, shares - half, dest);
 
         assertEq(vault.balanceOf(alice, TOKEN1), 0);
         uint256 received = MockStaking(STAKING_PRECOMPILE).getStake(hotkey1, dest, NETUID1)
@@ -373,14 +373,14 @@ contract WithdrawForTaoTest is AlphaVaultTestBase {
         assertApproxEqAbs(received, 50 ether, 1e9);
     }
 
-    // After a partial TAO-rail withdrawal the on-chain stake is reduced; rebalance must
+    // After a partial TAO-rail unwrap the on-chain stake is reduced; rebalance must
     // still be able to run on the remaining stake without reverting.
-    function test_RebalanceWorksAfterPartialWithdrawForTao() public {
+    function test_RebalanceWorksAfterPartialUnwrapForTao() public {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
 
         vm.prank(alice);
-        vault.withdrawForTao(TOKEN1, shares / 2, 0);
+        vault.unwrapForTao(TOKEN1, shares / 2, 0);
 
         vault.rebalance(NETUID1);
 

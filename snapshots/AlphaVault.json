@@ -1,7 +1,7 @@
 {
-  "processDeposit: first": "503215",
-  "processDeposit: subsequent": "258859",
   "rebalance: after registry weight update": "119098",
-  "withdraw: full": "169691",
-  "withdraw: partial": "197491"
+  "unwrap: full": "170131",
+  "unwrap: partial": "197931",
+  "wrap: first": "503237",
+  "wrap: subsequent": "258881"
 }

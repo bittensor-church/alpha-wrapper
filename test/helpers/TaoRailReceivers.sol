@@ -15,10 +15,10 @@ contract RevertingReceiver {
     }
 }
 
-/// @dev On receiving TAO, re-enters `withdrawForTao` and captures the revert (instead of
+/// @dev On receiving TAO, re-enters `unwrapForTao` and captures the revert (instead of
 ///      propagating it) so the outer call completes and the test can assert the reentrancy guard
 ///      specifically rejected the re-entry. Holds ERC1155 shares so it needs the acceptance hook.
-contract WithdrawForTaoReentrantReceiver {
+contract UnwrapForTaoReentrantReceiver {
     AlphaVault target;
     uint256 tokenId;
     uint256 shares;
@@ -39,7 +39,7 @@ contract WithdrawForTaoReentrantReceiver {
     receive() external payable {
         if (entered) return;
         entered = true;
-        try target.withdrawForTao(tokenId, shares, 0) {
+        try target.unwrapForTao(tokenId, shares, 0) {
             reentrySucceeded = true;
         } catch (bytes memory err) {
             reentryError = err;
