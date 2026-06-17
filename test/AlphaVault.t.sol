@@ -2134,4 +2134,118 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 minMatchable = maxOver < maxUnder ? maxOver : maxUnder;
         assertLt(minMatchable, minAmt, "rebalance reaches floor-bounded fixpoint");
     }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //   Rounding-to-zero / empty-state guards
+    // ══════════════════════════════════════════════════════════════════════
+
+    function test_ProcessDepositRejectsZeroShareDustButAcceptsRealDeposit() public {
+        _simulateAlphaDeposit(alice, NETUID1, 2e6);
+        _processDeposit(alice, NETUID1);
+        _simulateEmissions(NETUID1, 1e22);
+
+        // Floor-sized dust prices to 0 shares against the inflated pool -> rejected, nothing minted.
+        _simulateAlphaDeposit(bob, NETUID1, 2e6);
+        vm.prank(bob);
+        vm.expectRevert(AlphaVault.ZeroAmount.selector);
+        vault.processDeposit(bob, NETUID1, hotkey1);
+        assertEq(vault.balanceOf(bob, TOKEN1), 0);
+
+        // A deposit past the rounding boundary is accepted and mints real shares.
+        _simulateAlphaDeposit(bob, NETUID1, 1e16);
+        _processDepositHotkey(bob, NETUID1, hotkey1);
+        assertGt(vault.balanceOf(bob, TOKEN1), 0);
+    }
+
+    function test_WithdrawRevertsOnZeroStakeButPaysWhenStakePresent() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _processDeposit(alice, NETUID1);
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        bytes32 ck = _subnetColdkey(NETUID1);
+
+        // On-chain stake vanished -> withdraw reverts NothingToWithdraw without burning shares.
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, ck, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, ck, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, ck, NETUID1, 0);
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.NothingToWithdraw.selector);
+        vault.withdraw(TOKEN1, shares, _toSubstrate(alice));
+
+        // Shares survived the failed attempt: once stake is present the same position redeems for it.
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, ck, NETUID1, 5 ether);
+        vm.prank(alice);
+        vault.withdraw(TOKEN1, shares, _toSubstrate(alice));
+        uint256 received =
+            _getStake(hotkey1, alice, NETUID1) + _getStake(hotkey2, alice, NETUID1) + _getStake(hotkey3, alice, NETUID1);
+        assertApproxEqAbs(received, 5 ether, 1e9);
+        assertEq(vault.balanceOf(alice, TOKEN1), 0);
+    }
+
+    function test_WithdrawRejectsDustSharesButPaysRealAmount() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _processDeposit(alice, NETUID1);
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+
+        // 1 share against ~1e28 supply / ~1e19 stake rounds to 0 assets: fires the assets==0
+        // guard (not NothingToWithdraw, totalAlpha is still > 0), no shares burned.
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.ZeroAmount.selector);
+        vault.withdraw(TOKEN1, 1, _toSubstrate(alice));
+        assertEq(vault.balanceOf(alice, TOKEN1), shares);
+
+        // A real share amount redeems for its proportional value.
+        vm.prank(alice);
+        vault.withdraw(TOKEN1, shares / 2, _toSubstrate(alice));
+        uint256 received =
+            _getStake(hotkey1, alice, NETUID1) + _getStake(hotkey2, alice, NETUID1) + _getStake(hotkey3, alice, NETUID1);
+        assertApproxEqAbs(received, 5 ether, 1e9);
+    }
+
+    function test_DissolvedWithdrawRevertsOnZeroTaoButRedeemsWhenFunded() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _processDeposit(alice, NETUID1);
+        uint256 tokenId = vault.currentTokenId(NETUID1);
+        uint256 shares = vault.balanceOf(alice, tokenId);
+        address clone = vault.subnetClone(tokenId);
+
+        _simulateDissolutionStarted(tokenId, 0);
+        _simulateTaoAwardedOnDissolution(tokenId, 0);
+        _simulateDissolutionCompleted(NETUID1);
+
+        // Clone holds 0 TAO -> withdraw reverts NothingToWithdraw without burning shares.
+        assertEq(clone.balance, 0);
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.NothingToWithdraw.selector);
+        vault.withdraw(tokenId, shares, _toSubstrate(alice));
+
+        // Shares survived: once the dissolution TAO lands, the same position redeems for it.
+        vm.deal(clone, 7 ether);
+        uint256 before = alice.balance;
+        vm.prank(alice);
+        vault.withdraw(tokenId, shares, _toSubstrate(alice));
+        assertEq(alice.balance - before, 7 ether);
+        assertEq(vault.balanceOf(alice, tokenId), 0);
+    }
+
+    function test_PreviewWithdrawNonZeroWhileHeldZeroAfterFullBurn() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _processDeposit(alice, NETUID1);
+        uint256 tokenId = vault.currentTokenId(NETUID1);
+        uint256 shares = vault.balanceOf(alice, tokenId);
+
+        // While held, preview quotes the real redeemable amount.
+        (uint256 alphaHeld,) = vault.previewWithdraw(tokenId, shares);
+        assertApproxEqAbs(alphaHeld, 10 ether, 1e9);
+
+        vm.prank(alice);
+        vault.withdraw(tokenId, shares, _toSubstrate(alice));
+
+        // After a full burn the clone is kept and still holds orphaned alpha; preview must report
+        // (0,0) on supply==0 rather than quote a garbage pro-rata of that alpha against 0 supply.
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(NETUID1), NETUID1, 1 ether);
+        assertEq(vault.totalSupply(tokenId), 0);
+        (uint256 alphaBurned, uint256 taoBurned) = vault.previewWithdraw(tokenId, 1);
+        assertEq(alphaBurned, 0);
+        assertEq(taoBurned, 0);
+    }
 }
