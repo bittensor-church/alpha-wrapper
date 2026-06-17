@@ -24,6 +24,9 @@
 #  10. Observability scripts → verify event-derived state
 #  11. Reclaim mailbox alpha for TAO → verify user receives native TAO
 #  12. Withdraw shares for TAO → verify user receives native TAO
+#  13. Emission accrual → position appreciates above deposit; holder withdraws the gain
+#  14. Validator rotation orphans stake → withdraw sweeps it (no funds stranded)
+#  15. withdrawForTao slippage guard against the real alpha→TAO price
 #
 # Usage:
 #   chmod +x scripts/localnet-e2e.sh
@@ -681,6 +684,205 @@ GAINED=$(python3 -c "print($USER_TAO_POST - $USER_TAO_PRE)")
 python3 -c "import sys; sys.exit(0 if $GAINED > 0 else 1)" \
     || fail "user did not gain TAO from withdrawForTao (net change: $GAINED wei)"
 ok "User gained $GAINED wei (net of gas)"
+
+log "Phase 13: Emission accrual → share-price appreciation (alpha rail)"
+
+# Real emissions accrue on the clone's staked alpha over blocks: the position must appreciate
+# above the deposit, and the holder must be able to withdraw that gain. Mocks fake emissions,
+# so only a live chain exercises this core value-accrual property.
+EMIT_NET="${NETUIDS[0]}"
+EMIT_TID="${VAULT_IDS[0]}"
+
+EMIT_MAILBOX=$(cast call "$VAULT_ADDR" "getDepositAddress(address,uint256)(address)" \
+    "$WRAPPER_ADDR" "$EMIT_NET" --rpc-url "$RPC_URL")
+info "Transferring 50 alpha from Alice → mailbox under ${ALL_HK_B32S[0]:0:18}..."
+transfer_stake_py "$(h160_to_ss58 "$EMIT_MAILBOX")" "${ALL_HK_SS58S[0]}" "$EMIT_NET" 50000000000 | tail -1
+
+TX_JSON=$(cast send "$VAULT_ADDR" \
+    "processDeposit(address,uint256,bytes32)" \
+    "$WRAPPER_ADDR" "$EMIT_NET" "${ALL_HK_B32S[0]}" \
+    --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
+    $EVM_FLAGS --gas-limit 1500000 --json || true)
+STATUS=$(echo "$TX_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
+if [[ "$STATUS" != "0x1" ]]; then
+    echo "$TX_JSON"
+    fail "Phase 13 processDeposit failed (status=$STATUS)"
+fi
+
+EMIT_SHARES=$(cast call "$VAULT_ADDR" "balanceOf(address,uint256)(uint256)" "$WRAPPER_ADDR" "$EMIT_TID" --rpc-url "$RPC_URL" | awk '{print $1}')
+EMIT_DEPOSITED=$(cast call "$VAULT_ADDR" "totalStake(uint256)(uint256)" "$EMIT_TID" --rpc-url "$RPC_URL" | awk '{print $1}')
+[[ "$EMIT_SHARES" != "0" ]] || fail "Phase 13: no shares minted"
+ok "Deposited 50 alpha → shares=$EMIT_SHARES, deposit-synced totalStake=$EMIT_DEPOSITED RAO"
+
+info "Waiting ~30 blocks for emissions to accrue..."
+EMIT_TARGET=$(( $(cast block-number --rpc-url "$RPC_URL") + 30 ))
+while [[ $(cast block-number --rpc-url "$RPC_URL") -lt "$EMIT_TARGET" ]]; do
+    python3 -c "import time; time.sleep(1)"
+done
+
+EMIT_PREVIEW=$(cast call "$VAULT_ADDR" "previewWithdraw(uint256,uint256)(uint256,uint256)" "$EMIT_TID" "$EMIT_SHARES" --rpc-url "$RPC_URL" | head -1 | awk '{print $1}')
+APPRECIATED=$(python3 -c "print('yes' if $EMIT_PREVIEW > $EMIT_DEPOSITED else 'no')")
+[[ "$APPRECIATED" == "yes" ]] || fail "Phase 13: no appreciation (previewWithdraw $EMIT_PREVIEW ≤ deposit $EMIT_DEPOSITED)"
+ok "previewWithdraw rose to $EMIT_PREVIEW RAO (> deposit $EMIT_DEPOSITED) — emissions accrued on-chain"
+
+# Sum the user's coldkey stake across the validators before and after, so the payout is the delta.
+EMIT_BEFORE=0
+for j in 0 1 2; do
+    BAL=$(cast call "$STAKING" "getStake(bytes32,bytes32,uint256)(uint256)" "${ALL_HK_B32S[$j]}" "$WRAPPER_SUB_B32" "$EMIT_NET" --rpc-url "$RPC_URL" | awk '{print $1}')
+    EMIT_BEFORE=$((EMIT_BEFORE + BAL))
+done
+
+TX_JSON=$(cast send "$VAULT_ADDR" \
+    "withdraw(uint256,uint256,bytes32)" \
+    "$EMIT_TID" "$EMIT_SHARES" "$WRAPPER_SUB_B32" \
+    --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
+    $EVM_FLAGS --gas-limit 2000000 --json || true)
+STATUS=$(echo "$TX_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
+if [[ "$STATUS" != "0x1" ]]; then
+    echo "$TX_JSON"
+    fail "Phase 13 withdraw failed (status=$STATUS)"
+fi
+
+EMIT_AFTER=0
+for j in 0 1 2; do
+    BAL=$(cast call "$STAKING" "getStake(bytes32,bytes32,uint256)(uint256)" "${ALL_HK_B32S[$j]}" "$WRAPPER_SUB_B32" "$EMIT_NET" --rpc-url "$RPC_URL" | awk '{print $1}')
+    EMIT_AFTER=$((EMIT_AFTER + BAL))
+done
+EMIT_RECEIVED=$((EMIT_AFTER - EMIT_BEFORE))
+CAPTURED=$(python3 -c "print('yes' if $EMIT_RECEIVED > $EMIT_DEPOSITED else 'no')")
+[[ "$CAPTURED" == "yes" ]] || fail "Phase 13: emissions not captured (received $EMIT_RECEIVED ≤ deposit $EMIT_DEPOSITED)"
+ok "User withdrew $EMIT_RECEIVED RAO > deposited $EMIT_DEPOSITED — appreciation captured on the alpha rail"
+
+log "Phase 14: Validator rotation orphans stake → withdraw sweeps it (no funds stranded)"
+
+# Rotating a validator out of the registry strands the clone's stake under it. The next withdraw
+# must sweep that orphan (real moveStake) and still pay the holder full value — a live-chain-only
+# check of the rotation/sweep path against real staking mechanics and the minRebalanceAmt floor.
+ROT_NET="${NETUIDS[1]}"
+ROT_TID="${VAULT_IDS[1]}"
+ROT_HK0="${ALL_HK_B32S[3]}"
+ROT_HK1="${ALL_HK_B32S[4]}"
+ROT_HK2="${ALL_HK_B32S[5]}"
+
+ROT_MAILBOX=$(cast call "$VAULT_ADDR" "getDepositAddress(address,uint256)(address)" \
+    "$WRAPPER_ADDR" "$ROT_NET" --rpc-url "$RPC_URL")
+info "Transferring 60 alpha from Alice → mailbox under ${ROT_HK0:0:18}..."
+transfer_stake_py "$(h160_to_ss58 "$ROT_MAILBOX")" "${ALL_HK_SS58S[3]}" "$ROT_NET" 60000000000 | tail -1
+
+TX_JSON=$(cast send "$VAULT_ADDR" \
+    "processDeposit(address,uint256,bytes32)" \
+    "$WRAPPER_ADDR" "$ROT_NET" "$ROT_HK0" \
+    --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
+    $EVM_FLAGS --gas-limit 1500000 --json || true)
+STATUS=$(echo "$TX_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
+if [[ "$STATUS" != "0x1" ]]; then
+    echo "$TX_JSON"
+    fail "Phase 14 processDeposit failed (status=$STATUS)"
+fi
+
+ROT_SHARES=$(cast call "$VAULT_ADDR" "balanceOf(address,uint256)(uint256)" "$WRAPPER_ADDR" "$ROT_TID" --rpc-url "$RPC_URL" | awk '{print $1}')
+ROT_DEPOSITED=$(cast call "$VAULT_ADDR" "totalStake(uint256)(uint256)" "$ROT_TID" --rpc-url "$RPC_URL" | awk '{print $1}')
+ROT_CLONE=$(cast call "$VAULT_ADDR" "subnetClone(uint256)(address)" "$ROT_TID" --rpc-url "$RPC_URL")
+ROT_CLONE_SUB=$(h160_to_substrate_b32 "$ROT_CLONE")
+ROT_ORPHAN=$(cast call "$STAKING" "getStake(bytes32,bytes32,uint256)(uint256)" "$ROT_HK2" "$ROT_CLONE_SUB" "$ROT_NET" --rpc-url "$RPC_URL" | awk '{print $1}')
+[[ "$ROT_ORPHAN" != "0" ]] || fail "Phase 14: no stake under the 3rd validator to orphan"
+ok "Deposited 60 alpha → shares=$ROT_SHARES; clone holds $ROT_ORPHAN RAO under the soon-orphaned 3rd validator"
+
+# Drop the 3rd validator from the registry via a real EIP-712 attestation; no vault call runs,
+# so the vault's last-seen snapshot still references it and its stake becomes an orphan.
+set_validators_py "$ROT_NET" "$ROT_HK0,$ROT_HK1" "6000,4000" > /dev/null
+ok "Rotated registry → [v0, v1]; 3rd validator dropped with $ROT_ORPHAN RAO orphaned"
+
+ROT_BEFORE=0
+for HK in "$ROT_HK0" "$ROT_HK1" "$ROT_HK2"; do
+    BAL=$(cast call "$STAKING" "getStake(bytes32,bytes32,uint256)(uint256)" "$HK" "$WRAPPER_SUB_B32" "$ROT_NET" --rpc-url "$RPC_URL" | awk '{print $1}')
+    ROT_BEFORE=$((ROT_BEFORE + BAL))
+done
+
+TX_JSON=$(cast send "$VAULT_ADDR" \
+    "withdraw(uint256,uint256,bytes32)" \
+    "$ROT_TID" "$ROT_SHARES" "$WRAPPER_SUB_B32" \
+    --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
+    $EVM_FLAGS --gas-limit 2000000 --json || true)
+STATUS=$(echo "$TX_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
+if [[ "$STATUS" != "0x1" ]]; then
+    echo "$TX_JSON"
+    fail "Phase 14 withdraw failed (status=$STATUS)"
+fi
+
+ROT_AFTER=0
+for HK in "$ROT_HK0" "$ROT_HK1" "$ROT_HK2"; do
+    BAL=$(cast call "$STAKING" "getStake(bytes32,bytes32,uint256)(uint256)" "$HK" "$WRAPPER_SUB_B32" "$ROT_NET" --rpc-url "$RPC_URL" | awk '{print $1}')
+    ROT_AFTER=$((ROT_AFTER + BAL))
+done
+ROT_RECEIVED=$((ROT_AFTER - ROT_BEFORE))
+ROT_ORPHAN_POST=$(cast call "$STAKING" "getStake(bytes32,bytes32,uint256)(uint256)" "$ROT_HK2" "$ROT_CLONE_SUB" "$ROT_NET" --rpc-url "$RPC_URL" | awk '{print $1}')
+
+# The sweep adds extra moveStake/drain ops, each losing ≤1 RAO to integer rounding
+# (Phase 9's simpler single withdraw uses TOLERANCE_RAO=10).
+SWEPT=$(python3 -c "print('yes' if $ROT_RECEIVED >= $ROT_DEPOSITED - 100 else 'no')")
+[[ "$SWEPT" == "yes" ]] || fail "Phase 14: orphan not swept (received $ROT_RECEIVED << deposit $ROT_DEPOSITED)"
+[[ "$ROT_ORPHAN_POST" == "0" ]] || fail "Phase 14: orphan NOT swept (3rd validator still holds $ROT_ORPHAN_POST RAO)"
+ok "Orphan swept; user received $ROT_RECEIVED RAO (≈ deposit $ROT_DEPOSITED), orphaned validator drained to 0"
+
+log "Phase 15: withdrawForTao slippage guard against the real alpha→TAO price"
+
+# minTaoOut must reject a payout below the threshold against the REAL realized price (mocks use a
+# fixed configurable rate). An unsatisfiable minTaoOut reverts with shares intact; minTaoOut=0 pays.
+SLIP_NET="${NETUIDS[2]}"
+SLIP_TID="${VAULT_IDS[2]}"
+
+SLIP_MAILBOX=$(cast call "$VAULT_ADDR" "getDepositAddress(address,uint256)(address)" \
+    "$WRAPPER_ADDR" "$SLIP_NET" --rpc-url "$RPC_URL")
+info "Transferring 40 alpha from Alice → mailbox under ${ALL_HK_B32S[6]:0:18}..."
+transfer_stake_py "$(h160_to_ss58 "$SLIP_MAILBOX")" "${ALL_HK_SS58S[6]}" "$SLIP_NET" 40000000000 | tail -1
+
+TX_JSON=$(cast send "$VAULT_ADDR" \
+    "processDeposit(address,uint256,bytes32)" \
+    "$WRAPPER_ADDR" "$SLIP_NET" "${ALL_HK_B32S[6]}" \
+    --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
+    $EVM_FLAGS --gas-limit 1500000 --json || true)
+STATUS=$(echo "$TX_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
+if [[ "$STATUS" != "0x1" ]]; then
+    echo "$TX_JSON"
+    fail "Phase 15 processDeposit failed (status=$STATUS)"
+fi
+
+SLIP_SHARES=$(cast call "$VAULT_ADDR" "balanceOf(address,uint256)(uint256)" "$WRAPPER_ADDR" "$SLIP_TID" --rpc-url "$RPC_URL" | awk '{print $1}')
+[[ "$SLIP_SHARES" != "0" ]] || fail "Phase 15: no shares minted"
+ok "Deposited 40 alpha → shares=$SLIP_SHARES"
+
+# An unsatisfiable minTaoOut (1e30 wei) must revert and leave the shares untouched.
+TX_JSON=$(cast send "$VAULT_ADDR" \
+    "withdrawForTao(uint256,uint256,uint256)" \
+    "$SLIP_TID" "$SLIP_SHARES" 1000000000000000000000000000000 \
+    --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
+    $EVM_FLAGS --gas-limit 2500000 --json || true)
+STATUS=$(echo "$TX_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
+[[ "$STATUS" != "0x1" ]] || fail "Phase 15: withdrawForTao with minTaoOut=1e30 did NOT revert"
+SLIP_SHARES_AFTER=$(cast call "$VAULT_ADDR" "balanceOf(address,uint256)(uint256)" "$WRAPPER_ADDR" "$SLIP_TID" --rpc-url "$RPC_URL" | awk '{print $1}')
+[[ "$SLIP_SHARES_AFTER" == "$SLIP_SHARES" ]] || fail "Phase 15: shares changed after a reverted withdrawForTao ($SLIP_SHARES → $SLIP_SHARES_AFTER)"
+ok "Slippage guard rejected an unsatisfiable minTaoOut; shares preserved ($SLIP_SHARES)"
+
+# minTaoOut=0 succeeds against the real realized price; the user gains native TAO.
+SLIP_TAO_PRE=$(cast balance "$WRAPPER_ADDR" --rpc-url "$RPC_URL" | awk '{print $1}')
+TX_JSON=$(cast send "$VAULT_ADDR" \
+    "withdrawForTao(uint256,uint256,uint256)" \
+    "$SLIP_TID" "$SLIP_SHARES" 0 \
+    --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
+    $EVM_FLAGS --gas-limit 2500000 --json || true)
+STATUS=$(echo "$TX_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
+if [[ "$STATUS" != "0x1" ]]; then
+    echo "$TX_JSON"
+    fail "Phase 15 withdrawForTao(minTaoOut=0) failed (status=$STATUS)"
+fi
+SLIP_SHARES_FINAL=$(cast call "$VAULT_ADDR" "balanceOf(address,uint256)(uint256)" "$WRAPPER_ADDR" "$SLIP_TID" --rpc-url "$RPC_URL" | awk '{print $1}')
+[[ "$SLIP_SHARES_FINAL" == "0" ]] || fail "Phase 15: shares not burned ($SLIP_SHARES_FINAL)"
+SLIP_TAO_POST=$(cast balance "$WRAPPER_ADDR" --rpc-url "$RPC_URL" | awk '{print $1}')
+SLIP_GAINED=$(python3 -c "print($SLIP_TAO_POST - $SLIP_TAO_PRE)")
+python3 -c "import sys; sys.exit(0 if $SLIP_GAINED > 0 else 1)" \
+    || fail "Phase 15: user did not gain TAO (net $SLIP_GAINED wei)"
+ok "minTaoOut=0 paid $SLIP_GAINED wei net of gas against the real price; shares burned to 0"
 
 log "E2E complete"
 echo "  AlphaVault:        $VAULT_ADDR"
