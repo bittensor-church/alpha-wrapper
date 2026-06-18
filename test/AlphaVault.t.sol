@@ -157,8 +157,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         vm.prank(bob);
         vault.unwrap(TOKEN1, bobShares, _toSubstrate(bob));
-        uint256 bobReceived = _getStake(hotkey1, bob, NETUID1) + _getStake(hotkey2, bob, NETUID1)
-            + _getStake(hotkey3, bob, NETUID1);
+        uint256 bobReceived =
+            _getStake(hotkey1, bob, NETUID1) + _getStake(hotkey2, bob, NETUID1) + _getStake(hotkey3, bob, NETUID1);
 
         assertApproxEqAbs(aliceReceived, 20 ether, 1e12);
         assertApproxEqAbs(bobReceived, 10 ether, 1e12);
@@ -2175,8 +2175,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, ck, NETUID1, 5 ether);
         vm.prank(alice);
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
-        uint256 received =
-            _getStake(hotkey1, alice, NETUID1) + _getStake(hotkey2, alice, NETUID1) + _getStake(hotkey3, alice, NETUID1);
+        uint256 received = _getStake(hotkey1, alice, NETUID1) + _getStake(hotkey2, alice, NETUID1)
+            + _getStake(hotkey3, alice, NETUID1);
         assertApproxEqAbs(received, 5 ether, 1e9);
         assertEq(vault.balanceOf(alice, TOKEN1), 0);
     }
@@ -2196,8 +2196,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         // A real share amount redeems for its proportional value.
         vm.prank(alice);
         vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));
-        uint256 received =
-            _getStake(hotkey1, alice, NETUID1) + _getStake(hotkey2, alice, NETUID1) + _getStake(hotkey3, alice, NETUID1);
+        uint256 received = _getStake(hotkey1, alice, NETUID1) + _getStake(hotkey2, alice, NETUID1)
+            + _getStake(hotkey3, alice, NETUID1);
         assertApproxEqAbs(received, 5 ether, 1e9);
     }
 

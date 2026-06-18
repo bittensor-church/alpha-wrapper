@@ -235,9 +235,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         vault.unwrapForTao(TOKEN1, shares, 0);
 
         // The re-entry was rejected specifically by the guard, not by some incidental revert.
-        assertEq(
-            receiver.reentryError(), abi.encodeWithSelector(ReentrancyGuard.ReentrancyGuardReentrantCall.selector)
-        );
+        assertEq(receiver.reentryError(), abi.encodeWithSelector(ReentrancyGuard.ReentrancyGuardReentrantCall.selector));
         assertFalse(receiver.reentrySucceeded());
         // The legitimate (outer) unwrap still completed: all shares were burned.
         assertEq(vault.balanceOf(address(receiver), TOKEN1), 0);

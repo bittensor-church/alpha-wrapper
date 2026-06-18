@@ -138,9 +138,7 @@ contract ReclaimMailboxAlphaAsTaoTest is AlphaVaultTestBase {
         vault.reclaimMailboxAlphaAsTao(NETUID1, hotkey1, 0);
 
         // The re-entry was rejected specifically by the guard, not by some incidental revert.
-        assertEq(
-            receiver.reentryError(), abi.encodeWithSelector(ReentrancyGuard.ReentrancyGuardReentrantCall.selector)
-        );
+        assertEq(receiver.reentryError(), abi.encodeWithSelector(ReentrancyGuard.ReentrancyGuardReentrantCall.selector));
         assertFalse(receiver.reentrySucceeded());
         // The legitimate (outer) reclaim still completed: the mailbox stake is drained.
         address predicted = vault.getDepositAddress(address(receiver), NETUID1);
