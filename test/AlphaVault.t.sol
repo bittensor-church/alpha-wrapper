@@ -258,9 +258,10 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     // ────────────────── Preview ──────────────────────────────────────────────
 
-    function test_PreviewWrap() public view {
-        // Empty vault: previewWrap = assets * VIRTUAL_SHARES / VIRTUAL_ASSETS = 10e18 * 1e9.
-        assertEq(vault.previewWrap(TOKEN1, 10 ether), 10 ether * 1e9);
+    function testFuzz_PreviewWrapScalesLinearlyOnEmptyVault(uint256 assets) public view {
+        // Empty vault: previewWrap = assets * VIRTUAL_SHARES / VIRTUAL_ASSETS = assets * 1e9 (assets bound to u64).
+        assets = bound(assets, 0, type(uint64).max);
+        assertEq(vault.previewWrap(TOKEN1, assets), assets * 1e9);
     }
 
     function test_PreviewUnwrap() public {
@@ -2125,21 +2126,37 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     //   Rounding-to-zero / empty-state guards
     // ══════════════════════════════════════════════════════════════════════
 
-    function test_WrapRejectsZeroShareDustButAcceptsRealDeposit() public {
+    // Inflate the pool so the share price sits far above 1 asset/share: alice seeds 2e6 (supply 2e15),
+    // then 1e22 of emissions accrue. The rounding boundary for a fresh deposit becomes
+    // ~ preStake / supply = 1e22 / 2e15 ≈ 5e6 assets, well above the 2e6 minRebalanceAmt floor.
+    function _inflatedPool() private {
         _simulateAlphaDeposit(alice, NETUID1, 2e6);
         _wrap(alice, NETUID1);
         _simulateEmissions(NETUID1, 1e22);
+    }
 
-        // Floor-sized dust prices to 0 shares against the inflated pool -> rejected, nothing minted.
-        _simulateAlphaDeposit(bob, NETUID1, 2e6);
+    // Deposits that clear the minRebalanceAmt floor but still price to 0 shares against the inflated
+    // pool (≤ 4e6, safely below the ~5e6 boundary) must revert ZeroAmount and mint nothing.
+    function testFuzz_WrapRevertsWhenDepositRoundsToZeroShares(uint256 dust) public {
+        _inflatedPool();
+        dust = bound(dust, vault.minRebalanceAmt(), 4e6);
+
+        _simulateAlphaDeposit(bob, NETUID1, dust);
         vm.prank(bob);
         vm.expectRevert(AlphaVault.ZeroAmount.selector);
         vault.wrap(bob, NETUID1, hotkey1);
-        assertEq(vault.balanceOf(bob, TOKEN1), 0);
 
-        // A deposit past the rounding boundary is accepted and mints real shares.
-        _simulateAlphaDeposit(bob, NETUID1, 1e16);
+        assertEq(vault.balanceOf(bob, TOKEN1), 0);
+    }
+
+    // Deposits past the rounding boundary (≥ 1e7, safely above ~5e6) are accepted and mint real shares.
+    function testFuzz_WrapAcceptsDepositsAboveRoundingBoundary(uint256 deposit) public {
+        _inflatedPool();
+        deposit = bound(deposit, 1e7, type(uint64).max);
+
+        _simulateAlphaDeposit(bob, NETUID1, deposit);
         _wrapHotkey(bob, NETUID1, hotkey1);
+
         assertGt(vault.balanceOf(bob, TOKEN1), 0);
     }
 
