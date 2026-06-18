@@ -38,16 +38,6 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     // ────────────────── Best Validator Selection ─────────────────────────────
 
-    function test_BestValidatorSelection() public view {
-        assertEq(vault.getBestValidator(NETUID1), hotkey1);
-        assertEq(vault.getBestValidator(NETUID2), hotkey2);
-    }
-
-    function test_RevertWhen_NoValidator() public {
-        vm.expectRevert(AlphaVault.NoValidatorFound.selector);
-        vault.getBestValidator(99);
-    }
-
     function test_GetBestValidatorsReturnsThree() public view {
         bytes32[3] memory hks = vault.getBestValidators(NETUID1);
         assertEq(hks[0], hotkey1);
@@ -703,7 +693,6 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(result[0], hotkey4);
         assertEq(result[1], bytes32(0));
         assertEq(result[2], bytes32(0));
-        assertEq(vault.getBestValidator(91), hotkey4);
     }
 
     function test_SubnetCloneCanMoveStake() public {
@@ -896,9 +885,6 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         vm.expectRevert(AlphaVault.NetuidOutOfRange.selector);
         vault.getDepositAddress(alice, oob);
-
-        vm.expectRevert(AlphaVault.NetuidOutOfRange.selector);
-        vault.getBestValidator(oob);
 
         vm.expectRevert(AlphaVault.NetuidOutOfRange.selector);
         vault.getBestValidators(oob);
