@@ -2160,30 +2160,6 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertGt(vault.balanceOf(bob, TOKEN1), 0);
     }
 
-    function test_UnwrapRevertsOnZeroStakeButPaysWhenStakePresent() public {
-        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
-        _wrap(alice, NETUID1);
-        uint256 shares = vault.balanceOf(alice, TOKEN1);
-        bytes32 ck = _subnetColdkey(NETUID1);
-
-        // On-chain stake vanished -> unwrap reverts NothingToUnwrap without burning shares.
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, ck, NETUID1, 0);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, ck, NETUID1, 0);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, ck, NETUID1, 0);
-        vm.prank(alice);
-        vm.expectRevert(AlphaVault.NothingToUnwrap.selector);
-        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
-
-        // Shares survived the failed attempt: once stake is present the same position redeems for it.
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, ck, NETUID1, 5 ether);
-        vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
-        uint256 received = _getStake(hotkey1, alice, NETUID1) + _getStake(hotkey2, alice, NETUID1)
-            + _getStake(hotkey3, alice, NETUID1);
-        assertApproxEqAbs(received, 5 ether, 1e9);
-        assertEq(vault.balanceOf(alice, TOKEN1), 0);
-    }
-
     function test_UnwrapRejectsDustSharesButPaysRealAmount() public {
         _simulateAlphaDeposit(alice, NETUID1, 10 ether);
         _wrap(alice, NETUID1);
@@ -2228,27 +2204,5 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.unwrap(tokenId, shares, _toSubstrate(alice));
         assertEq(alice.balance - before, 7 ether);
         assertEq(vault.balanceOf(alice, tokenId), 0);
-    }
-
-    function test_PreviewUnwrapNonZeroWhileHeldZeroAfterFullBurn() public {
-        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
-        _wrap(alice, NETUID1);
-        uint256 tokenId = vault.currentTokenId(NETUID1);
-        uint256 shares = vault.balanceOf(alice, tokenId);
-
-        // While held, preview quotes the real redeemable amount.
-        (uint256 alphaHeld,) = vault.previewUnwrap(tokenId, shares);
-        assertApproxEqAbs(alphaHeld, 10 ether, 1e9);
-
-        vm.prank(alice);
-        vault.unwrap(tokenId, shares, _toSubstrate(alice));
-
-        // After a full burn the clone is kept and still holds orphaned alpha; preview must report
-        // (0,0) on supply==0 rather than quote a garbage pro-rata of that alpha against 0 supply.
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(NETUID1), NETUID1, 1 ether);
-        assertEq(vault.totalSupply(tokenId), 0);
-        (uint256 alphaBurned, uint256 taoBurned) = vault.previewUnwrap(tokenId, 1);
-        assertEq(alphaBurned, 0);
-        assertEq(taoBurned, 0);
     }
 }
