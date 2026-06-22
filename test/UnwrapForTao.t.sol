@@ -3,8 +3,6 @@ pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
-import { MockStaking } from "./mocks/MockStaking.sol";
-import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 import { RevertingReceiver, UnwrapForTaoReentrantReceiver } from "./helpers/TaoRailReceivers.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
@@ -14,9 +12,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     );
 
     function _depositForAlice(uint256 amount) internal returns (uint256 shares) {
-        _simulateAlphaDeposit(alice, NETUID1, amount);
-        _wrap(alice, NETUID1);
-        shares = vault.balanceOf(alice, TOKEN1);
+        shares = _depositAndWrap(alice, NETUID1, amount);
     }
 
     function test_BurnAllShares_PaysFullAlphaAsTao() public {
@@ -37,11 +33,8 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
 
-        bytes32 cloneCk = _subnetColdkey(NETUID1);
         // Overwrite all three hotkeys so the total sums to exactly 100 ether.
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneCk, NETUID1, 60 ether);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneCk, NETUID1, 40 ether);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneCk, NETUID1, 0);
+        _setVaultStakes(NETUID1, 60 ether, 40 ether, 0);
 
         uint256 half = shares / 2;
         uint256 balanceBefore = alice.balance;
@@ -57,7 +50,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         uint256 shares = _depositForAlice(100 ether);
 
         // Re-attest to a new validator without running any state-mutating vault call, so the
-        // historical snapshot continues to point at the hotkeys that hold the deposit.
+        // last-seen snapshot continues to hold the hotkeys that hold the deposit.
         _setValidators(NETUID1, _hotkeys(hotkey4), _weights(10000));
 
         uint256 balanceBefore = alice.balance;
@@ -69,15 +62,12 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
 
     // A hotkey reachable from both candidate sources must be drained exactly once; if the
     // dedup were broken the second call against the now-empty stake would underflow and revert.
-    function test_DedupsHotkeyPresentInBothCurrentSetAndLastSeenSnapshot() public {
+    function test_UnwrapForTao_DedupsUnionHotkeys() public {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
 
-        bytes32 cloneCk = _subnetColdkey(NETUID1);
         // Consolidate all 100 ether onto hotkey1 and zero out the rest.
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneCk, NETUID1, 100 ether);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneCk, NETUID1, 0);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneCk, NETUID1, 0);
+        _setVaultStakes(NETUID1, 100 ether, 0, 0);
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
@@ -137,9 +127,8 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_RevertWhen_ProRataAssetsRoundsToZero() public {
         _setValidators(NETUID1, _hotkeys(hotkey1), _weights(10000));
         _setRemoveStakeRate(1, 1);
-        uint256 depositAmount = vault.minRebalanceAmt();
-        _simulateAlphaDeposit(alice, NETUID1, depositAmount);
-        _wrap(alice, NETUID1);
+        uint256 depositAmount = MIN_STAKE_FLOOR;
+        _depositAndWrap(alice, NETUID1, depositAmount);
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         require(shares > 1, "test requires shares > 1 after deposit");
 
@@ -175,18 +164,54 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         assertEq(alice.balance - balanceBefore, 100 ether);
     }
 
-    // Any failure on the underlying swap must roll back the outer call so the caller's
-    // shares stay intact and they can retry later.
-    function test_RemoveStakeRevertBubblesUp_PreservesCallerShares() public {
+    // When every sell fails (here the swap precompile reverts), nothing is delivered, so the exit
+    // reverts WithdrawTooSmall and the burn rolls back, leaving the caller's shares intact.
+    function test_RevertWhen_AllSellsFail() public {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
         _setRemoveStakeReverts(true);
 
+        // A full-balance sell that fails is a real fault, so it bubbles instead of being skipped;
+        // the revert rolls back the burn and the caller keeps every share.
         vm.prank(alice);
-        vm.expectRevert();
+        vm.expectRevert("MockStaking: removeStake reverted");
         vault.unwrapForTao(TOKEN1, shares, 0);
 
         assertEq(vault.balanceOf(alice, TOKEN1), shares);
+    }
+
+    // One validator's pool being illiquid (a non-floor sell failure on a full-balance slice) must
+    // abort the whole exit and roll back the slices that already cleared, never silently delivering
+    // a fraction of fair value and forfeiting the rest to the remaining holders.
+    function test_RevertWhen_OneFullSliceSellFails() public {
+        _setRemoveStakeRate(1, 1);
+        uint256 shares = _depositForAlice(100 ether);
+        (bytes32[3] memory hotkeys,) = registry.getValidators(NETUID1);
+        _setRemoveStakeRevertsFor(hotkeys[1], true);
+
+        uint256 balanceBefore = alice.balance;
+        vm.prank(alice);
+        vm.expectRevert("MockStaking: removeStake reverted");
+        vault.unwrapForTao(TOKEN1, shares, 0);
+
+        assertEq(vault.balanceOf(alice, TOKEN1), shares);
+        assertEq(alice.balance, balanceBefore);
+    }
+
+    function test_RevertWhen_AboveFloorPartialSellFails() public {
+        _setRemoveStakeRate(1, 1);
+        uint256 shares = _depositForAlice(60e6);
+        (bytes32[3] memory hotkeys,) = registry.getValidators(NETUID1);
+        _setVaultStakes(NETUID1, 40e6, 20e6, 0);
+        _setRemoveStakeRevertsFor(hotkeys[0], true);
+
+        // Burning half targets ~30e6: slot 0 (40e6 > 30e6) takes the partial branch, which is
+        // far above the floor, so the fault must bubble instead of being skipped as dust.
+        vm.prank(alice);
+        vm.expectRevert(bytes("MockStaking: removeStake reverted"));
+        vault.unwrapForTao(TOKEN1, shares / 2, 0);
+
+        assertEq(vault.balanceOf(alice, TOKEN1), shares, "shares intact after bubbled failure");
     }
 
     // A native TAO gift sent directly to the clone before the call must be excluded from
@@ -276,22 +301,17 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, bobShares, bobDest);
 
         assertEq(vault.balanceOf(bob, TOKEN1), 0);
-        uint256 bobReceived = MockStaking(STAKING_PRECOMPILE).getStake(hotkey1, bobDest, NETUID1)
-            + MockStaking(STAKING_PRECOMPILE).getStake(hotkey2, bobDest, NETUID1)
-            + MockStaking(STAKING_PRECOMPILE).getStake(hotkey3, bobDest, NETUID1);
+        uint256 bobReceived = _userStakeAcrossHotkeys(bobDest, NETUID1);
         assertApproxEqAbs(bobReceived, 100 ether, 1e9);
     }
 
     // Validator emissions grow the clone's stake above the original deposit; the share-price
-    // recalibration must capture this so the unwrapper is paid the appreciated value.
+    // recalibration must capture this so the withdrawer is paid the appreciated value.
     function test_UnwrapForTao_PaysOutAccruedEmissionsAboveOriginalDeposit() public {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
 
-        bytes32 cloneCk = _subnetColdkey(NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneCk, NETUID1, 60 ether);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneCk, NETUID1, 40 ether);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneCk, NETUID1, 10 ether);
+        _setVaultStakes(NETUID1, 60 ether, 40 ether, 10 ether);
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
@@ -332,10 +352,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
 
-        bytes32 cloneCk = _subnetColdkey(NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneCk, NETUID1, 60 ether);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneCk, NETUID1, 40 ether);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneCk, NETUID1, 0);
+        _setVaultStakes(NETUID1, 60 ether, 40 ether, 0);
 
         uint256 sharesForThirty = (shares * 30) / 100;
 
@@ -344,8 +361,8 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         vault.unwrapForTao(TOKEN1, sharesForThirty, 0);
 
         assertEq(alice.balance - balanceBefore, 30 ether);
-        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey2, cloneCk, NETUID1), 40 ether);
-        assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey1, cloneCk, NETUID1), 30 ether);
+        assertEq(_getVaultStake(hotkey2, NETUID1), 40 ether);
+        assertEq(_getVaultStake(hotkey1, NETUID1), 30 ether);
     }
 
     // A single user who unwraps half their shares via the TAO rail must be able to
@@ -365,13 +382,11 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, shares - half, dest);
 
         assertEq(vault.balanceOf(alice, TOKEN1), 0);
-        uint256 received = MockStaking(STAKING_PRECOMPILE).getStake(hotkey1, dest, NETUID1)
-            + MockStaking(STAKING_PRECOMPILE).getStake(hotkey2, dest, NETUID1)
-            + MockStaking(STAKING_PRECOMPILE).getStake(hotkey3, dest, NETUID1);
+        uint256 received = _userStakeAcrossHotkeys(dest, NETUID1);
         assertApproxEqAbs(received, 50 ether, 1e9);
     }
 
-    // After a partial TAO-rail unwrap the on-chain stake is reduced; rebalance must
+    // After a partial TAO-rail withdrawal the on-chain stake is reduced; rebalance must
     // still be able to run on the remaining stake without reverting.
     function test_RebalanceWorksAfterPartialUnwrapForTao() public {
         _setRemoveStakeRate(1, 1);
@@ -386,6 +401,141 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         assertApproxEqAbs(_getVaultStake(hotkey1, NETUID1), _weighted(50 ether, NETUID1_BPS_HK1), 1e9);
         assertApproxEqAbs(_getVaultStake(hotkey2, NETUID1), _weighted(50 ether, NETUID1_BPS_HK2), 1e9);
         assertApproxEqAbs(_getVaultStake(hotkey3, NETUID1), _weighted(50 ether, NETUID1_BPS_HK3), 1e9);
+    }
+
+    // A sub-floor full drain sells untouched: a full unstake is floor-exempt, so dust on a
+    // fully-drained validator still exits.
+    function test_SubFloorFullDrain_SoldViaFullUnstakeExemption() public {
+        _setRemoveStakeRate(1, 1);
+        _depositForAlice(100 ether);
+        uint256 total = _setVaultStakes(NETUID1, 1e6, 40 ether, 0);
+        uint256 assets = 1e6 + 5e6;
+        uint256 shares = _sharesForExactAssets(TOKEN1, assets, total);
+
+        uint256 balanceBefore = alice.balance;
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares, 0);
+
+        assertEq(alice.balance - balanceBefore, assets);
+        assertEq(_getVaultStake(hotkey1, NETUID1), 0, "sub-floor full drain sold via the exemption");
+        assertEq(_getVaultStake(hotkey2, NETUID1), 40 ether - 5e6);
+    }
+
+    // A split landing exactly on a validator boundary needs no partial slice.
+    function test_TailOnExactValidatorBoundary_SoldAsFullDrain() public {
+        _setRemoveStakeRate(1, 1);
+        _depositForAlice(100 ether);
+        uint256 total = _setVaultStakes(NETUID1, 60 ether, 40 ether, 0);
+        uint256 assets = 60 ether;
+        uint256 shares = _sharesForExactAssets(TOKEN1, assets, total);
+
+        uint256 balanceBefore = alice.balance;
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares, assets);
+
+        assertEq(alice.balance - balanceBefore, assets);
+        assertEq(_getVaultStake(hotkey1, NETUID1), 0);
+        assertEq(_getVaultStake(hotkey2, NETUID1), 40 ether, "later validator untouched");
+    }
+
+    // A position whose only sellable slice is a sub-floor partial sells nothing, so the exit
+    // reverts and the burn rolls back rather than forfeiting the shares.
+    function test_RevertWhen_PositionTooSmallToExit() public {
+        _setRemoveStakeRate(1, 1);
+        _depositForAlice(100 ether);
+        uint256 sharesBefore = vault.balanceOf(alice, TOKEN1);
+        uint256 total = _setVaultStakes(NETUID1, 40 ether, 0, 0);
+        uint256 shares = _sharesForExactAssets(TOKEN1, 1e6, total);
+
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
+        vault.unwrapForTao(TOKEN1, shares, 0);
+
+        assertEq(vault.balanceOf(alice, TOKEN1), sharesBefore, "burn rolled back with the revert");
+    }
+
+    // A sub-floor final slice is skipped: the exempt full drain is delivered, the dust remainder
+    // stays in the pool, and the caller is paid the reduced amount (minTaoOut is slack here).
+    function test_SubFloorFinalSlice_UnderDeliversBoundedDust() public {
+        _setRemoveStakeRate(1, 1);
+        _depositForAlice(100 ether);
+        uint256 total = _setVaultStakes(NETUID1, 5e6, 0, 40 ether);
+        // 5e6 full-drains hotkey1 (exempt); the 1e6 remainder on hotkey3 is a sub-floor partial.
+        uint256 shares = _sharesForExactAssets(TOKEN1, 5e6 + 1e6, total);
+
+        uint256 balanceBefore = alice.balance;
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares, 0);
+
+        assertEq(alice.balance - balanceBefore, 5e6, "delivered the exempt full drain, skipped the dust");
+        assertEq(_getVaultStake(hotkey1, NETUID1), 0, "full drain sold");
+        assertEq(_getVaultStake(hotkey3, NETUID1), 40 ether, "sub-floor remainder left in the pool");
+        assertEq(vault.totalStake(TOKEN1), total - 5e6, "only the delivered alpha left the vault");
+    }
+
+    // minTaoOut guards the caller against that under-delivery: demanding the full assets reverts
+    // and the burn rolls back.
+    function test_RevertWhen_UnderDeliveryBreaksMinTaoOut() public {
+        _setRemoveStakeRate(1, 1);
+        _depositForAlice(100 ether);
+        uint256 sharesBefore = vault.balanceOf(alice, TOKEN1);
+        uint256 total = _setVaultStakes(NETUID1, 5e6, 0, 40 ether);
+        uint256 shares = _sharesForExactAssets(TOKEN1, 5e6 + 1e6, total);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(AlphaVault.SlippageExceeded.selector, 5e6));
+        vault.unwrapForTao(TOKEN1, shares, 5e6 + 1e6);
+
+        assertEq(vault.balanceOf(alice, TOKEN1), sharesBefore, "burn rolled back with the slippage revert");
+    }
+
+    // Documented escape hatch for a dust position: top up with one more deposit to lift the
+    // position above the floor, then exit everything in a single withdrawal at full value.
+    function test_DustPosition_TopUpEnablesFullValueExit() public {
+        _setRemoveStakeRate(1, 1);
+        uint256 shares = _depositForAlice(100 ether);
+
+        // Alice keeps a dust position worth 1e6 and parts with the rest of her shares.
+        uint256 dustShares = _sharesForExactAssets(TOKEN1, 1e6, 100 ether);
+        vm.prank(alice);
+        vault.safeTransferFrom(alice, bob, TOKEN1, shares - dustShares, "");
+
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
+        vault.unwrapForTao(TOKEN1, dustShares, 0);
+
+        _depositAndWrap(alice, NETUID1, 5e6);
+
+        uint256 allShares = vault.balanceOf(alice, TOKEN1);
+        (uint256 expectedAssets,) = vault.previewUnwrap(TOKEN1, allShares);
+        uint256 balanceBefore = alice.balance;
+
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, allShares, expectedAssets);
+
+        assertEq(alice.balance - balanceBefore, expectedAssets);
+        assertEq(vault.balanceOf(alice, TOKEN1), 0, "entire position exited");
+        assertGe(expectedAssets, 6e6 - 1, "dust value recovered in full alongside the top-up");
+    }
+
+    // The spot floor and the chain's realized-output floor disagree in a narrow band: a partial
+    // remainder can clear the spot floor yet be rejected once the swap fee is applied. The sell is
+    // bare, so the rejection bubbles and the whole exit reverts with shares intact.
+    function test_RevertWhen_PartialSellBelowSimFloor() public {
+        _setRemoveStakeRate(999, 1000);
+        _depositForAlice(100 ether);
+        // Concentrate everything on one hotkey so the first slice is a partial sell.
+        _setVaultStakes(NETUID1, 100 ether, 0, 0);
+
+        uint256 targetAssets = MIN_STAKE_FLOOR; // clears the spot floor, but not after the sim fee
+        uint256 burnShares = _sharesForExactAssets(TOKEN1, targetAssets, 100 ether);
+
+        uint256 sharesBefore = vault.balanceOf(alice, TOKEN1);
+        vm.prank(alice);
+        vm.expectRevert(bytes("MockStaking: AmountTooLow"));
+        vault.unwrapForTao(TOKEN1, burnShares, 0);
+
+        assertEq(vault.balanceOf(alice, TOKEN1), sharesBefore, "shares intact after the bubbled sim-floor rejection");
     }
 
     receive() external payable { }

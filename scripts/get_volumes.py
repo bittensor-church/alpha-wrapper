@@ -53,7 +53,7 @@ def main() -> None:
         "total_shares_minted": sum(log["args"]["shares"] for log in deposit_logs),
         "unwrap_count": len(unwrap_logs),
         "total_shares_burned": sum(log["args"]["shares"] for log in unwrap_logs),
-        "total_assets_out": sum(log["args"]["assets"] for log in unwrap_logs),
+        "total_assets_out": sum(log["args"]["amountOut"] for log in unwrap_logs),
     }
 
     writer = make_csv_writer(sys.stdout, list(row))

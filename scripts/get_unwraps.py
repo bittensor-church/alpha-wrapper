@@ -15,7 +15,7 @@ class UnwrappedEvent:
     user: str
     token_id: int
     shares: int
-    assets: int
+    amount_out: int
 
 
 def main() -> None:
@@ -33,7 +33,7 @@ def main() -> None:
             user=ev_args["user"],
             token_id=ev_args["tokenId"],
             shares=ev_args["shares"],
-            assets=ev_args["assets"],
+            amount_out=ev_args["amountOut"],
         )
         for log, ev_args in fetch_event_logs(
             w3, args.vault_address, "AlphaVault", "Unwrapped",

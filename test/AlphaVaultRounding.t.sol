@@ -9,18 +9,18 @@ import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 contract AlphaVaultRoundingTest is AlphaVaultTestBase {
     // Inflate the pool so the share price sits far above 1 asset/share: alice seeds 2e6 (supply 2e15),
     // then 1e22 of emissions accrue. The rounding boundary for a fresh deposit becomes
-    // ~ preStake / supply = 1e22 / 2e15 ≈ 5e6 assets, well above the 2e6 minRebalanceAmt floor.
+    // ~ preStake / supply = 1e22 / 2e15 ≈ 5e6 assets, well above the 2e6 minimum-stake floor.
     function _inflatedPool() private {
         _simulateAlphaDeposit(alice, NETUID1, 2e6);
         _wrap(alice, NETUID1);
         _simulateEmissions(NETUID1, 1e22);
     }
 
-    // Deposits that clear the minRebalanceAmt floor but still price to 0 shares against the inflated
+    // Deposits that clear the 2e6 minimum-stake floor but still price to 0 shares against the inflated
     // pool (≤ 4e6, safely below the ~5e6 boundary) must revert ZeroAmount and mint nothing.
     function testFuzz_WrapRevertsWhenDepositRoundsToZeroShares(uint256 dust) public {
         _inflatedPool();
-        dust = bound(dust, vault.minRebalanceAmt(), 4e6);
+        dust = bound(dust, 2e6, 4e6);
 
         _simulateAlphaDeposit(bob, NETUID1, dust);
         vm.prank(bob);
@@ -56,8 +56,7 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         // A real share amount redeems for its proportional value.
         vm.prank(alice);
         vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));
-        uint256 received = _getStake(hotkey1, alice, NETUID1) + _getStake(hotkey2, alice, NETUID1)
-            + _getStake(hotkey3, alice, NETUID1);
+        uint256 received = _userStakeAcrossHotkeys(alice, NETUID1);
         assertApproxEqAbs(received, 5 ether, 1e9);
     }
 
