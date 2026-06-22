@@ -509,7 +509,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         return (_assetsFor(totalAlpha, supply, shares), 0);
     }
 
-
     /// @notice Unused slots are bytes32(0).
     function getBestValidators(uint256 netuid) external view returns (bytes32[3] memory) {
         if (netuid > type(uint16).max) revert NetuidOutOfRange();
