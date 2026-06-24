@@ -297,7 +297,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     ) private {
         uint256 remaining = assets;
         for (uint256 i; i < validatorCount && remaining > 0;) {
-            if (hotkeys[i] == bytes32(0)) break;
             uint256 takeAmount = remaining > balances[i] ? balances[i] : remaining;
             if (takeAmount > 0) {
                 SubnetClone(payable(clone)).flush(userColdkey, hotkeys[i], netuid, takeAmount);
@@ -510,13 +509,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         return (_assetsFor(totalAlpha, supply, shares), 0);
     }
 
-    function getBestValidator(uint256 netuid) external view returns (bytes32) {
-        if (netuid > type(uint16).max) revert NetuidOutOfRange();
-        // forge-lint: disable-next-line(unsafe-typecast)
-        (bytes32[3] memory hks,,) = _resolveValidators(uint16(netuid));
-        return hks[0];
-    }
-
     /// @notice Unused slots are bytes32(0).
     function getBestValidators(uint256 netuid) external view returns (bytes32[3] memory) {
         if (netuid > type(uint16).max) revert NetuidOutOfRange();
@@ -696,8 +688,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         returns (bytes32[6] memory hotkeys, uint256[6] memory balances, uint256 totalStakeOut)
     {
         address clone = subnetClone[tokenId];
-        if (clone == address(0)) return (hotkeys, balances, 0);
-        if (address(validatorRegistry) == address(0)) revert NoValidatorFound();
 
         (bytes32[3] memory current,) = validatorRegistry.getValidators(netuid);
         bytes32[3] memory historical = _lastSeenHotkeys[tokenId];

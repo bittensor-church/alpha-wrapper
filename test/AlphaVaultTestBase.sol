@@ -144,7 +144,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         address cloneAddr = vault.getDepositAddress(user, netuid);
         bytes32 cloneSub = _toSubstrate(cloneAddr);
         // Use the best validator hotkey for this subnet (matches what wrap will resolve)
-        bytes32 hotkey = vault.getBestValidator(netuid);
+        bytes32 hotkey = vault.getBestValidators(netuid)[0];
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey, cloneSub, netuid, amount);
     }
 
@@ -154,8 +154,18 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey, cloneSub, netuid, amount);
     }
 
+    /// @dev Simulate validator emissions accruing on the subnet clone's staked alpha: bump the
+    ///      on-chain stake under hotkey1 and the vault's cached totalStake[tokenId] by `extraAlpha`.
+    function _simulateEmissions(uint256 netuid, uint256 extraAlpha) internal {
+        uint256 currentStake = _getVaultStake(hotkey1, netuid);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(netuid), netuid, currentStake + extraAlpha);
+        uint256 tokenId = vault.currentTokenId(netuid);
+        uint256 slot = uint256(keccak256(abi.encode(tokenId, uint256(7))));
+        vm.store(address(vault), bytes32(slot), bytes32(vault.totalStake(tokenId) + extraAlpha));
+    }
+
     function _wrap(address user, uint256 netuid) internal {
-        _wrapHotkey(user, netuid, vault.getBestValidator(netuid));
+        _wrapHotkey(user, netuid, vault.getBestValidators(netuid)[0]);
     }
 
     function _wrapHotkey(address user, uint256 netuid, bytes32 chosenHotkey) internal {
