@@ -18,9 +18,18 @@ env:
 
 jobs:
   e2e:
-    name: Localnet E2E
+    name: Localnet E2E (${{ matrix.script }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each leg gets its own fresh subtensor service container, so the
+        # transfers-off run (which globally disables alpha transfers) is isolated.
+        script:
+          - localnet-e2e.sh
+          - localnet-e2e-transfers-off.sh
 
     services:
       subtensor:
@@ -76,10 +85,10 @@ jobs:
           echo "Subtensor failed to start"
           exit 1
 
-      - name: Run E2E tests
+      - name: Run E2E test
         run: |
-          chmod +x scripts/localnet-e2e.sh
-          ./scripts/localnet-e2e.sh
+          chmod +x scripts/${{ matrix.script }}
+          ./scripts/${{ matrix.script }}
 
       - name: Collect subtensor logs
         if: failure()

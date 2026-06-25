@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Helper subcommands for `localnet-e2e.sh`.
+Helper subcommands for the localnet-e2e tests.
 
 Each subcommand prints its result to stdout; errors go to stderr and exit 1.
 
@@ -26,6 +26,15 @@ Subcommands:
         signatures by recovered signer address ascending (contract requirement),
         and submit `updateValidators(att, sigs[])` to the ValidatorRegistry.
         The first signer-pk also pays for the transaction.
+
+    toggle_transfer --chain-endpoint URL --netuid N --enabled true|false
+                    [--attempts N]
+        Flip a subnet's `TransferToggle` by submitting
+        `Sudo.sudo(AdminUtils.sudo_set_toggle_transfer(netuid, toggle))` as //Alice
+        (the dev sudo/root key). With transfers off, the staking precompile's
+        `transferStake` reverts `TransferDisallowed` while `removeStake`/`moveStake`
+        keep working. Retries across blocks because the call is rejected inside the
+        per-tempo admin freeze window near each epoch boundary.
 """
 
 import argparse
@@ -96,6 +105,70 @@ def transfer_stake(
         print(f"FAIL: {receipt.error_message}", file=sys.stderr)
         sys.exit(1)
     print(f"ok block={receipt.block_hash}")
+
+
+def _sudo_dispatch_error(receipt) -> "str | None":
+    """Return the inner dispatch error of a `Sudo.sudo` receipt, or None on success.
+
+    `submit_extrinsic` reports the OUTER `Sudo.sudo` call as successful even when the
+    wrapped call reverts — the inner `DispatchResult` rides in the `Sudo.Sudid` event,
+    serialized as `{'sudo_result': {'Ok': ...}}` or `{'sudo_result': {'Err': ...}}`.
+    """
+    for event in receipt.triggered_events:
+        value = event.value
+        record = value.get("event", value) if isinstance(value, dict) else {}
+        if record.get("event_id") != "Sudid":
+            continue
+        attributes = record.get("attributes")
+        # Prefer the structured `sudo_result` ({'Ok': ...} / {'Err': ...}); fall back to a
+        # string scan only if the event shape differs across substrate-interface versions.
+        result = attributes.get("sudo_result") if isinstance(attributes, dict) else attributes
+        if isinstance(result, dict) and "Err" in result:
+            return str(result["Err"])
+        if not isinstance(result, dict) and ("'Err'" in str(attributes) or '"Err"' in str(attributes)):
+            return str(attributes)
+    return None
+
+
+def toggle_transfer(
+    chain_endpoint: str,
+    netuid: int,
+    enabled: bool,
+    attempts: int,
+) -> None:
+    from substrateinterface import Keypair, SubstrateInterface
+
+    sub = SubstrateInterface(url=chain_endpoint)
+    alice = Keypair.create_from_uri("//Alice")
+    inner = sub.compose_call(
+        call_module="AdminUtils",
+        call_function="sudo_set_toggle_transfer",
+        call_params={"netuid": netuid, "toggle": enabled},
+    )
+    call = sub.compose_call(
+        call_module="Sudo",
+        call_function="sudo",
+        call_params={"call": inner},
+    )
+
+    last_err = "unknown error"
+    for attempt in range(attempts):
+        extrinsic = sub.create_signed_extrinsic(call=call, keypair=alice)
+        receipt = sub.submit_extrinsic(extrinsic, wait_for_inclusion=True)
+        if not receipt.is_success:
+            last_err = receipt.error_message
+        else:
+            inner_err = _sudo_dispatch_error(receipt)
+            if inner_err is None:
+                print(f"ok netuid={netuid} toggle={enabled} block={receipt.block_hash}")
+                return
+            last_err = inner_err
+        # Rejected inside the per-tempo admin freeze window; clears within a block or two.
+        if attempt != attempts - 1:
+            time.sleep(6)
+
+    print(f"FAIL: toggle_transfer netuid={netuid} -> {last_err}", file=sys.stderr)
+    sys.exit(1)
 
 
 def set_validators(
@@ -217,6 +290,13 @@ def main() -> None:
     p.add_argument("--netuid", required=True, type=int)
     p.add_argument("--alpha-amount", required=True, type=int)
 
+    p = sub.add_parser("toggle_transfer")
+    p.add_argument("--chain-endpoint", required=True)
+    p.add_argument("--netuid", required=True, type=int)
+    p.add_argument("--enabled", required=True, choices=["true", "false"],
+                   help="Whether alpha transfer_stake is allowed on the subnet")
+    p.add_argument("--attempts", type=int, default=10)
+
     p = sub.add_parser("set_validators")
     p.add_argument("--rpc-url", required=True)
     p.add_argument("--registry", required=True)
@@ -240,6 +320,13 @@ def main() -> None:
             hotkey_ss58=args.hotkey_ss58,
             netuid=args.netuid,
             alpha_amount=args.alpha_amount,
+        )
+    elif args.cmd == "toggle_transfer":
+        toggle_transfer(
+            chain_endpoint=args.chain_endpoint,
+            netuid=args.netuid,
+            enabled=(args.enabled == "true"),
+            attempts=args.attempts,
         )
     elif args.cmd == "set_validators":
         set_validators(
