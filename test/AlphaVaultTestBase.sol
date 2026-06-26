@@ -162,9 +162,8 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         uint256 currentStake = _getVaultStake(hotkey1, netuid);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(netuid), netuid, currentStake + extraAlpha);
         uint256 tokenId = vault.currentTokenId(netuid);
-        stdstore.target(address(vault)).sig("totalStake(uint256)").with_key(tokenId).checked_write(
-            vault.totalStake(tokenId) + extraAlpha
-        );
+        stdstore.target(address(vault)).sig("totalStake(uint256)").with_key(tokenId)
+            .checked_write(vault.totalStake(tokenId) + extraAlpha);
     }
 
     function _wrap(address user, uint256 netuid) internal {
