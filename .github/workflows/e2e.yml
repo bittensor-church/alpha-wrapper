@@ -65,8 +65,12 @@ jobs:
 
       - name: Install Python deps
         run: |
-          pip install bittensor-cli==9.20.1 substrate-interface
+          pip install bittensor-cli==9.23.1 substrate-interface
           pip install -r requirements.txt
+          # btcli 9.23.1 ships `cyscale`, a drop-in that shares the `scalecodec` namespace
+          # with the scalecodec pulled in by substrate-interface. Reinstall it last so it
+          # owns the namespace, otherwise btcli aborts on import.
+          pip install --force-reinstall --no-deps cyscale
 
       - name: Compile-check Python scripts
         run: python -m py_compile scripts/*.py
