@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import { Vm } from "forge-std/Test.sol";
+import { Vm, stdStorage, StdStorage } from "forge-std/Test.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
@@ -16,6 +16,8 @@ import { ADDRESS_MAPPING_PRECOMPILE } from "src/interfaces/IAddressMapping.sol";
 address constant STORAGE_QUERY = 0x0000000000000000000000000000000000000807;
 
 abstract contract AlphaVaultTestBase is AttestationHelper {
+    using stdStorage for StdStorage;
+
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event MinRebalanceAmtUpdated(uint256 oldValue, uint256 newValue);
@@ -160,8 +162,9 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         uint256 currentStake = _getVaultStake(hotkey1, netuid);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(netuid), netuid, currentStake + extraAlpha);
         uint256 tokenId = vault.currentTokenId(netuid);
-        uint256 slot = uint256(keccak256(abi.encode(tokenId, uint256(7))));
-        vm.store(address(vault), bytes32(slot), bytes32(vault.totalStake(tokenId) + extraAlpha));
+        stdstore.target(address(vault)).sig("totalStake(uint256)").with_key(tokenId).checked_write(
+            vault.totalStake(tokenId) + extraAlpha
+        );
     }
 
     function _wrap(address user, uint256 netuid) internal {

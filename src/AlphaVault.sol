@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import { ERC1155 } from "@openzeppelin/contracts/token/ERC1155/ERC1155.sol";
 import { ERC1155Supply } from "@openzeppelin/contracts/token/ERC1155/extensions/ERC1155Supply.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { Ownable2Step } from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
 import { SubnetClone } from "./SubnetClone.sol";
@@ -29,7 +30,7 @@ import { StorageQueryReader } from "./libraries/StorageQueryReader.sol";
 ///     previous call. The per-token last-seen hotkey set is tracked in `_lastSeenHotkeys`.
 ///   - Value accrues as validator rewards increase totalStake[netuid] without minting new shares.
 ///   - Per-subnet clones isolate alpha and TAO returned by dissolved subnets.
-contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
+contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     // ──────────────────── Immutables ────────────────────────────────────────────
     address public immutable mailboxLogic;
     address public immutable subnetLogic;
