@@ -9,14 +9,14 @@
 #   - e2e_bootstrap: pre-flight + phases 0-5 (fund deployer, create subnets,
 #     register validators, stake, deploy contracts, fund the user account).
 #
-# After `source scripts/e2e_common.sh; e2e_bootstrap`, the following globals are
+# After `source e2e/e2e_common.sh; e2e_bootstrap`, the following globals are
 # populated for the test to drive its own scenario:
 #   NETUIDS, VAULT_IDS, ALL_HK_NAMES/ALL_HK_B32S/ALL_HK_SS58S,
 #   MAILBOX_ADDR, SUBNET_CLONE_ADDR, VAULT_ADDR, VAL_REGISTRY_ADDR,
 #   WRAPPER_SUB_B32, BLOCK_START, REG_BLOCK_START, REG_BLOCK_END.
 #
 # All relative paths (scripts/..., src/...) assume the repo root is the CWD,
-# i.e. the test is invoked as `./scripts/<test>.sh` from the project root.
+# i.e. the test is invoked as `./e2e/<test>.sh` from the project root.
 # ============================================================================
 
 set -euo pipefail
@@ -43,6 +43,8 @@ WRAPPER_PK="0xf784bf897e423437b1d2a1584a7fc5c99b0ec3f34d70ff74a0643094ccfd4bbe"
 WRAPPER_SS58="5H9xN1Y6KqdhcK9wPqFSPHC7yeaRC5y4CL3nNF2GX6hJrmpT"
 
 STAKING="0x0000000000000000000000000000000000000805"
+# Alpha precompile (index 2056): exposes the chain's own alpha→TAO swap simulation.
+ALPHA_PRECOMPILE="0x0000000000000000000000000000000000000808"
 
 STAKE_RATIOS=(600 400 200)
 TRANSFER_AMOUNT=100
@@ -55,6 +57,11 @@ EVM_FLAGS="--legacy --gas-price 10000000000"
 FORGE_FLAGS="$EVM_FLAGS --gas-limit 5000000 --broadcast"
 CAST_FLAGS="$EVM_FLAGS --gas-limit 500000"
 
+# Subtensor's EVM omits `mixHash` from eth_getBlockByNumber, so forge/cast's
+# receipt-wait block poller logs a benign deserialization ERROR per broadcast.
+# Silence that module; keep error-level logging otherwise.
+export RUST_LOG="${RUST_LOG:-error,alloy_provider::blocks=off}"
+
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 log()  { echo -e "\n\033[1;34m=== $1 ===\033[0m"; }
@@ -62,13 +69,13 @@ ok()   { echo -e "  \033[1;32m✓\033[0m $1"; }
 info() { echo -e "  \033[0;33m→\033[0m $1"; }
 fail() { echo -e "  \033[1;31m✗ $1\033[0m" >&2; exit 1; }
 
-h160_to_substrate_b32() { python3 scripts/e2e_helpers.py h160_to_substrate_b32 "$1"; }
-h160_to_ss58()          { python3 scripts/e2e_helpers.py h160_to_ss58 "$1"; }
+h160_to_substrate_b32() { python3 scripts/chain_ops.py h160_to_substrate_b32 "$1"; }
+h160_to_ss58()          { python3 scripts/chain_ops.py h160_to_ss58 "$1"; }
 
 btcli_cmd() { btcli "$@" --network "$CHAIN_ENDPOINT"; }
 
 transfer_stake_py() {
-    python3 scripts/e2e_helpers.py transfer_stake \
+    python3 scripts/chain_ops.py transfer_stake \
         --chain-endpoint "$CHAIN_ENDPOINT" \
         --dest-ss58 "$1" \
         --hotkey-ss58 "$2" \
@@ -77,7 +84,7 @@ transfer_stake_py() {
 }
 
 set_validators_py() {
-    python3 scripts/e2e_helpers.py set_validators \
+    python3 scripts/chain_ops.py set_validators \
         --rpc-url "$RPC_URL" \
         --registry "$VAL_REGISTRY_ADDR" \
         --signer-pk "$DEPLOYER_PK" \
@@ -143,29 +150,31 @@ user_tao_wei() {
     cast balance "$WRAPPER_ADDR" --rpc-url "$RPC_URL" | awk '{print $1}'
 }
 
-# Send a tx to the vault from the user key and assert it succeeded (status 0x1).
-vault_send() { # <gas_limit> <fail_msg> <sig> [args...]
-    local gas="$1" msg="$2" sig="$3" tx status
-    shift 3
-    tx=$(cast send "$VAULT_ADDR" "$sig" "$@" \
+# Broadcast a tx to the vault from the user key; capture the JSON receipt and its status in
+# LAST_TX_RECEIPT / LAST_TX_STATUS ("fail" if the send or receipt parse errored).
+vault_broadcast() { # <gas_limit> <sig> [args...]
+    local gas="$1" sig="$2"
+    shift 2
+    LAST_TX_RECEIPT=$(cast send "$VAULT_ADDR" "$sig" "$@" \
         --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
         $EVM_FLAGS --gas-limit "$gas" --json || true)
-    status=$(echo "$tx" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
-    if [[ "$status" != "0x1" ]]; then
-        echo "$tx"
-        fail "$msg"
-    fi
+    LAST_TX_STATUS=$(echo "$LAST_TX_RECEIPT" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
+}
+
+# Send a tx to the vault from the user key and assert it succeeded (status 0x1).
+vault_send() { # <gas_limit> <fail_msg> <sig> [args...]
+    local gas="$1" msg="$2"
+    shift 2
+    vault_broadcast "$gas" "$@"
+    [[ "$LAST_TX_STATUS" == "0x1" ]] || { echo "$LAST_TX_RECEIPT"; fail "$msg"; }
 }
 
 # Send a tx to the vault that is EXPECTED to revert; assert it did not succeed.
 vault_send_expect_revert() { # <gas_limit> <fail_msg> <sig> [args...]
-    local gas="$1" msg="$2" sig="$3" tx status
-    shift 3
-    tx=$(cast send "$VAULT_ADDR" "$sig" "$@" \
-        --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
-        $EVM_FLAGS --gas-limit "$gas" --json || true)
-    status=$(echo "$tx" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
-    [[ "$status" != "0x1" ]] || fail "$msg"
+    local gas="$1" msg="$2"
+    shift 2
+    vault_broadcast "$gas" "$@"
+    [[ "$LAST_TX_STATUS" != "0x1" ]] || fail "$msg"
 }
 
 # Assert a strictly positive wei delta and echo it. Wei deltas routinely exceed bash's
@@ -175,6 +184,19 @@ assert_gain() { # <pre_wei> <post_wei> <fail_msg>
     delta=$(python3 -c "print($2 - $1)")
     python3 -c "import sys; sys.exit(0 if $delta > 0 else 1)" || fail "$3 (net $delta wei)"
     echo "$delta"
+}
+
+# Assert the caller's native-TAO gain ≈ the chain's own alpha→TAO quote for <alpha_rao> RAO
+# (within ±10%, which absorbs gas and a block or two of price drift) — a real value check, not
+# just a positive delta. The precompile quotes in RAO, so ×1e9 → wei. Echoes the wei gain.
+assert_tao_gain() { # <pre_wei> <post_wei> <netuid> <alpha_rao> <fail_msg>
+    local quote gain
+    quote=$(cast call "$ALPHA_PRECOMPILE" "simSwapAlphaForTao(uint16,uint64)(uint256)" "$3" "$4" \
+        --rpc-url "$RPC_URL" | awk '{print $1}')
+    gain=$(python3 -c "print($2 - $1)")
+    python3 -c "import sys; e=$quote*10**9; sys.exit(0 if e*9//10 <= $gain <= e*11//10 else 1)" \
+        || fail "$5 (gained $gain wei, quote $quote RAO)"
+    echo "$gain"
 }
 
 # Transfer alpha from Alice into the user's mailbox under a hotkey, then wrap it into the vault.
@@ -193,7 +215,7 @@ deposit_and_wrap() { # <netuid> <hotkey_b32> <hotkey_ss58> <amount_raw> <gas_lim
 # contracts wired to a 2-of-2 ValidatorRegistry, and a funded user account.
 e2e_bootstrap() {
     # All bootstrap/helper paths are repo-root-relative; fail fast if invoked elsewhere.
-    [[ -f scripts/e2e_helpers.py && -d src ]] || fail "Run from the repo root (CWD must contain scripts/ and src/)."
+    [[ -f scripts/chain_ops.py && -d src ]] || fail "Run from the repo root (CWD must contain scripts/ and src/)."
 
     log "Pre-flight checks"
     cast chain-id --rpc-url "$RPC_URL" > /dev/null 2>&1 || fail "Cannot connect to $RPC_URL"

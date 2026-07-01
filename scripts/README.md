@@ -1,5 +1,8 @@
 # scripts/
 
+Python tooling for the alpha-wrapper contracts: on-chain observability readers,
+chain-operation subcommands, and the shared library they build on.
+
 | Script | Description |
 |---|---|
 | `get_deposits.py` | `Deposited` events |
@@ -9,9 +12,9 @@
 | `get_validator_updates.py` | `ValidatorsUpdated` events |
 | `get_volumes.py` | Deposit/Unwrap totals for a subnet with optional user filter |
 | `get_vault_state.py` | Returns on-chain data about an ERC-1155 token for a subnet |
-| `e2e_helpers.py` | Subcommands for the localnet-e2e tests (H160<->SS58, `transfer_stake`, `set_validators`, `toggle_transfer`) |
-| `e2e_common.sh` | Shared config + helpers + bootstrap (phases 0-5) sourced by the localnet-e2e tests |
-| `localnet-e2e.sh` | Full end-to-end flow against a local subtensor |
-| `localnet-e2e-transfers-off.sh` | E2E with subnet alpha transfers disabled: alpha rail reverts, TAO rails still pay |
+| `chain_ops.py` | Chain-operation subcommands (H160<->SS58, `transfer_stake`, `set_validators`, `toggle_transfer`) |
+| `common.py` | Shared web3/ABI/CSV helpers imported by the scripts above |
 
 Run `forge build` first -- the Python scripts load ABIs from `out/`.
+
+The end-to-end tests and their harness live in [`../e2e/`](../e2e/).

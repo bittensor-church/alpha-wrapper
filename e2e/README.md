@@ -1,0 +1,19 @@
+# e2e/
+
+Localnet end-to-end tests. Run from the repo root against a local subtensor (see
+the prerequisites in each script's header). The tests source `e2e_common.sh` and
+call the Python tooling in [`../scripts/`](../scripts/).
+
+| File | Description |
+|---|---|
+| `localnet-e2e.sh` | Full end-to-end flow against a local subtensor |
+| `localnet-e2e-transfers-off.sh` | E2E with subnet alpha transfers disabled: alpha rail reverts, TAO rails still pay |
+| `e2e_common.sh` | Shared config + helpers + bootstrap (phases 0-5) sourced by the tests |
+| `verify_csv.py` | Asserts invariants on the CSV output of the `../scripts/` observability readers |
+
+Usage (from the repo root, so the `scripts/...`/`src/...`/`out/...` paths resolve):
+
+```sh
+./e2e/localnet-e2e.sh
+./e2e/localnet-e2e-transfers-off.sh
+```

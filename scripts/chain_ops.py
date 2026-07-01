@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 
 """
-Helper subcommands for the localnet-e2e tests.
+Chain-operation subcommands (address mapping + substrate/EVM writes) driving the localnet chain.
 
+Used by the localnet-e2e tests, but each subcommand is a standalone chain op.
 Each subcommand prints its result to stdout; errors go to stderr and exit 1.
 
 Subcommands:
@@ -102,32 +103,11 @@ def transfer_stake(
     extrinsic = sub.create_signed_extrinsic(call=call, keypair=alice)
     receipt = sub.submit_extrinsic(extrinsic, wait_for_inclusion=True)
     if not receipt.is_success:
+        # `error_message` is the metadata-decoded module error, e.g.
+        # {'type': 'Module', 'name': 'TransferDisallowed', ...} — callers grep the name.
         print(f"FAIL: {receipt.error_message}", file=sys.stderr)
         sys.exit(1)
     print(f"ok block={receipt.block_hash}")
-
-
-def _sudo_dispatch_error(receipt) -> "str | None":
-    """Return the inner dispatch error of a `Sudo.sudo` receipt, or None on success.
-
-    `submit_extrinsic` reports the OUTER `Sudo.sudo` call as successful even when the
-    wrapped call reverts — the inner `DispatchResult` rides in the `Sudo.Sudid` event,
-    serialized as `{'sudo_result': {'Ok': ...}}` or `{'sudo_result': {'Err': ...}}`.
-    """
-    for event in receipt.triggered_events:
-        value = event.value
-        record = value.get("event", value) if isinstance(value, dict) else {}
-        if record.get("event_id") != "Sudid":
-            continue
-        attributes = record.get("attributes")
-        # Prefer the structured `sudo_result` ({'Ok': ...} / {'Err': ...}); fall back to a
-        # string scan only if the event shape differs across substrate-interface versions.
-        result = attributes.get("sudo_result") if isinstance(attributes, dict) else attributes
-        if isinstance(result, dict) and "Err" in result:
-            return str(result["Err"])
-        if not isinstance(result, dict) and ("'Err'" in str(attributes) or '"Err"' in str(attributes)):
-            return str(attributes)
-    return None
 
 
 def toggle_transfer(
@@ -151,23 +131,20 @@ def toggle_transfer(
         call_params={"call": inner},
     )
 
-    last_err = "unknown error"
     for attempt in range(attempts):
         extrinsic = sub.create_signed_extrinsic(call=call, keypair=alice)
         receipt = sub.submit_extrinsic(extrinsic, wait_for_inclusion=True)
-        if not receipt.is_success:
-            last_err = receipt.error_message
-        else:
-            inner_err = _sudo_dispatch_error(receipt)
-            if inner_err is None:
-                print(f"ok netuid={netuid} toggle={enabled} block={receipt.block_hash}")
-                return
-            last_err = inner_err
+        # `Sudo.sudo` reports success even when the inner call reverts, so trust the
+        # chain state rather than the receipt: read the toggle back and check it stuck.
+        current = sub.query("SubtensorModule", "TransferToggle", [netuid]).value
+        if current == enabled:
+            print(f"ok netuid={netuid} toggle={enabled} block={receipt.block_hash}")
+            return
         # Rejected inside the per-tempo admin freeze window; clears within a block or two.
         if attempt != attempts - 1:
             time.sleep(6)
 
-    print(f"FAIL: toggle_transfer netuid={netuid} -> {last_err}", file=sys.stderr)
+    print(f"FAIL: toggle_transfer netuid={netuid} did not reach toggle={enabled}", file=sys.stderr)
     sys.exit(1)
 
 

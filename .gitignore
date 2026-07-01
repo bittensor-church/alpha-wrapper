@@ -1,8 +1,7 @@
-scripts/__pycache__/
+__pycache__/
 cache/
 out/
 node_modules/
 .env
 .idea/
 broadcast/
-scripts/__pycache__/
