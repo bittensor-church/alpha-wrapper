@@ -100,9 +100,11 @@ ok "Alpha-rail unwrap reverted; shares preserved ($POST_SHARES)"
 
 log "Phase 10: Withdraw the deposit clone as TAO (unwrapForTao)"
 
-# Live backing alpha this position will sell, for the alpha→TAO quote assert_tao_gain checks against.
+# Live backing alpha this position will sell, and the chain's alpha→TAO quote for it — both
+# captured before the unwrap so the quote reflects the same pool state the swap executes against.
 POS_ALPHA=$(cast call "$VAULT_ADDR" "previewUnwrap(uint256,uint256)(uint256,uint256)" \
     "$POS_TID" "$POS_SHARES" --rpc-url "$RPC_URL" | head -1 | awk '{print $1}')
+POS_QUOTE=$(alpha_to_tao_quote "$POS_NET" "$POS_ALPHA")
 
 USER_TAO_PRE=$(user_tao_wei)
 info "User EVM balance before: $USER_TAO_PRE wei"
@@ -116,14 +118,16 @@ ok "Shares burned to 0"
 
 USER_TAO_POST=$(user_tao_wei)
 info "User EVM balance after:  $USER_TAO_POST wei"
-GAINED=$(assert_tao_gain "$USER_TAO_PRE" "$USER_TAO_POST" "$POS_NET" "$POS_ALPHA" \
+GAINED=$(assert_tao_gain "$USER_TAO_PRE" "$USER_TAO_POST" "$POS_QUOTE" \
     "unwrapForTao payout off the alpha→TAO quote")
-ok "Deposit clone withdrawn as TAO; user gained $GAINED wei (matches quote for $POS_ALPHA RAO alpha)"
+ok "Deposit clone withdrawn as TAO; user gained $GAINED wei (matches quote $POS_QUOTE RAO)"
 
 log "Phase 11: Withdraw the mailbox itself as TAO (reclaimMailboxAlphaAsTao)"
 
-# Live mailbox alpha (re-read: it has accrued emissions since Phase 7), for the alpha→TAO quote.
+# Live mailbox alpha (re-read: it has accrued emissions since Phase 7) and its alpha→TAO quote,
+# both captured before the reclaim so the quote isn't skewed by the swap's own price impact.
 RECLAIM_ALPHA=$(get_stake "$SEED_HK_B32" "$SEED_MAILBOX_SUB" "$SEED_NET")
+RECLAIM_QUOTE=$(alpha_to_tao_quote "$SEED_NET" "$RECLAIM_ALPHA")
 
 USER_TAO_PRE=$(user_tao_wei)
 info "User EVM balance before: $USER_TAO_PRE wei"
@@ -137,9 +141,9 @@ ok "Mailbox alpha drained to 0"
 
 USER_TAO_POST=$(user_tao_wei)
 info "User EVM balance after:  $USER_TAO_POST wei"
-GAINED=$(assert_tao_gain "$USER_TAO_PRE" "$USER_TAO_POST" "$SEED_NET" "$RECLAIM_ALPHA" \
+GAINED=$(assert_tao_gain "$USER_TAO_PRE" "$USER_TAO_POST" "$RECLAIM_QUOTE" \
     "reclaim payout off the alpha→TAO quote")
-ok "Mailbox withdrawn as TAO; user gained $GAINED wei (matches quote for $RECLAIM_ALPHA RAO alpha)"
+ok "Mailbox withdrawn as TAO; user gained $GAINED wei (matches quote $RECLAIM_QUOTE RAO)"
 
 log "E2E complete (alpha transfers off)"
 echo "  AlphaVault:        $VAULT_ADDR"

@@ -186,16 +186,24 @@ assert_gain() { # <pre_wei> <post_wei> <fail_msg>
     echo "$delta"
 }
 
-# Assert the caller's native-TAO gain ≈ the chain's own alpha→TAO quote for <alpha_rao> RAO
-# (within ±10%, which absorbs gas and a block or two of price drift) — a real value check, not
-# just a positive delta. The precompile quotes in RAO, so ×1e9 → wei. Echoes the wei gain.
-assert_tao_gain() { # <pre_wei> <post_wei> <netuid> <alpha_rao> <fail_msg>
-    local quote gain
-    quote=$(cast call "$ALPHA_PRECOMPILE" "simSwapAlphaForTao(uint16,uint64)(uint256)" "$3" "$4" \
-        --rpc-url "$RPC_URL" | awk '{print $1}')
+# Chain's own alpha→TAO quote (RAO out) for selling <alpha_rao> on <netuid> at the current pool
+# state. Capture it *before* the swap that pays out: simSwapAlphaForTao re-prices against live
+# reserves, and the bonding curve is concave, so a quote taken *after* the swap is understated by
+# the swap's own price impact (e.g. a ~33 alpha exit re-quotes ~13% low — past assert_tao_gain's
+# tolerance). Pairing a pre-swap quote with the realised gain keeps the comparison apples-to-apples.
+alpha_to_tao_quote() { # <netuid> <alpha_rao>
+    cast call "$ALPHA_PRECOMPILE" "simSwapAlphaForTao(uint16,uint64)(uint256)" "$1" "$2" \
+        --rpc-url "$RPC_URL" | awk '{print $1}'
+}
+
+# Assert the caller's native-TAO gain ≈ a pre-captured alpha→TAO <quote_rao> (within ±10%, which
+# absorbs gas and a block or two of emission drift) — a real value check, not just a positive
+# delta. The precompile quotes in RAO, so ×1e9 → wei. Echoes the wei gain.
+assert_tao_gain() { # <pre_wei> <post_wei> <quote_rao> <fail_msg>
+    local gain
     gain=$(python3 -c "print($2 - $1)")
-    python3 -c "import sys; e=$quote*10**9; sys.exit(0 if e*9//10 <= $gain <= e*11//10 else 1)" \
-        || fail "$5 (gained $gain wei, quote $quote RAO)"
+    python3 -c "import sys; e=$3*10**9; sys.exit(0 if e*9//10 <= $gain <= e*11//10 else 1)" \
+        || fail "$4 (gained $gain wei, quote $3 RAO)"
     echo "$gain"
 }
 
@@ -288,6 +296,15 @@ e2e_bootstrap() {
         NETUIDS+=("$NETUID")
         ok "netuid $NETUID"
     done
+
+    # Fast-runtime sets Tempo == AdminFreezeWindow == 10, so owner/root hyperparameter
+    # writes (max_regs_per_block below, TransferToggle in the transfers-off test) are only
+    # accepted ~1 block in 11 near each subnet's epoch boundary, and otherwise silently miss.
+    # Disable the freeze window so every sudo hyperparameter write lands on the first attempt.
+    log "Disable admin freeze window (deterministic sudo hyperparameter writes)"
+    python3 scripts/chain_ops.py set_admin_freeze_window \
+        --chain-endpoint "$CHAIN_ENDPOINT" --window 0 | tail -1
+    ok "AdminFreezeWindow → 0"
 
     log "Start emissions + increase max_regs_per_block"
     for NETUID in "${NETUIDS[@]}"; do
