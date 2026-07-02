@@ -363,18 +363,18 @@ SUBNET_CLONE_ADDR=$(forge create src/SubnetClone.sol:SubnetClone \
     | python3 -c "import json,sys; print(json.load(sys.stdin)['deployedTo'])")
 ok "SubnetClone: $SUBNET_CLONE_ADDR"
 
-VAULT_ADDR=$(forge create src/AlphaVault.sol:AlphaVault \
-    --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" $FORGE_FLAGS --json \
-    --constructor-args "https://api.tao20.io/{id}.json" "$MAILBOX_ADDR" "$SUBNET_CLONE_ADDR" \
-    | python3 -c "import json,sys; print(json.load(sys.stdin)['deployedTo'])")
-ok "AlphaVault: $VAULT_ADDR"
-
 # DEPLOYER (0x7bD3...) < WRAPPER (0xd103...) hex-ascending — required by ValidatorRegistry's sorted-signers check.
 VAL_REGISTRY_ADDR=$(forge create src/ValidatorRegistry.sol:ValidatorRegistry \
     --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" $FORGE_FLAGS --json \
     --constructor-args "$DEPLOYER_ADDR" "[$DEPLOYER_ADDR,$WRAPPER_ADDR]" 2 \
     | python3 -c "import json,sys; print(json.load(sys.stdin)['deployedTo'])")
 ok "ValidatorRegistry: $VAL_REGISTRY_ADDR (admin=$DEPLOYER_ADDR, signers=[DEPLOYER,WRAPPER], threshold=2)"
+
+VAULT_ADDR=$(forge create src/AlphaVault.sol:AlphaVault \
+    --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" $FORGE_FLAGS --json \
+    --constructor-args "https://api.tao20.io/{id}.json" "$MAILBOX_ADDR" "$SUBNET_CLONE_ADDR" "$VAL_REGISTRY_ADDR" \
+    | python3 -c "import json,sys; print(json.load(sys.stdin)['deployedTo'])")
+ok "AlphaVault: $VAULT_ADDR"
 
 VAULT_IDS=()
 for NET in "${NETUIDS[@]}"; do
@@ -383,12 +383,6 @@ for NET in "${NETUIDS[@]}"; do
     VAULT_IDS+=("$TID")
     info "netuid $NET -> tokenId $TID"
 done
-
-cast send "$VAULT_ADDR" "setValidatorRegistry(address)" \
-    "$VAL_REGISTRY_ADDR" \
-    --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" \
-    $CAST_FLAGS --json > /dev/null 2>&1
-ok "Vault → ValidatorRegistry linked"
 
 REG_BLOCK_START=$(cast block-number --rpc-url "$RPC_URL")
 for i in 0 1 2; do

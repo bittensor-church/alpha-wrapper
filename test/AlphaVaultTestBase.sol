@@ -65,7 +65,6 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
         mailboxLogic = new DepositMailbox();
         subnetLogic = new SubnetClone();
-        vault = new AlphaVault("https://api.tao20.io/{id}.json", address(mailboxLogic), address(subnetLogic));
 
         // vm.addr(SIGNER_PK_2) < vm.addr(SIGNER_PK_1); the registry requires sigs sorted
         // ascending by recovered address, so attestations sign in this order.
@@ -75,7 +74,9 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         signers[0] = vm.addr(signerPks[0]);
         signers[1] = vm.addr(signerPks[1]);
         registry = new ValidatorRegistry(address(this), signers, 2);
-        vault.setValidatorRegistry(address(registry));
+
+        // validatorRegistry is immutable, so it must exist before the vault is constructed.
+        vault = _deployVault(address(registry));
 
         _setValidators(
             NETUID1, _hotkeys(hotkey1, hotkey2, hotkey3), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
@@ -84,6 +85,12 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
         TOKEN1 = vault.currentTokenId(NETUID1);
         TOKEN2 = vault.currentTokenId(NETUID2);
+    }
+
+    /// @dev `validatorRegistry` is immutable, so tests that need a different registry construct a
+    ///      fresh vault against it rather than swapping it on the shared `vault`.
+    function _deployVault(address _registry) internal returns (AlphaVault) {
+        return new AlphaVault("https://api.tao20.io/{id}.json", address(mailboxLogic), address(subnetLogic), _registry);
     }
 
     function _setValidators(uint256 netuid, bytes32[] memory hks, uint16[] memory wts) internal {

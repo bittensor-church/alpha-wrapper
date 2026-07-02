@@ -20,12 +20,17 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     function test_RevertWhen_ConstructorZeroMailboxLogic() public {
         vm.expectRevert(AlphaVault.ZeroAddress.selector);
-        new AlphaVault("https://api.tao20.io/{id}.json", address(0), address(subnetLogic));
+        new AlphaVault("https://api.tao20.io/{id}.json", address(0), address(subnetLogic), address(registry));
     }
 
     function test_RevertWhen_ConstructorZeroSubnetLogic() public {
         vm.expectRevert(AlphaVault.ZeroAddress.selector);
-        new AlphaVault("https://api.tao20.io/{id}.json", address(mailboxLogic), address(0));
+        new AlphaVault("https://api.tao20.io/{id}.json", address(mailboxLogic), address(0), address(registry));
+    }
+
+    function test_RevertWhen_ConstructorZeroValidatorRegistry() public {
+        vm.expectRevert(AlphaVault.ZeroAddress.selector);
+        new AlphaVault("https://api.tao20.io/{id}.json", address(mailboxLogic), address(subnetLogic), address(0));
     }
 
     // ────────────────── Best Validator Selection ─────────────────────────────
@@ -563,29 +568,10 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(_countRebalancedLogs(vm.getRecordedLogs()), 0);
     }
 
-    // ────────────────── setValidatorRegistry ────────────────────────────
+    // ────────────────── validatorRegistry (immutable) ────────────────────
 
-    function test_SetValidatorRegistry() public {
-        assertTrue(address(vault.validatorRegistry()) != address(0));
-
-        address[] memory s = new address[](2);
-        s[0] = vm.addr(SIGNER_PK_1);
-        s[1] = vm.addr(SIGNER_PK_2);
-        ValidatorRegistry fresh = new ValidatorRegistry(address(this), s, 2);
-
-        vault.setValidatorRegistry(address(fresh));
-        assertEq(address(vault.validatorRegistry()), address(fresh));
-    }
-
-    function test_RevertWhen_SetValidatorRegistryOnZeroAddress() public {
-        vm.expectRevert(AlphaVault.ZeroAddress.selector);
-        vault.setValidatorRegistry(address(0));
-    }
-
-    function test_SetValidatorRegistryOnlyOwner() public {
-        vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
-        vault.setValidatorRegistry(address(0x1234));
+    function test_ValidatorRegistry_SetAtConstruction() public view {
+        assertEq(address(vault.validatorRegistry()), address(registry));
     }
 
     // ────────────────── setURI ───────────────────────────────────────────
@@ -611,10 +597,10 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         address[] memory s = new address[](2);
         s[0] = vm.addr(SIGNER_PK_1);
         s[1] = vm.addr(SIGNER_PK_2);
-        vault.setValidatorRegistry(address(new ValidatorRegistry(address(this), s, 2)));
+        AlphaVault freshVault = _deployVault(address(new ValidatorRegistry(address(this), s, 2)));
 
         vm.expectRevert(AlphaVault.NoValidatorFound.selector);
-        vault.getBestValidators(NETUID1);
+        freshVault.getBestValidators(NETUID1);
     }
 
     // ────────────────── Validator count boundaries ───────────────────────────
@@ -641,18 +627,16 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     /// @dev `weights[0] == 0` is the "subnet not configured" sentinel. `_resolveValidators`
     ///      must revert `NoValidatorFound` whether the registry returns all-zeros or just
-    ///      slot-0-zero with non-zero entries elsewhere (a corrupt-but-not-honest case).
-    /// @dev `weights[0] == 0` is the "subnet not configured" sentinel. `_resolveValidators`
-    ///      must revert `NoValidatorFound` whether the registry returns all-zeros or just
     ///      slot-0-zero with non-zero entries elsewhere. The corrupt-but-not-honest case
-    ///      cannot be produced by the real registry, so this test swaps in the mock.
+    ///      cannot be produced by the real registry, so this test deploys a fresh vault
+    ///      against the mock.
     function test_RevertWhen_ResolveValidatorsWhenWeightZero() public {
         MockValidatorRegistry mock = new MockValidatorRegistry();
-        vault.setValidatorRegistry(address(mock));
+        AlphaVault mockVault = _deployVault(address(mock));
 
         _setRegBlock(91, 91);
         vm.expectRevert(AlphaVault.NoValidatorFound.selector);
-        vault.getBestValidators(91);
+        mockVault.getBestValidators(91);
 
         bytes32[3] memory corruptHks;
         uint16[3] memory corruptWts;
@@ -663,14 +647,14 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         mock.setRaw(92, corruptHks, corruptWts);
         _setRegBlock(92, 92);
         vm.expectRevert(AlphaVault.NoValidatorFound.selector);
-        vault.getBestValidators(92);
+        mockVault.getBestValidators(92);
     }
 
     // ────────────────── getBestValidators raw registry resolution ─────────────
 
     function test_GetBestValidatorsSurfacesCorruptRegistryRawState() public {
         MockValidatorRegistry mock = new MockValidatorRegistry();
-        vault.setValidatorRegistry(address(mock));
+        AlphaVault mockVault = _deployVault(address(mock));
 
         bytes32[3] memory hks;
         uint16[3] memory wts;
@@ -682,7 +666,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         // _resolveValidators tolerates the corrupt mid-array entry (slot 0 is non-zero,
         // so the "configured" sentinel passes); getBestValidators surfaces the raw state.
-        bytes32[3] memory result = vault.getBestValidators(91);
+        bytes32[3] memory result = mockVault.getBestValidators(91);
         assertEq(result[0], hotkey4);
         assertEq(result[1], bytes32(0));
         assertEq(result[2], bytes32(0));
