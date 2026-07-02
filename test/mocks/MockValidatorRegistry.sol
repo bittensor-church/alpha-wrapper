@@ -12,7 +12,7 @@ contract MockValidatorRegistry is IValidatorRegistry {
     mapping(uint256 => Slot) private _slots;
 
     /// @dev Seeds corrupt slots (e.g. zero hotkey + non-zero weight) that the real
-    ///      registry would reject; tests point AlphaVault at a fresh mock when needed.
+    ///      registry would reject; tests deploy a fresh vault against this mock when needed.
     function setRaw(uint256 netuid, bytes32[3] memory hotkeys, uint16[3] memory weights) external {
         _slots[netuid] = Slot(hotkeys, weights);
     }

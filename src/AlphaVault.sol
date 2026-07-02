@@ -33,11 +33,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     // ──────────────────── Immutables ────────────────────────────────────────────
     address public immutable mailboxLogic;
     address public immutable subnetLogic;
+    IValidatorRegistry public immutable validatorRegistry;
 
     // ──────────────────── State ─────────────────────────────────────────────────
     mapping(uint256 => uint256) public totalStake;
     mapping(address => bool) public cloneDeployed;
-    IValidatorRegistry public validatorRegistry;
     mapping(uint256 => address) public subnetClone;
 
     /// @dev Hotkeys this token's clone is physically distributed across. Refreshed on every
@@ -59,7 +59,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     // ──────────────────── Events ────────────────────────────────────────────────
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
     event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 assets);
-    event ValidatorRegistryUpdated(address oldRegistry, address newRegistry);
     event MinRebalanceAmtUpdated(uint256 oldValue, uint256 newValue);
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
@@ -89,10 +88,16 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     error SlippageExceeded(uint256 taoOut);
 
     // ──────────────────── Constructor ───────────────────────────────────────────
-    constructor(string memory _uri, address _mailboxLogic, address _subnetLogic) ERC1155(_uri) Ownable(msg.sender) {
-        if (_mailboxLogic == address(0) || _subnetLogic == address(0)) revert ZeroAddress();
+    constructor(string memory _uri, address _mailboxLogic, address _subnetLogic, address _validatorRegistry)
+        ERC1155(_uri)
+        Ownable(msg.sender)
+    {
+        if (_mailboxLogic == address(0) || _subnetLogic == address(0) || _validatorRegistry == address(0)) {
+            revert ZeroAddress();
+        }
         mailboxLogic = _mailboxLogic;
         subnetLogic = _subnetLogic;
+        validatorRegistry = IValidatorRegistry(_validatorRegistry);
         minRebalanceAmt = 2e6;
     }
 
@@ -519,13 +524,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
 
     // ──────────────────── Admin ─────────────────────────────────────────────────
 
-    function setValidatorRegistry(address _registry) external onlyOwner {
-        if (_registry == address(0)) revert ZeroAddress();
-        address old = address(validatorRegistry);
-        validatorRegistry = IValidatorRegistry(_registry);
-        emit ValidatorRegistryUpdated(old, _registry);
-    }
-
     function setURI(string calldata newUri) external onlyOwner {
         _setURI(newUri);
     }
@@ -604,7 +602,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         view
         returns (bytes32[3] memory hotkeys, uint16[3] memory weights, uint256 count)
     {
-        if (address(validatorRegistry) == address(0)) revert NoValidatorFound();
         (hotkeys, weights) = validatorRegistry.getValidators(netuid);
         if (weights[0] == 0) revert NoValidatorFound();
         while (count < weights.length && weights[count] != 0) {
