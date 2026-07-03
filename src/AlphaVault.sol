@@ -19,7 +19,7 @@ import { StorageQueryReader } from "./libraries/StorageQueryReader.sol";
 ///
 /// @dev Architecture:
 ///   - Token ID = (netuid | subnetregistrationBlock << 16). No registration needed — vaults materialize on first deposit.
-///   - Each vault tracks its own sharePrice independently: totalStake[netuid] / totalShares(netuid).
+///   - Each vault tracks its own sharePrice independently: totalStake(netuid) / totalShares(netuid).
 ///   - EIP-1167 clones serve as deterministic "Mailbox" deposit addresses per (user, netuid).
 ///   - Validators + weights are read exclusively from ValidatorRegistry (no on-chain fallback).
 ///   - Deposits and unwraps run a full rebalance (up to N-1 `moveStake`s) toward the
@@ -27,17 +27,15 @@ import { StorageQueryReader } from "./libraries/StorageQueryReader.sol";
 ///   - Explicit `rebalance(netuid)` is still callable if rebalancing is desired immediately.
 ///   - State-mutating calls sweep alpha off hotkeys dropped from the registry since the
 ///     previous call. The per-token last-seen hotkey set is tracked in `_lastSeenHotkeys`.
-///   - Value accrues as validator rewards increase totalStake[netuid] without minting new shares.
 ///   - Per-subnet clones isolate alpha and TAO returned by dissolved subnets.
 contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     // ──────────────────── Immutables ────────────────────────────────────────────
     address public immutable mailboxLogic;
     address public immutable subnetLogic;
+    IValidatorRegistry public immutable validatorRegistry;
 
     // ──────────────────── State ─────────────────────────────────────────────────
-    mapping(uint256 => uint256) public totalStake;
     mapping(address => bool) public cloneDeployed;
-    IValidatorRegistry public validatorRegistry;
     mapping(uint256 => address) public subnetClone;
 
     /// @dev Hotkeys this token's clone is physically distributed across. Refreshed on every
@@ -59,7 +57,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     // ──────────────────── Events ────────────────────────────────────────────────
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
     event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 assets);
-    event ValidatorRegistryUpdated(address oldRegistry, address newRegistry);
     event MinRebalanceAmtUpdated(uint256 oldValue, uint256 newValue);
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
@@ -89,10 +86,16 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     error SlippageExceeded(uint256 taoOut);
 
     // ──────────────────── Constructor ───────────────────────────────────────────
-    constructor(string memory _uri, address _mailboxLogic, address _subnetLogic) ERC1155(_uri) Ownable(msg.sender) {
-        if (_mailboxLogic == address(0) || _subnetLogic == address(0)) revert ZeroAddress();
+    constructor(string memory _uri, address _mailboxLogic, address _subnetLogic, address _validatorRegistry)
+        ERC1155(_uri)
+        Ownable(msg.sender)
+    {
+        if (_mailboxLogic == address(0) || _subnetLogic == address(0) || _validatorRegistry == address(0)) {
+            revert ZeroAddress();
+        }
         mailboxLogic = _mailboxLogic;
         subnetLogic = _subnetLogic;
+        validatorRegistry = IValidatorRegistry(_validatorRegistry);
         minRebalanceAmt = 2e6;
     }
 
@@ -226,17 +229,15 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         if (clone == address(0)) revert NothingToUnwrap();
         uint16 netuid = _netuid(tokenId);
 
-        (bytes32[6] memory hotkeys, uint256[6] memory balances, uint256 total) = _drainCandidates(tokenId, netuid);
+        (bytes32[6] memory hotkeys, uint256[6] memory balances, uint256 total) = _totalStake(tokenId, netuid);
         // Dissolution permanently zeroes the alpha balance, so a non-zero total already implies
         // a live subnet and a zero total cannot be exited via this rail regardless of cause.
         if (total == 0) revert NothingToUnwrap();
 
-        totalStake[tokenId] = total;
-        uint256 assets = _convertToAssets(tokenId, shares);
+        uint256 assets = _assetsFor(total, totalSupply(tokenId), shares);
         if (assets == 0) revert ZeroAmount();
 
         _burn(msg.sender, tokenId, shares);
-        totalStake[tokenId] -= assets;
 
         uint256 balanceBefore = clone.balance;
         uint256 remaining = assets;
@@ -318,7 +319,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         uint256 userTao = (cloneBalance * shares) / supplyBefore;
         _burn(msg.sender, tokenId, shares);
         if (userTao > 0) SubnetClone(payable(clone)).unwrapTao(payable(msg.sender), userTao);
-        if (supplyBefore == shares) totalStake[tokenId] = 0;
         emit Unwrapped(msg.sender, tokenId, shares, userTao);
     }
 
@@ -360,7 +360,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         uint256[3] memory balances
     ) private returns (uint256 total) {
         total = _sumBalances(balances);
-        totalStake[tokenId] = total;
 
         // weights[0] != 0 is guaranteed by _resolveValidators, so weights[1] == 0 implies a
         // single-validator set: nothing to rebalance against.
@@ -434,6 +433,15 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
 
     // ──────────────────── View Functions ────────────────────────────────────────
 
+    /// @notice Total alpha backing this token's shares. Returns 0 before the clone exists.
+    /// @param  tokenId ERC1155 tokenId identifying the (netuid, regBlock) position.
+    /// @return Alpha staked under the clone for this token.
+    function totalStake(uint256 tokenId) public view returns (uint256) {
+        if (subnetClone[tokenId] == address(0)) return 0;
+        (,, uint256 total) = _totalStake(tokenId, _netuid(tokenId));
+        return total;
+    }
+
     /// @notice Price of one share in 1e18 precision, expressed in alpha.
     /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while the netuid sits in the
     ///         dissolved-networks queue, `SubnetDissolved` once cleanup has completed or
@@ -449,7 +457,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         if (_isIssuedForDissolvedSubnet(tokenId)) revert SubnetDissolved();
         uint256 supply = totalSupply(tokenId);
         if (supply == 0) revert NoSharesOutstanding();
-        return (totalStake[tokenId] * 1e18) / supply;
+        return (totalStake(tokenId) * 1e18) / supply;
     }
 
     /// @notice Preview how many shares would be minted for a deposit of `assets` alpha.
@@ -518,13 +526,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     }
 
     // ──────────────────── Admin ─────────────────────────────────────────────────
-
-    function setValidatorRegistry(address _registry) external onlyOwner {
-        if (_registry == address(0)) revert ZeroAddress();
-        address old = address(validatorRegistry);
-        validatorRegistry = IValidatorRegistry(_registry);
-        emit ValidatorRegistryUpdated(old, _registry);
-    }
 
     function setURI(string calldata newUri) external onlyOwner {
         _setURI(newUri);
@@ -604,7 +605,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         view
         returns (bytes32[3] memory hotkeys, uint16[3] memory weights, uint256 count)
     {
-        if (address(validatorRegistry) == address(0)) revert NoValidatorFound();
         (hotkeys, weights) = validatorRegistry.getValidators(netuid);
         if (weights[0] == 0) revert NoValidatorFound();
         while (count < weights.length && weights[count] != 0) {
@@ -641,11 +641,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
     }
 
     function _convertToShares(uint256 tokenId, uint256 assets) private view returns (uint256) {
-        return _sharesFor(totalStake[tokenId], totalSupply(tokenId), assets);
-    }
-
-    function _convertToAssets(uint256 tokenId, uint256 shares) private view returns (uint256) {
-        return _assetsFor(totalStake[tokenId], totalSupply(tokenId), shares);
+        return _sharesFor(totalStake(tokenId), totalSupply(tokenId), assets);
     }
 
     function _coldkeyOf(address evmAddr) private view returns (bytes32) {
@@ -682,10 +678,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
         if (seen[2] != currentSet[2]) seen[2] = currentSet[2];
     }
 
-    function _drainCandidates(uint256 tokenId, uint16 netuid)
+    function _totalStake(uint256 tokenId, uint16 netuid)
         private
         view
-        returns (bytes32[6] memory hotkeys, uint256[6] memory balances, uint256 totalStakeOut)
+        returns (bytes32[6] memory hotkeys, uint256[6] memory balances, uint256 total)
     {
         address clone = subnetClone[tokenId];
 
@@ -701,7 +697,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
                 hotkeys[n] = hk;
                 uint256 bal = staking.getStake(hk, coldkey, netuid);
                 balances[n] = bal;
-                totalStakeOut += bal;
+                total += bal;
                 unchecked {
                     ++n;
                 }
@@ -710,17 +706,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable, ReentrancyGuard {
                 ++i;
             }
         }
-        // Validator registry guarantees no duplicates within the current validator set, so the dedup only
-        // needs to scan against the historical slots already collected above.
-        // Historical validator list was previously obtained from the validator registry contract, so it does
-        // contain duplicates.
         for (uint256 i; i < 3;) {
             bytes32 hk = current[i];
             if (hk != bytes32(0) && hk != historical[0] && hk != historical[1] && hk != historical[2]) {
                 hotkeys[n] = hk;
                 uint256 bal = staking.getStake(hk, coldkey, netuid);
                 balances[n] = bal;
-                totalStakeOut += bal;
+                total += bal;
                 unchecked {
                     ++n;
                 }
