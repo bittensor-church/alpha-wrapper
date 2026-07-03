@@ -9,40 +9,9 @@
 #   - forge/cast installed
 #   - python3 with substrate-interface
 #   - Funded EVM deployer (see DEPLOYER below)
-#
-# Flow:
-#   0. Fund deployer EVM account (10k TAO from Alice)
-#   1. Create 3 subnets (Alice) + start emissions
-#   2. Create 3 hotkeys per subnet, register as validators
-#   3. Alice stakes TAO into each subnet (ratio 3:2:1)
-#   4. Deploy contracts (DepositMailbox, SubnetClone, AlphaVault, ValidatorRegistry)
-#   5. Fund user EVM account
-#   6. Alice transferStakes alpha → clone addresses (substrate-interface)
-#   7. wrap → mint ERC1155 shares
-#   8. Verify deposit balances
-#   9. Unwrap all shares → verify alpha returned to user's substrate coldkey
-#  10. Observability scripts → verify event-derived state
-#  11. Reclaim mailbox alpha for TAO → verify user receives native TAO
-#  12. Unwrap shares for TAO → verify user receives native TAO
-#  13. Emission accrual → position appreciates above deposit; holder unwraps the gain
-#  14. Validator rotation orphans stake → unwrap sweeps it (no funds stranded)
-#  15. unwrapForTao slippage guard against the real alpha→TAO price
-#
-# Phases 0-5 (chain bootstrap, contract deployment, account funding) plus the
-# shared config and helpers live in scripts/e2e_common.sh; this script drives
-# the wrap/unwrap scenario (phases 6-15) on top of that bootstrap.
-#
-# Usage:
-#   chmod +x scripts/localnet-e2e.sh
-#   ./scripts/localnet-e2e.sh
-# ============================================================================
-
-# Arm errexit before the source runs so a missing/failed library aborts immediately
-# (e2e_common.sh re-sets this; the duplicate is harmless).
-set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=scripts/e2e_common.sh
+# shellcheck source=e2e/e2e_common.sh
 source "$SCRIPT_DIR/e2e_common.sh"
 
 e2e_bootstrap
@@ -151,14 +120,14 @@ VAULT_IDS_CSV=$(IFS=,; echo "${VAULT_IDS[*]}")
 NETUIDS_CSV=$(IFS=,; echo "${NETUIDS[*]}")
 
 # verify_script <label> <verify_csv args...> -- <script command...>
-# Pipes the script's CSV stdout through scripts/verify_csv.py with the verify args.
+# Pipes the script's CSV stdout through e2e/verify_csv.py with the verify args.
 # Fails the e2e on the first invariant violation.
 verify_script() {
     local label="$1"; shift
     local v_args=()
     while [[ $# -gt 0 && "$1" != "--" ]]; do v_args+=("$1"); shift; done
     [[ "$1" == "--" ]] && shift
-    "$@" | python3 scripts/verify_csv.py "${v_args[@]}"
+    "$@" | python3 e2e/verify_csv.py "${v_args[@]}"
     ok "$label"
 }
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 
 """
-Helper subcommands for the localnet-e2e tests.
+Chain-operation subcommands (address mapping + substrate/EVM writes) driving the localnet chain.
 
+Used by the localnet-e2e tests, but each subcommand is a standalone chain op.
 Each subcommand prints its result to stdout; errors go to stderr and exit 1.
 
 Subcommands:
@@ -33,8 +34,16 @@ Subcommands:
         `Sudo.sudo(AdminUtils.sudo_set_toggle_transfer(netuid, toggle))` as //Alice
         (the dev sudo/root key). With transfers off, the staking precompile's
         `transferStake` reverts `TransferDisallowed` while `removeStake`/`moveStake`
-        keep working. Retries across blocks because the call is rejected inside the
-        per-tempo admin freeze window near each epoch boundary.
+        keep working. Relies on the admin freeze window being disabled first
+        (see set_admin_freeze_window); retries across blocks as a safety net.
+
+    set_admin_freeze_window --chain-endpoint URL --window N
+        Set the global `AdminFreezeWindow` via
+        `Sudo.sudo(AdminUtils.sudo_set_admin_freeze_window(N))` as //Alice. On the
+        fast-runtime localnet `Tempo == AdminFreezeWindow == 10`, so owner/root
+        hyperparameter ops (toggle_transfer, max_regs_per_block, ...) are only accepted
+        on 1 block in 11 near each subnet epoch boundary. The e2e bootstrap sets the
+        window to 0 so those sudo writes apply on the first attempt.
 """
 
 import argparse
@@ -102,32 +111,11 @@ def transfer_stake(
     extrinsic = sub.create_signed_extrinsic(call=call, keypair=alice)
     receipt = sub.submit_extrinsic(extrinsic, wait_for_inclusion=True)
     if not receipt.is_success:
+        # `error_message` is the metadata-decoded module error, e.g.
+        # {'type': 'Module', 'name': 'TransferDisallowed', ...} — callers grep the name.
         print(f"FAIL: {receipt.error_message}", file=sys.stderr)
         sys.exit(1)
     print(f"ok block={receipt.block_hash}")
-
-
-def _sudo_dispatch_error(receipt) -> "str | None":
-    """Return the inner dispatch error of a `Sudo.sudo` receipt, or None on success.
-
-    `submit_extrinsic` reports the OUTER `Sudo.sudo` call as successful even when the
-    wrapped call reverts — the inner `DispatchResult` rides in the `Sudo.Sudid` event,
-    serialized as `{'sudo_result': {'Ok': ...}}` or `{'sudo_result': {'Err': ...}}`.
-    """
-    for event in receipt.triggered_events:
-        value = event.value
-        record = value.get("event", value) if isinstance(value, dict) else {}
-        if record.get("event_id") != "Sudid":
-            continue
-        attributes = record.get("attributes")
-        # Prefer the structured `sudo_result` ({'Ok': ...} / {'Err': ...}); fall back to a
-        # string scan only if the event shape differs across substrate-interface versions.
-        result = attributes.get("sudo_result") if isinstance(attributes, dict) else attributes
-        if isinstance(result, dict) and "Err" in result:
-            return str(result["Err"])
-        if not isinstance(result, dict) and ("'Err'" in str(attributes) or '"Err"' in str(attributes)):
-            return str(attributes)
-    return None
 
 
 def toggle_transfer(
@@ -151,24 +139,50 @@ def toggle_transfer(
         call_params={"call": inner},
     )
 
-    last_err = "unknown error"
     for attempt in range(attempts):
         extrinsic = sub.create_signed_extrinsic(call=call, keypair=alice)
         receipt = sub.submit_extrinsic(extrinsic, wait_for_inclusion=True)
-        if not receipt.is_success:
-            last_err = receipt.error_message
-        else:
-            inner_err = _sudo_dispatch_error(receipt)
-            if inner_err is None:
-                print(f"ok netuid={netuid} toggle={enabled} block={receipt.block_hash}")
-                return
-            last_err = inner_err
-        # Rejected inside the per-tempo admin freeze window; clears within a block or two.
+        # `Sudo.sudo` reports success even when the inner call reverts, so trust the
+        # chain state rather than the receipt: read the toggle back and check it stuck.
+        current = sub.query("SubtensorModule", "TransferToggle", [netuid]).value
+        if current == enabled:
+            print(f"ok netuid={netuid} toggle={enabled} block={receipt.block_hash}")
+            return
+        # Safety net: the e2e bootstrap disables the admin freeze window first (see
+        # set_admin_freeze_window), so this normally sticks on the first attempt.
         if attempt != attempts - 1:
             time.sleep(6)
 
-    print(f"FAIL: toggle_transfer netuid={netuid} -> {last_err}", file=sys.stderr)
+    print(f"FAIL: toggle_transfer netuid={netuid} did not reach toggle={enabled}", file=sys.stderr)
     sys.exit(1)
+
+
+def set_admin_freeze_window(
+    chain_endpoint: str,
+    window: int,
+) -> None:
+    from substrateinterface import Keypair, SubstrateInterface
+
+    sub = SubstrateInterface(url=chain_endpoint)
+    alice = Keypair.create_from_uri("//Alice")
+    inner = sub.compose_call(
+        call_module="AdminUtils",
+        call_function="sudo_set_admin_freeze_window",
+        call_params={"window": window},
+    )
+    call = sub.compose_call(
+        call_module="Sudo",
+        call_function="sudo",
+        call_params={"call": inner},
+    )
+    extrinsic = sub.create_signed_extrinsic(call=call, keypair=alice)
+    receipt = sub.submit_extrinsic(extrinsic, wait_for_inclusion=True)
+    current = sub.query("SubtensorModule", "AdminFreezeWindow", []).value
+    if current != window:
+        print(f"FAIL: set_admin_freeze_window did not reach window={window} (now {current})",
+              file=sys.stderr)
+        sys.exit(1)
+    print(f"ok admin_freeze_window={window} block={receipt.block_hash}")
 
 
 def set_validators(
@@ -297,6 +311,11 @@ def main() -> None:
                    help="Whether alpha transfer_stake is allowed on the subnet")
     p.add_argument("--attempts", type=int, default=10)
 
+    p = sub.add_parser("set_admin_freeze_window")
+    p.add_argument("--chain-endpoint", required=True)
+    p.add_argument("--window", required=True, type=int,
+                   help="Terminal blocks per tempo during which admin ops are frozen (0 disables)")
+
     p = sub.add_parser("set_validators")
     p.add_argument("--rpc-url", required=True)
     p.add_argument("--registry", required=True)
@@ -327,6 +346,11 @@ def main() -> None:
             netuid=args.netuid,
             enabled=(args.enabled == "true"),
             attempts=args.attempts,
+        )
+    elif args.cmd == "set_admin_freeze_window":
+        set_admin_freeze_window(
+            chain_endpoint=args.chain_endpoint,
+            window=args.window,
         )
     elif args.cmd == "set_validators":
         set_validators(

@@ -20,12 +20,17 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     function test_RevertWhen_ConstructorZeroMailboxLogic() public {
         vm.expectRevert(AlphaVault.ZeroAddress.selector);
-        new AlphaVault("https://api.tao20.io/{id}.json", address(0), address(subnetLogic));
+        new AlphaVault("https://api.tao20.io/{id}.json", address(0), address(subnetLogic), address(registry));
     }
 
     function test_RevertWhen_ConstructorZeroSubnetLogic() public {
         vm.expectRevert(AlphaVault.ZeroAddress.selector);
-        new AlphaVault("https://api.tao20.io/{id}.json", address(mailboxLogic), address(0));
+        new AlphaVault("https://api.tao20.io/{id}.json", address(mailboxLogic), address(0), address(registry));
+    }
+
+    function test_RevertWhen_ConstructorZeroValidatorRegistry() public {
+        vm.expectRevert(AlphaVault.ZeroAddress.selector);
+        new AlphaVault("https://api.tao20.io/{id}.json", address(mailboxLogic), address(subnetLogic), address(0));
     }
 
     // ────────────────── Best Validator Selection ─────────────────────────────
@@ -563,29 +568,10 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(_countRebalancedLogs(vm.getRecordedLogs()), 0);
     }
 
-    // ────────────────── setValidatorRegistry ────────────────────────────
+    // ────────────────── validatorRegistry (immutable) ────────────────────
 
-    function test_SetValidatorRegistry() public {
-        assertTrue(address(vault.validatorRegistry()) != address(0));
-
-        address[] memory s = new address[](2);
-        s[0] = vm.addr(SIGNER_PK_1);
-        s[1] = vm.addr(SIGNER_PK_2);
-        ValidatorRegistry fresh = new ValidatorRegistry(address(this), s, 2);
-
-        vault.setValidatorRegistry(address(fresh));
-        assertEq(address(vault.validatorRegistry()), address(fresh));
-    }
-
-    function test_RevertWhen_SetValidatorRegistryOnZeroAddress() public {
-        vm.expectRevert(AlphaVault.ZeroAddress.selector);
-        vault.setValidatorRegistry(address(0));
-    }
-
-    function test_SetValidatorRegistryOnlyOwner() public {
-        vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
-        vault.setValidatorRegistry(address(0x1234));
+    function test_ValidatorRegistry_SetAtConstruction() public view {
+        assertEq(address(vault.validatorRegistry()), address(registry));
     }
 
     // ────────────────── setURI ───────────────────────────────────────────
@@ -611,10 +597,10 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         address[] memory s = new address[](2);
         s[0] = vm.addr(SIGNER_PK_1);
         s[1] = vm.addr(SIGNER_PK_2);
-        vault.setValidatorRegistry(address(new ValidatorRegistry(address(this), s, 2)));
+        AlphaVault freshVault = _deployVault(address(new ValidatorRegistry(address(this), s, 2)));
 
         vm.expectRevert(AlphaVault.NoValidatorFound.selector);
-        vault.getBestValidators(NETUID1);
+        freshVault.getBestValidators(NETUID1);
     }
 
     // ────────────────── Validator count boundaries ───────────────────────────
@@ -641,18 +627,16 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     /// @dev `weights[0] == 0` is the "subnet not configured" sentinel. `_resolveValidators`
     ///      must revert `NoValidatorFound` whether the registry returns all-zeros or just
-    ///      slot-0-zero with non-zero entries elsewhere (a corrupt-but-not-honest case).
-    /// @dev `weights[0] == 0` is the "subnet not configured" sentinel. `_resolveValidators`
-    ///      must revert `NoValidatorFound` whether the registry returns all-zeros or just
     ///      slot-0-zero with non-zero entries elsewhere. The corrupt-but-not-honest case
-    ///      cannot be produced by the real registry, so this test swaps in the mock.
+    ///      cannot be produced by the real registry, so this test deploys a fresh vault
+    ///      against the mock.
     function test_RevertWhen_ResolveValidatorsWhenWeightZero() public {
         MockValidatorRegistry mock = new MockValidatorRegistry();
-        vault.setValidatorRegistry(address(mock));
+        AlphaVault mockVault = _deployVault(address(mock));
 
         _setRegBlock(91, 91);
         vm.expectRevert(AlphaVault.NoValidatorFound.selector);
-        vault.getBestValidators(91);
+        mockVault.getBestValidators(91);
 
         bytes32[3] memory corruptHks;
         uint16[3] memory corruptWts;
@@ -663,14 +647,14 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         mock.setRaw(92, corruptHks, corruptWts);
         _setRegBlock(92, 92);
         vm.expectRevert(AlphaVault.NoValidatorFound.selector);
-        vault.getBestValidators(92);
+        mockVault.getBestValidators(92);
     }
 
     // ────────────────── getBestValidators raw registry resolution ─────────────
 
     function test_GetBestValidatorsSurfacesCorruptRegistryRawState() public {
         MockValidatorRegistry mock = new MockValidatorRegistry();
-        vault.setValidatorRegistry(address(mock));
+        AlphaVault mockVault = _deployVault(address(mock));
 
         bytes32[3] memory hks;
         uint16[3] memory wts;
@@ -682,7 +666,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         // _resolveValidators tolerates the corrupt mid-array entry (slot 0 is non-zero,
         // so the "configured" sentinel passes); getBestValidators surfaces the raw state.
-        bytes32[3] memory result = vault.getBestValidators(91);
+        bytes32[3] memory result = mockVault.getBestValidators(91);
         assertEq(result[0], hotkey4);
         assertEq(result[1], bytes32(0));
         assertEq(result[2], bytes32(0));
@@ -1776,19 +1760,12 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey3, NETUID1), hk3);
     }
 
-    /// @dev On-chain-only emissions: bump the mock stake on one hotkey, leave
-    ///      `totalStake` storage untouched. The contract must re-sync on its own.
-    function _onchainEmissions(uint256 netuid, uint256 extraAlpha) private {
-        uint256 currentStake = _getVaultStake(hotkey1, netuid);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(netuid), netuid, currentStake + extraAlpha);
-    }
-
     function test_UnwrapSyncsEmissions() public {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
         uint256 shares = vault.balanceOf(alice, TOKEN1);
 
-        _onchainEmissions(NETUID1, 5 ether);
+        _simulateEmissions(NETUID1, 5 ether);
 
         bytes32 aliceSub = _toSubstrate(alice);
         vm.prank(alice);
@@ -1806,7 +1783,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDeposit(bob, NETUID1, 30 ether);
         _wrap(bob, NETUID1);
 
-        _onchainEmissions(NETUID1, 20 ether);
+        _simulateEmissions(NETUID1, 20 ether);
 
         uint256 aliceShares = vault.balanceOf(alice, TOKEN1);
         bytes32 aliceSub = _toSubstrate(alice);
@@ -1832,7 +1809,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
         uint256 aliceShares = vault.balanceOf(alice, TOKEN1);
 
-        _onchainEmissions(NETUID1, 10 ether);
+        _simulateEmissions(NETUID1, 10 ether);
 
         bytes32 aliceSub = _toSubstrate(alice);
         vm.prank(alice);
@@ -1846,33 +1823,37 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertApproxEqAbs(vaultRemaining, 20 ether, 1e9, "remaining shares back ~20 alpha");
     }
 
-    function test_RebalanceSyncsTotalStake() public {
+    function test_TotalStake_ReflectsEmissionsWithoutSync() public {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
-        uint256 storedBefore = vault.totalStake(TOKEN1);
         uint256 priceBefore = vault.sharePrice(TOKEN1);
 
-        _onchainEmissions(NETUID1, 5 ether);
-        assertEq(vault.totalStake(TOKEN1), storedBefore, "totalStake stale before sync");
-        assertEq(vault.sharePrice(TOKEN1), priceBefore, "sharePrice stale before sync");
+        _simulateEmissions(NETUID1, 5 ether);
 
-        vault.rebalance(NETUID1);
-
-        assertEq(vault.totalStake(TOKEN1), _totalVaultStakeAcrossHotkeys(NETUID1), "totalStake synced");
-        assertGt(vault.sharePrice(TOKEN1), priceBefore, "sharePrice reflects emissions after sync");
+        assertEq(vault.totalStake(TOKEN1), _totalVaultStakeAcrossHotkeys(NETUID1), "totalStake tracks live stake");
+        assertEq(vault.totalStake(TOKEN1), 35 ether, "totalStake includes the 5 ether emission");
+        assertGt(vault.sharePrice(TOKEN1), priceBefore, "sharePrice rises with emissions");
     }
 
-    function test_RebalanceSyncsSingleValidatorSet() public {
+    function test_EmptyVault_ViewsReturnZeroNotRevert() public {
+        AlphaVault fresh = _deployVault(address(registry));
+        fresh.createSubnetProxy(NETUID1);
+        uint256 tokenId = fresh.currentTokenId(NETUID1);
+
+        assertEq(fresh.totalStake(tokenId), 0, "totalStake returns 0 for a vault with no stake");
+        assertEq(fresh.previewWrap(tokenId, 1 ether), 1 ether * 1e9, "previewWrap returns the empty-vault initial rate");
+    }
+
+    function test_Rebalance_SingleValidatorSet() public {
         _setValidators(NETUID1, _hotkeys(hotkey1), _weights(10_000));
 
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
 
-        _onchainEmissions(NETUID1, 4 ether);
+        _simulateEmissions(NETUID1, 4 ether);
         vault.rebalance(NETUID1);
 
-        uint256 onchain = _totalVaultStakeAcrossHotkeys(NETUID1);
-        assertEq(vault.totalStake(TOKEN1), onchain, "rebalance must sync even when validatorCount < 2");
+        assertEq(vault.totalStake(TOKEN1), 34 ether, "single-validator stake stays whole and live");
     }
 
     function test_WrapRebalancesPreSkewedBalances() public {
@@ -1880,7 +1861,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
 
         // +40 ether emission on hotkey1 leaves clone balances at [50, 10, 10] ether.
-        _onchainEmissions(NETUID1, 40 ether);
+        _simulateEmissions(NETUID1, 40 ether);
 
         // Bob deposits 30 ether on hotkey1; flush brings clone to [80, 10, 10], total 100 ether.
         _simulateAlphaDepositHotkey(bob, NETUID1, 30 ether, hotkey1);

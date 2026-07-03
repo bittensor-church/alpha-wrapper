@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import { Vm, stdStorage, StdStorage } from "forge-std/Test.sol";
+import { Vm } from "forge-std/Test.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
@@ -16,8 +16,6 @@ import { ADDRESS_MAPPING_PRECOMPILE } from "src/interfaces/IAddressMapping.sol";
 address constant STORAGE_QUERY = 0x0000000000000000000000000000000000000807;
 
 abstract contract AlphaVaultTestBase is AttestationHelper {
-    using stdStorage for StdStorage;
-
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event MinRebalanceAmtUpdated(uint256 oldValue, uint256 newValue);
@@ -67,7 +65,6 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
         mailboxLogic = new DepositMailbox();
         subnetLogic = new SubnetClone();
-        vault = new AlphaVault("https://api.tao20.io/{id}.json", address(mailboxLogic), address(subnetLogic));
 
         // vm.addr(SIGNER_PK_2) < vm.addr(SIGNER_PK_1); the registry requires sigs sorted
         // ascending by recovered address, so attestations sign in this order.
@@ -77,7 +74,9 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         signers[0] = vm.addr(signerPks[0]);
         signers[1] = vm.addr(signerPks[1]);
         registry = new ValidatorRegistry(address(this), signers, 2);
-        vault.setValidatorRegistry(address(registry));
+
+        // validatorRegistry is immutable, so it must exist before the vault is constructed.
+        vault = _deployVault(address(registry));
 
         _setValidators(
             NETUID1, _hotkeys(hotkey1, hotkey2, hotkey3), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
@@ -86,6 +85,12 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
         TOKEN1 = vault.currentTokenId(NETUID1);
         TOKEN2 = vault.currentTokenId(NETUID2);
+    }
+
+    /// @dev `validatorRegistry` is immutable, so tests that need a different registry construct a
+    ///      fresh vault against it rather than swapping it on the shared `vault`.
+    function _deployVault(address _registry) internal returns (AlphaVault) {
+        return new AlphaVault("https://api.tao20.io/{id}.json", address(mailboxLogic), address(subnetLogic), _registry);
     }
 
     function _setValidators(uint256 netuid, bytes32[] memory hks, uint16[] memory wts) internal {
@@ -156,14 +161,9 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey, cloneSub, netuid, amount);
     }
 
-    /// @dev Simulate validator emissions accruing on the subnet clone's staked alpha: bump the
-    ///      on-chain stake under hotkey1 and the vault's cached totalStake[tokenId] by `extraAlpha`.
     function _simulateEmissions(uint256 netuid, uint256 extraAlpha) internal {
         uint256 currentStake = _getVaultStake(hotkey1, netuid);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(netuid), netuid, currentStake + extraAlpha);
-        uint256 tokenId = vault.currentTokenId(netuid);
-        stdstore.target(address(vault)).sig("totalStake(uint256)").with_key(tokenId)
-            .checked_write(vault.totalStake(tokenId) + extraAlpha);
     }
 
     function _wrap(address user, uint256 netuid) internal {

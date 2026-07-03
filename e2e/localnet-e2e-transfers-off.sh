@@ -8,42 +8,21 @@
 #   - btcli installed with Alice wallet (hotkey "default")
 #   - forge/cast installed
 #   - python3 with substrate-interface
-#   - Funded EVM deployer (see DEPLOYER in scripts/e2e_common.sh)
+#   - Funded EVM deployer (see DEPLOYER in e2e/e2e_common.sh)
 #
 # What this checks:
 #   When a subnet's `TransferToggle` is off, the chain rejects alpha `transferStake`
 #   (`TransferDisallowed`) but still allows `removeStake`/`moveStake`. The vault's
 #   alpha rail (unwrap → clone `flush` → `transferStake`) is therefore closed, but
 #   both TAO-rail exits still pay out: they only ever `removeStake` alpha → TAO.
-#
-# Flow (phases 0-5 are the shared bootstrap from scripts/e2e_common.sh):
-#   0-5. Bootstrap: subnets, validators, stake, contracts, funded user account
-#   6.   Seed a wrapped position in the user's deposit clone (transfers ON)
-#   7.   Seed raw alpha in the user's mailbox (transfers ON)
-#   8.   Switch alpha transfers OFF on every subnet
-#   9.   Alpha rail closed → unwrap(...) reverts, shares preserved
-#  10.   Withdraw the deposit clone as TAO → unwrapForTao pays native TAO
-#  11.   Withdraw the mailbox itself as TAO → reclaimMailboxAlphaAsTao pays native TAO
-#
-# This is a focused follow-up to localnet-e2e.sh: it reuses the same bootstrap and
-# helpers and only adds the transfers-off scenario, so it can stay small.
-#
-# Usage:
-#   chmod +x scripts/localnet-e2e-transfers-off.sh
-#   ./scripts/localnet-e2e-transfers-off.sh
-# ============================================================================
-
-# Arm errexit before the source runs so a missing/failed library aborts immediately
-# (e2e_common.sh re-sets this; the duplicate is harmless).
-set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=scripts/e2e_common.sh
+# shellcheck source=e2e/e2e_common.sh
 source "$SCRIPT_DIR/e2e_common.sh"
 
 # Flip a subnet's alpha TransferToggle via Sudo (//Alice). Specific to this test.
 toggle_transfer_py() { # <netuid> <true|false>
-    python3 scripts/e2e_helpers.py toggle_transfer \
+    python3 scripts/chain_ops.py toggle_transfer \
         --chain-endpoint "$CHAIN_ENDPOINT" \
         --netuid "$1" \
         --enabled "$2"
@@ -96,10 +75,20 @@ for NET in "${NETUIDS[@]}"; do
     ok "netuid $NET: alpha transfers disabled (TransferToggle=false)"
 done
 
+info "Confirming raw transferStake now reverts with TransferDisallowed on netuid $POS_NET..."
+PROBE=$(python3 scripts/chain_ops.py transfer_stake \
+    --chain-endpoint "$CHAIN_ENDPOINT" \
+    --dest-ss58 "$SEED_MAILBOX_SS58" --hotkey-ss58 "$POS_HK_SS58" \
+    --netuid "$POS_NET" --alpha-amount "$PER_HOTKEY_RAW" 2>&1) \
+    && fail "transferStake did NOT revert with transfers off on netuid $POS_NET"
+grep -q TransferDisallowed <<<"$PROBE" \
+    || fail "transferStake reverted but not with TransferDisallowed: $PROBE"
+ok "netuid $POS_NET: transferStake reverts TransferDisallowed"
+
 log "Phase 9: Alpha rail is closed — unwrap(...) must revert"
 
-# The alpha rail ends in clone `flush` → `transferStake`, which now reverts
-# `TransferDisallowed` and rolls back the whole unwrap, leaving the shares intact.
+# The alpha rail ends in clone `flush` → `transferStake`, which now reverts `TransferDisallowed`
+# (asserted directly in Phase 8), rolling back the whole unwrap and leaving the shares intact.
 PRE_SHARES=$(vault_shares "$POS_TID")
 vault_send_expect_revert 2000000 "unwrap (alpha rail) did NOT revert with transfers off" \
     "unwrap(uint256,uint256,bytes32)" "$POS_TID" "$PRE_SHARES" "$WRAPPER_SUB_B32"
@@ -109,6 +98,11 @@ POST_SHARES=$(vault_shares "$POS_TID")
 ok "Alpha-rail unwrap reverted; shares preserved ($POST_SHARES)"
 
 log "Phase 10: Withdraw the deposit clone as TAO (unwrapForTao)"
+
+# Live backing alpha this position will sell, and its alpha→TAO quote — both captured pre-swap.
+POS_ALPHA=$(cast call "$VAULT_ADDR" "previewUnwrap(uint256,uint256)(uint256,uint256)" \
+    "$POS_TID" "$POS_SHARES" --rpc-url "$RPC_URL" | head -1 | awk '{print $1}')
+POS_QUOTE=$(alpha_to_tao_quote "$POS_NET" "$POS_ALPHA")
 
 USER_TAO_PRE=$(user_tao_wei)
 info "User EVM balance before: $USER_TAO_PRE wei"
@@ -122,10 +116,16 @@ ok "Shares burned to 0"
 
 USER_TAO_POST=$(user_tao_wei)
 info "User EVM balance after:  $USER_TAO_POST wei"
-GAINED=$(assert_gain "$USER_TAO_PRE" "$USER_TAO_POST" "user did not gain TAO from unwrapForTao")
-ok "Deposit clone withdrawn as TAO; user gained $GAINED wei (net of gas)"
+GAINED=$(assert_tao_gain "$USER_TAO_PRE" "$USER_TAO_POST" "$POS_QUOTE" \
+    "unwrapForTao payout off the alpha→TAO quote")
+ok "Deposit clone withdrawn as TAO; user gained $GAINED wei (matches quote $POS_QUOTE RAO)"
 
 log "Phase 11: Withdraw the mailbox itself as TAO (reclaimMailboxAlphaAsTao)"
+
+# Live mailbox alpha (re-read: accrued emissions since Phase 7) and its alpha→TAO quote,
+# both captured pre-swap.
+RECLAIM_ALPHA=$(get_stake "$SEED_HK_B32" "$SEED_MAILBOX_SUB" "$SEED_NET")
+RECLAIM_QUOTE=$(alpha_to_tao_quote "$SEED_NET" "$RECLAIM_ALPHA")
 
 USER_TAO_PRE=$(user_tao_wei)
 info "User EVM balance before: $USER_TAO_PRE wei"
@@ -139,8 +139,9 @@ ok "Mailbox alpha drained to 0"
 
 USER_TAO_POST=$(user_tao_wei)
 info "User EVM balance after:  $USER_TAO_POST wei"
-GAINED=$(assert_gain "$USER_TAO_PRE" "$USER_TAO_POST" "user did not gain TAO from reclaim")
-ok "Mailbox withdrawn as TAO; user gained $GAINED wei (net of gas)"
+GAINED=$(assert_tao_gain "$USER_TAO_PRE" "$USER_TAO_POST" "$RECLAIM_QUOTE" \
+    "reclaim payout off the alpha→TAO quote")
+ok "Mailbox withdrawn as TAO; user gained $GAINED wei (matches quote $RECLAIM_QUOTE RAO)"
 
 log "E2E complete (alpha transfers off)"
 echo "  AlphaVault:        $VAULT_ADDR"

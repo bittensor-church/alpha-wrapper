@@ -1,7 +1,7 @@
 {
-  "rebalance: after registry weight update": "119120",
-  "unwrap: full": "170131",
-  "unwrap: partial": "197931",
-  "wrap: first": "503237",
-  "wrap: subsequent": "258881"
+  "rebalance: after registry weight update": "114614",
+  "unwrap: full": "167625",
+  "unwrap: partial": "190625",
+  "wrap: first": "478831",
+  "wrap: subsequent": "251575"
 }
