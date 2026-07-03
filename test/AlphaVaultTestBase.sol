@@ -161,14 +161,9 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey, cloneSub, netuid, amount);
     }
 
-    /// @dev Simulate validator emissions accruing on the subnet clone's staked alpha: bump the
-    ///      on-chain stake under hotkey1 and the vault's cached totalStake[tokenId] by `extraAlpha`.
     function _simulateEmissions(uint256 netuid, uint256 extraAlpha) internal {
         uint256 currentStake = _getVaultStake(hotkey1, netuid);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(netuid), netuid, currentStake + extraAlpha);
-        uint256 tokenId = vault.currentTokenId(netuid);
-        uint256 slot = uint256(keccak256(abi.encode(tokenId, uint256(7))));
-        vm.store(address(vault), bytes32(slot), bytes32(vault.totalStake(tokenId) + extraAlpha));
     }
 
     function _wrap(address user, uint256 netuid) internal {

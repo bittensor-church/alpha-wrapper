@@ -1760,19 +1760,12 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey3, NETUID1), hk3);
     }
 
-    /// @dev On-chain-only emissions: bump the mock stake on one hotkey, leave
-    ///      `totalStake` storage untouched. The contract must re-sync on its own.
-    function _onchainEmissions(uint256 netuid, uint256 extraAlpha) private {
-        uint256 currentStake = _getVaultStake(hotkey1, netuid);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(netuid), netuid, currentStake + extraAlpha);
-    }
-
     function test_UnwrapSyncsEmissions() public {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
         uint256 shares = vault.balanceOf(alice, TOKEN1);
 
-        _onchainEmissions(NETUID1, 5 ether);
+        _simulateEmissions(NETUID1, 5 ether);
 
         bytes32 aliceSub = _toSubstrate(alice);
         vm.prank(alice);
@@ -1790,7 +1783,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDeposit(bob, NETUID1, 30 ether);
         _wrap(bob, NETUID1);
 
-        _onchainEmissions(NETUID1, 20 ether);
+        _simulateEmissions(NETUID1, 20 ether);
 
         uint256 aliceShares = vault.balanceOf(alice, TOKEN1);
         bytes32 aliceSub = _toSubstrate(alice);
@@ -1816,7 +1809,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
         uint256 aliceShares = vault.balanceOf(alice, TOKEN1);
 
-        _onchainEmissions(NETUID1, 10 ether);
+        _simulateEmissions(NETUID1, 10 ether);
 
         bytes32 aliceSub = _toSubstrate(alice);
         vm.prank(alice);
@@ -1830,33 +1823,37 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertApproxEqAbs(vaultRemaining, 20 ether, 1e9, "remaining shares back ~20 alpha");
     }
 
-    function test_RebalanceSyncsTotalStake() public {
+    function test_TotalStake_ReflectsEmissionsWithoutSync() public {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
-        uint256 storedBefore = vault.totalStake(TOKEN1);
         uint256 priceBefore = vault.sharePrice(TOKEN1);
 
-        _onchainEmissions(NETUID1, 5 ether);
-        assertEq(vault.totalStake(TOKEN1), storedBefore, "totalStake stale before sync");
-        assertEq(vault.sharePrice(TOKEN1), priceBefore, "sharePrice stale before sync");
+        _simulateEmissions(NETUID1, 5 ether);
 
-        vault.rebalance(NETUID1);
-
-        assertEq(vault.totalStake(TOKEN1), _totalVaultStakeAcrossHotkeys(NETUID1), "totalStake synced");
-        assertGt(vault.sharePrice(TOKEN1), priceBefore, "sharePrice reflects emissions after sync");
+        assertEq(vault.totalStake(TOKEN1), _totalVaultStakeAcrossHotkeys(NETUID1), "totalStake tracks live stake");
+        assertEq(vault.totalStake(TOKEN1), 35 ether, "totalStake includes the 5 ether emission");
+        assertGt(vault.sharePrice(TOKEN1), priceBefore, "sharePrice rises with emissions");
     }
 
-    function test_RebalanceSyncsSingleValidatorSet() public {
+    function test_EmptyVault_ViewsReturnZeroNotRevert() public {
+        AlphaVault fresh = _deployVault(address(registry));
+        fresh.createSubnetProxy(NETUID1);
+        uint256 tokenId = fresh.currentTokenId(NETUID1);
+
+        assertEq(fresh.totalStake(tokenId), 0, "totalStake returns 0 for a vault with no stake");
+        assertEq(fresh.previewWrap(tokenId, 1 ether), 1 ether * 1e9, "previewWrap returns the empty-vault initial rate");
+    }
+
+    function test_Rebalance_SingleValidatorSet() public {
         _setValidators(NETUID1, _hotkeys(hotkey1), _weights(10_000));
 
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
 
-        _onchainEmissions(NETUID1, 4 ether);
+        _simulateEmissions(NETUID1, 4 ether);
         vault.rebalance(NETUID1);
 
-        uint256 onchain = _totalVaultStakeAcrossHotkeys(NETUID1);
-        assertEq(vault.totalStake(TOKEN1), onchain, "rebalance must sync even when validatorCount < 2");
+        assertEq(vault.totalStake(TOKEN1), 34 ether, "single-validator stake stays whole and live");
     }
 
     function test_WrapRebalancesPreSkewedBalances() public {
@@ -1864,7 +1861,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
 
         // +40 ether emission on hotkey1 leaves clone balances at [50, 10, 10] ether.
-        _onchainEmissions(NETUID1, 40 ether);
+        _simulateEmissions(NETUID1, 40 ether);
 
         // Bob deposits 30 ether on hotkey1; flush brings clone to [80, 10, 10], total 100 ether.
         _simulateAlphaDepositHotkey(bob, NETUID1, 30 ether, hotkey1);
