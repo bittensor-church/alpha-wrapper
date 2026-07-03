@@ -87,9 +87,8 @@ ok "netuid $POS_NET: transferStake reverts TransferDisallowed"
 
 log "Phase 9: Alpha rail is closed — unwrap(...) must revert"
 
-# The alpha rail ends in clone `flush` → `transferStake`, which now reverts
-# `TransferDisallowed` (asserted directly in Phase 8) and rolls back the whole unwrap,
-# leaving the shares intact.
+# The alpha rail ends in clone `flush` → `transferStake`, which now reverts `TransferDisallowed`
+# (asserted directly in Phase 8), rolling back the whole unwrap and leaving the shares intact.
 PRE_SHARES=$(vault_shares "$POS_TID")
 vault_send_expect_revert 2000000 "unwrap (alpha rail) did NOT revert with transfers off" \
     "unwrap(uint256,uint256,bytes32)" "$POS_TID" "$PRE_SHARES" "$WRAPPER_SUB_B32"
@@ -100,8 +99,7 @@ ok "Alpha-rail unwrap reverted; shares preserved ($POST_SHARES)"
 
 log "Phase 10: Withdraw the deposit clone as TAO (unwrapForTao)"
 
-# Live backing alpha this position will sell, and the chain's alpha→TAO quote for it — both
-# captured before the unwrap so the quote reflects the same pool state the swap executes against.
+# Live backing alpha this position will sell, and its alpha→TAO quote — both captured pre-swap.
 POS_ALPHA=$(cast call "$VAULT_ADDR" "previewUnwrap(uint256,uint256)(uint256,uint256)" \
     "$POS_TID" "$POS_SHARES" --rpc-url "$RPC_URL" | head -1 | awk '{print $1}')
 POS_QUOTE=$(alpha_to_tao_quote "$POS_NET" "$POS_ALPHA")
@@ -124,8 +122,8 @@ ok "Deposit clone withdrawn as TAO; user gained $GAINED wei (matches quote $POS_
 
 log "Phase 11: Withdraw the mailbox itself as TAO (reclaimMailboxAlphaAsTao)"
 
-# Live mailbox alpha (re-read: it has accrued emissions since Phase 7) and its alpha→TAO quote,
-# both captured before the reclaim so the quote isn't skewed by the swap's own price impact.
+# Live mailbox alpha (re-read: accrued emissions since Phase 7) and its alpha→TAO quote,
+# both captured pre-swap.
 RECLAIM_ALPHA=$(get_stake "$SEED_HK_B32" "$SEED_MAILBOX_SUB" "$SEED_NET")
 RECLAIM_QUOTE=$(alpha_to_tao_quote "$SEED_NET" "$RECLAIM_ALPHA")
 

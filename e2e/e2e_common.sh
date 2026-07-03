@@ -186,11 +186,10 @@ assert_gain() { # <pre_wei> <post_wei> <fail_msg>
     echo "$delta"
 }
 
-# Chain's own alpha→TAO quote (RAO out) for selling <alpha_rao> on <netuid> at the current pool
-# state. Capture it *before* the swap that pays out: simSwapAlphaForTao re-prices against live
-# reserves, and the bonding curve is concave, so a quote taken *after* the swap is understated by
-# the swap's own price impact (e.g. a ~33 alpha exit re-quotes ~13% low — past assert_tao_gain's
-# tolerance). Pairing a pre-swap quote with the realised gain keeps the comparison apples-to-apples.
+# Chain's own alpha→TAO quote (RAO out) for selling <alpha_rao> on <netuid>. Capture it *before*
+# the swap that pays out: simSwapAlphaForTao re-prices against live reserves and the curve is
+# concave, so a quote taken after the swap understates the payout by its own price impact
+# (a ~33 alpha exit re-quotes ~13% low — past assert_tao_gain's ±10%).
 alpha_to_tao_quote() { # <netuid> <alpha_rao>
     cast call "$ALPHA_PRECOMPILE" "simSwapAlphaForTao(uint16,uint64)(uint256)" "$1" "$2" \
         --rpc-url "$RPC_URL" | awk '{print $1}'
@@ -297,10 +296,9 @@ e2e_bootstrap() {
         ok "netuid $NETUID"
     done
 
-    # Fast-runtime sets Tempo == AdminFreezeWindow == 10, so owner/root hyperparameter
-    # writes (max_regs_per_block below, TransferToggle in the transfers-off test) are only
-    # accepted ~1 block in 11 near each subnet's epoch boundary, and otherwise silently miss.
-    # Disable the freeze window so every sudo hyperparameter write lands on the first attempt.
+    # Fast-runtime's admin freeze window lets owner/root hyperparameter writes (max_regs_per_block
+    # below, TransferToggle in the transfers-off test) land only near each subnet's epoch boundary
+    # and otherwise silently miss (see set_admin_freeze_window). Disable it so they apply first try.
     log "Disable admin freeze window (deterministic sudo hyperparameter writes)"
     python3 scripts/chain_ops.py set_admin_freeze_window \
         --chain-endpoint "$CHAIN_ENDPOINT" --window 0 | tail -1
