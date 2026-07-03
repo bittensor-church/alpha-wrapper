@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 
 """
-Helper subcommands for `localnet-e2e.sh`.
+Chain-operation subcommands (address mapping + substrate/EVM writes) driving the localnet chain.
 
+Used by the localnet-e2e tests, but each subcommand is a standalone chain op.
 Each subcommand prints its result to stdout; errors go to stderr and exit 1.
 
 Subcommands:
@@ -26,6 +27,23 @@ Subcommands:
         signatures by recovered signer address ascending (contract requirement),
         and submit `updateValidators(att, sigs[])` to the ValidatorRegistry.
         The first signer-pk also pays for the transaction.
+
+    toggle_transfer --chain-endpoint URL --netuid N --enabled true|false
+                    [--attempts N]
+        Flip a subnet's `TransferToggle` by submitting
+        `Sudo.sudo(AdminUtils.sudo_set_toggle_transfer(netuid, toggle))` as //Alice
+        (the dev sudo/root key). With transfers off, the staking precompile's
+        `transferStake` reverts `TransferDisallowed` while `removeStake`/`moveStake`
+        keep working. Relies on the admin freeze window being disabled first
+        (see set_admin_freeze_window); retries across blocks as a safety net.
+
+    set_admin_freeze_window --chain-endpoint URL --window N
+        Set the global `AdminFreezeWindow` via
+        `Sudo.sudo(AdminUtils.sudo_set_admin_freeze_window(N))` as //Alice. On the
+        fast-runtime localnet `Tempo == AdminFreezeWindow == 10`, so owner/root
+        hyperparameter ops (toggle_transfer, max_regs_per_block, ...) are only accepted
+        on 1 block in 11 near each subnet epoch boundary. The e2e bootstrap sets the
+        window to 0 so those sudo writes apply on the first attempt.
 """
 
 import argparse
@@ -93,9 +111,78 @@ def transfer_stake(
     extrinsic = sub.create_signed_extrinsic(call=call, keypair=alice)
     receipt = sub.submit_extrinsic(extrinsic, wait_for_inclusion=True)
     if not receipt.is_success:
+        # `error_message` is the metadata-decoded module error, e.g.
+        # {'type': 'Module', 'name': 'TransferDisallowed', ...} — callers grep the name.
         print(f"FAIL: {receipt.error_message}", file=sys.stderr)
         sys.exit(1)
     print(f"ok block={receipt.block_hash}")
+
+
+def toggle_transfer(
+    chain_endpoint: str,
+    netuid: int,
+    enabled: bool,
+    attempts: int,
+) -> None:
+    from substrateinterface import Keypair, SubstrateInterface
+
+    sub = SubstrateInterface(url=chain_endpoint)
+    alice = Keypair.create_from_uri("//Alice")
+    inner = sub.compose_call(
+        call_module="AdminUtils",
+        call_function="sudo_set_toggle_transfer",
+        call_params={"netuid": netuid, "toggle": enabled},
+    )
+    call = sub.compose_call(
+        call_module="Sudo",
+        call_function="sudo",
+        call_params={"call": inner},
+    )
+
+    for attempt in range(attempts):
+        extrinsic = sub.create_signed_extrinsic(call=call, keypair=alice)
+        receipt = sub.submit_extrinsic(extrinsic, wait_for_inclusion=True)
+        # `Sudo.sudo` reports success even when the inner call reverts, so trust the
+        # chain state rather than the receipt: read the toggle back and check it stuck.
+        current = sub.query("SubtensorModule", "TransferToggle", [netuid]).value
+        if current == enabled:
+            print(f"ok netuid={netuid} toggle={enabled} block={receipt.block_hash}")
+            return
+        # Safety net: the e2e bootstrap disables the admin freeze window first (see
+        # set_admin_freeze_window), so this normally sticks on the first attempt.
+        if attempt != attempts - 1:
+            time.sleep(6)
+
+    print(f"FAIL: toggle_transfer netuid={netuid} did not reach toggle={enabled}", file=sys.stderr)
+    sys.exit(1)
+
+
+def set_admin_freeze_window(
+    chain_endpoint: str,
+    window: int,
+) -> None:
+    from substrateinterface import Keypair, SubstrateInterface
+
+    sub = SubstrateInterface(url=chain_endpoint)
+    alice = Keypair.create_from_uri("//Alice")
+    inner = sub.compose_call(
+        call_module="AdminUtils",
+        call_function="sudo_set_admin_freeze_window",
+        call_params={"window": window},
+    )
+    call = sub.compose_call(
+        call_module="Sudo",
+        call_function="sudo",
+        call_params={"call": inner},
+    )
+    extrinsic = sub.create_signed_extrinsic(call=call, keypair=alice)
+    receipt = sub.submit_extrinsic(extrinsic, wait_for_inclusion=True)
+    current = sub.query("SubtensorModule", "AdminFreezeWindow", []).value
+    if current != window:
+        print(f"FAIL: set_admin_freeze_window did not reach window={window} (now {current})",
+              file=sys.stderr)
+        sys.exit(1)
+    print(f"ok admin_freeze_window={window} block={receipt.block_hash}")
 
 
 def set_validators(
@@ -217,6 +304,18 @@ def main() -> None:
     p.add_argument("--netuid", required=True, type=int)
     p.add_argument("--alpha-amount", required=True, type=int)
 
+    p = sub.add_parser("toggle_transfer")
+    p.add_argument("--chain-endpoint", required=True)
+    p.add_argument("--netuid", required=True, type=int)
+    p.add_argument("--enabled", required=True, choices=["true", "false"],
+                   help="Whether alpha transfer_stake is allowed on the subnet")
+    p.add_argument("--attempts", type=int, default=10)
+
+    p = sub.add_parser("set_admin_freeze_window")
+    p.add_argument("--chain-endpoint", required=True)
+    p.add_argument("--window", required=True, type=int,
+                   help="Terminal blocks per tempo during which admin ops are frozen (0 disables)")
+
     p = sub.add_parser("set_validators")
     p.add_argument("--rpc-url", required=True)
     p.add_argument("--registry", required=True)
@@ -240,6 +339,18 @@ def main() -> None:
             hotkey_ss58=args.hotkey_ss58,
             netuid=args.netuid,
             alpha_amount=args.alpha_amount,
+        )
+    elif args.cmd == "toggle_transfer":
+        toggle_transfer(
+            chain_endpoint=args.chain_endpoint,
+            netuid=args.netuid,
+            enabled=(args.enabled == "true"),
+            attempts=args.attempts,
+        )
+    elif args.cmd == "set_admin_freeze_window":
+        set_admin_freeze_window(
+            chain_endpoint=args.chain_endpoint,
+            window=args.window,
         )
     elif args.cmd == "set_validators":
         set_validators(
