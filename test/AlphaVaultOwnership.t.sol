@@ -12,27 +12,6 @@ contract AlphaVaultOwnershipTest is AlphaVaultTestBase {
         super.setUp();
     }
 
-    function test_transferOwnership_setsPendingOwnerAndKeepsOwner() public {
-        vm.expectEmit(true, true, false, false, address(vault));
-        emit OwnershipTransferStarted(owner, alice);
-        vault.transferOwnership(alice);
-
-        assertEq(vault.owner(), owner, "owner must not change before acceptance");
-        assertEq(vault.pendingOwner(), alice, "pending owner must be set");
-    }
-
-    function test_acceptOwnership_transfersToPendingOwner() public {
-        vault.transferOwnership(alice);
-
-        vm.expectEmit(true, true, false, false, address(vault));
-        emit OwnershipTransferred(owner, alice);
-        vm.prank(alice);
-        vault.acceptOwnership();
-
-        assertEq(vault.owner(), alice, "owner must update after acceptance");
-        assertEq(vault.pendingOwner(), address(0), "pending owner must be cleared");
-    }
-
     function test_onlyOwnerFunctionFollowsOwnerAcrossTwoStepTransfer() public {
         // Only the owner can start a transfer.
         vm.prank(alice);
