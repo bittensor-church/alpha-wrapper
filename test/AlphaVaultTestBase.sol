@@ -93,10 +93,6 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         return new AlphaVault("https://api.tao20.io/{id}.json", address(mailboxLogic), address(subnetLogic), _registry);
     }
 
-    function _setValidators(uint256 netuid, bytes32[] memory hks, uint16[] memory wts) internal {
-        _submitAttestation(registry, netuid, hks, wts, signerPks);
-    }
-
     function _setValidators(uint256 netuid, bytes32[] memory hks, uint256[] memory wts) internal {
         _submitAttestation(registry, netuid, hks, wts, signerPks);
     }
@@ -119,36 +115,19 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         arr[2] = c;
     }
 
-    function _generateHotkeys(uint256 count) internal pure returns (bytes32[] memory arr) {
-        arr = new bytes32[](count);
-        for (uint256 i; i < count; ++i) {
-            arr[i] = keccak256(abi.encode("generated-hotkey", i));
-        }
-    }
-
-    /// @dev Even weight split summing to BPS_BASE, remainder on slot 0.
-    function _evenWeights(uint256 count) internal pure returns (uint256[] memory arr) {
-        arr = new uint256[](count);
-        uint256 baseWeight = BPS_BASE / count;
-        for (uint256 i; i < count; ++i) {
-            arr[i] = baseWeight;
-        }
-        arr[0] += BPS_BASE - baseWeight * count;
-    }
-
-    function _weights(uint16 a) internal pure returns (uint16[] memory arr) {
-        arr = new uint16[](1);
+    function _weights(uint16 a) internal pure returns (uint256[] memory arr) {
+        arr = new uint256[](1);
         arr[0] = a;
     }
 
-    function _weights(uint16 a, uint16 b) internal pure returns (uint16[] memory arr) {
-        arr = new uint16[](2);
+    function _weights(uint16 a, uint16 b) internal pure returns (uint256[] memory arr) {
+        arr = new uint256[](2);
         arr[0] = a;
         arr[1] = b;
     }
 
-    function _weights(uint16 a, uint16 b, uint16 c) internal pure returns (uint16[] memory arr) {
-        arr = new uint16[](3);
+    function _weights(uint16 a, uint16 b, uint16 c) internal pure returns (uint256[] memory arr) {
+        arr = new uint256[](3);
         arr[0] = a;
         arr[1] = b;
         arr[2] = c;

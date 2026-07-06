@@ -621,87 +621,127 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(_totalVaultStakeAcrossHotkeys(NETUID1), 90 ether);
     }
 
-    function test_Wrap_DistributesAcrossTwentyValidators() public {
-        bytes32[] memory hotkeys = _generateHotkeys(20);
-        _setValidators(93, hotkeys, _evenWeights(20));
-        _setRegBlock(93, 93);
+    uint256 private constant FRESH_NETUID = 93;
+    // 100 TAO plus an uneven remainder so per-slot weight targets exercise real rounding.
+    uint256 private constant FRESH_DEPOSIT = 100e9 + 12_345;
 
-        _simulateAlphaDepositHotkey(alice, 93, 100 ether, hotkeys[0]);
-        _wrapHotkey(alice, 93, hotkeys[0]);
+    /// @dev Attest a `count`-validator ramp-weighted set on a fresh subnet, then wrap
+    ///      `deposit` entering at the last hotkey in the set.
+    function _wrapFreshSubnet(uint256 count, uint256 deposit)
+        private
+        returns (bytes32[] memory hotkeys, uint256[] memory weights, uint256 tokenId)
+    {
+        hotkeys = _generateHotkeys(count);
+        weights = _rampWeights(count);
+        _setValidators(FRESH_NETUID, hotkeys, weights);
+        _setRegBlock(FRESH_NETUID, 93);
+        _simulateAlphaDepositHotkey(alice, FRESH_NETUID, deposit, hotkeys[count - 1]);
+        _wrapHotkey(alice, FRESH_NETUID, hotkeys[count - 1]);
+        tokenId = vault.currentTokenId(FRESH_NETUID);
+    }
 
-        uint256 tokenId = vault.currentTokenId(93);
-        assertEq(vault.totalStake(tokenId), 100 ether);
-        bytes32 cloneColdkey = _toSubstrate(vault.subnetClone(tokenId));
+    function _stakeReceivedAcross(bytes32[] memory hotkeys, address user) private view returns (uint256 received) {
         for (uint256 i; i < hotkeys.length; ++i) {
-            assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkeys[i], cloneColdkey, 93), 5 ether);
+            received += _getStake(hotkeys[i], user, FRESH_NETUID);
+        }
+    }
+
+    /// @dev Mirrors the documented weight-to-target rule: BPS share per slot, remainder on
+    ///      the last slot.
+    function _expectedTargets(uint256 total, uint256[] memory weights) private pure returns (uint256[] memory targets) {
+        targets = new uint256[](weights.length);
+        uint256 assigned;
+        for (uint256 i; i + 1 < weights.length; ++i) {
+            targets[i] = (total * weights[i]) / BPS_BASE;
+            assigned += targets[i];
+        }
+        targets[weights.length - 1] = total - assigned;
+    }
+
+    function test_Wrap_DistributesAcrossTwentyValidators() public {
+        (bytes32[] memory hotkeys, uint256[] memory weights, uint256 tokenId) = _wrapFreshSubnet(20, FRESH_DEPOSIT);
+
+        assertEq(vault.totalStake(tokenId), FRESH_DEPOSIT);
+        uint256[] memory targets = _expectedTargets(FRESH_DEPOSIT, weights);
+        for (uint256 i; i < hotkeys.length; ++i) {
+            assertEq(_getVaultStake(hotkeys[i], FRESH_NETUID), targets[i]);
         }
         assertEq(vault.lastSeenHotkeys(tokenId).length, 20);
     }
 
+    function test_Wrap_LeavesDepositOnChosenHotkeyBelowRebalanceFloor() public {
+        // Per-slot targets of a 3e7 RAO deposit across 20 validators all sit below the
+        // 2e6 rebalance floor, so distribution is skipped and the deposit stays put.
+        uint256 deposit = 3e7;
+        (bytes32[] memory hotkeys,, uint256 tokenId) = _wrapFreshSubnet(20, deposit);
+
+        assertEq(_getVaultStake(hotkeys[19], FRESH_NETUID), deposit);
+        assertEq(vault.totalStake(tokenId), deposit);
+        assertGt(vault.balanceOf(alice, tokenId), 0);
+    }
+
     function test_Unwrap_DrainsAcrossTwentyValidators() public {
-        bytes32[] memory hotkeys = _generateHotkeys(20);
-        _setValidators(93, hotkeys, _evenWeights(20));
-        _setRegBlock(93, 93);
+        (bytes32[] memory hotkeys,, uint256 tokenId) = _wrapFreshSubnet(20, FRESH_DEPOSIT);
 
-        _simulateAlphaDepositHotkey(alice, 93, 100 ether, hotkeys[0]);
-        _wrapHotkey(alice, 93, hotkeys[0]);
-
-        uint256 tokenId = vault.currentTokenId(93);
         uint256 shares = vault.balanceOf(alice, tokenId);
         vm.prank(alice);
         vault.unwrap(tokenId, shares, _toSubstrate(alice));
 
-        uint256 received;
-        for (uint256 i; i < hotkeys.length; ++i) {
-            received += _getStake(hotkeys[i], alice, 93);
-        }
-        assertApproxEqAbs(received, 100 ether, 10, "user must receive the full deposit");
+        assertEq(_stakeReceivedAcross(hotkeys, alice), FRESH_DEPOSIT, "user must receive the full deposit");
+        assertEq(vault.totalStake(tokenId), 0);
+    }
+
+    function test_Unwrap_SweepsShrinkRotationDuringExit() public {
+        (bytes32[] memory hotkeys,, uint256 tokenId) = _wrapFreshSubnet(20, FRESH_DEPOSIT);
+
+        // Shrink to a single surviving validator with no keeper rebalance in between; the
+        // unwrap itself must sweep the 19 rotated-out hotkeys before draining.
+        _setValidators(FRESH_NETUID, _hotkeys(hotkeys[0]), _weights(10_000));
+
+        uint256 shares = vault.balanceOf(alice, tokenId);
+        vm.prank(alice);
+        vault.unwrap(tokenId, shares, _toSubstrate(alice));
+
+        assertEq(_stakeReceivedAcross(hotkeys, alice), FRESH_DEPOSIT, "user must receive the full deposit");
+        assertEq(vault.lastSeenHotkeys(tokenId).length, 1);
     }
 
     function test_Rotation_SweepsAcrossSetSizeChange() public {
-        _simulateAlphaDeposit(alice, NETUID1, 30 ether);
+        uint256 deposit = 30e9;
+        _simulateAlphaDeposit(alice, NETUID1, deposit);
         _wrap(alice, NETUID1);
 
         // Grow to a 20-set keeping hotkey1/hotkey2; hotkey3 rotates out.
         bytes32[] memory grownSet = _generateHotkeys(20);
         grownSet[0] = hotkey1;
         grownSet[1] = hotkey2;
-        _setValidators(NETUID1, grownSet, _evenWeights(20));
+        _setValidators(NETUID1, grownSet, _rampWeights(20));
         vault.rebalance(NETUID1);
 
         assertEq(_getVaultStake(hotkey3, NETUID1), 0, "orphan swept on grow");
         assertEq(vault.lastSeenHotkeys(TOKEN1).length, 20);
-        assertEq(vault.totalStake(TOKEN1), 30 ether, "grow conserves total alpha");
+        assertEq(vault.totalStake(TOKEN1), deposit, "grow conserves total alpha");
 
         // Shrink to a single validator; the other 19 rotate out.
         _setValidators(NETUID1, _hotkeys(hotkey1), _weights(10_000));
         vault.rebalance(NETUID1);
 
         assertEq(vault.lastSeenHotkeys(TOKEN1).length, 1);
-        assertEq(_getVaultStake(hotkey1, NETUID1), 30 ether, "shrink consolidates onto the surviving hotkey");
+        assertEq(_getVaultStake(hotkey1, NETUID1), deposit, "shrink consolidates onto the surviving hotkey");
     }
 
-    function testFuzz_Wrap_ConservesDepositAcrossSetSizes(uint256 validatorCountSeed) public {
+    function testFuzz_Wrap_ConservesDepositAcrossSetSizes(uint256 validatorCountSeed, uint256 depositSeed) public {
         uint256 count = bound(validatorCountSeed, 1, registry.MAX_VALIDATORS());
-        bytes32[] memory hotkeys = _generateHotkeys(count);
-        _setValidators(93, hotkeys, _evenWeights(count));
-        _setRegBlock(93, 93);
+        uint256 deposit = bound(depositSeed, vault.minRebalanceAmt(), type(uint64).max);
+        (bytes32[] memory hotkeys,, uint256 tokenId) = _wrapFreshSubnet(count, deposit);
 
-        _simulateAlphaDepositHotkey(alice, 93, 100 ether, hotkeys[0]);
-        _wrapHotkey(alice, 93, hotkeys[0]);
-
-        uint256 tokenId = vault.currentTokenId(93);
-        assertEq(vault.totalStake(tokenId), 100 ether, "wrap conserves the deposit");
+        assertEq(vault.totalStake(tokenId), deposit, "wrap conserves the deposit");
 
         uint256 shares = vault.balanceOf(alice, tokenId);
         vm.prank(alice);
         vault.unwrap(tokenId, shares, _toSubstrate(alice));
 
-        uint256 received;
-        for (uint256 i; i < count; ++i) {
-            received += _getStake(hotkeys[i], alice, 93);
-        }
-        assertApproxEqAbs(received, 100 ether, 10, "unwrap returns the full deposit");
+        assertEq(_stakeReceivedAcross(hotkeys, alice), deposit, "unwrap returns the full deposit");
     }
 
     // ────────────────── _resolveValidators sentinel ──────────────────────────
@@ -723,7 +763,9 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         MockValidatorRegistry mock = new MockValidatorRegistry();
         AlphaVault mockVault = _deployVault(address(mock));
 
-        mock.setRaw(91, _hotkeys(hotkey1, hotkey2), _weights(10_000));
+        uint16[] memory rawWeights = new uint16[](1);
+        rawWeights[0] = 10_000;
+        mock.setRaw(91, _hotkeys(hotkey1, hotkey2), rawWeights);
         _setRegBlock(91, 91);
         vm.expectRevert(AlphaVault.NoValidatorFound.selector);
         mockVault.getBestValidators(91);
@@ -737,7 +779,9 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         MockValidatorRegistry mock = new MockValidatorRegistry();
         AlphaVault mockVault = _deployVault(address(mock));
 
-        mock.setRaw(91, _hotkeys(hotkey4), _weights(123));
+        uint16[] memory rawWeights = new uint16[](1);
+        rawWeights[0] = 123;
+        mock.setRaw(91, _hotkeys(hotkey4), rawWeights);
         _setRegBlock(91, 91);
 
         bytes32[] memory result = mockVault.getBestValidators(91);

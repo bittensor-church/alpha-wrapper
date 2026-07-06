@@ -88,17 +88,24 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
 
     function test_RotatedToTwentyDisjointValidators_DrainsMergedSet() public {
         _setRemoveStakeRate(1, 1);
-        uint256 shares = _depositForAlice(100 ether);
 
-        // Re-attest to a disjoint 20-validator set without any state-mutating vault call;
-        // the merged candidate set spans 3 historical + 20 current hotkeys.
-        _setValidators(NETUID1, _generateHotkeys(20), _evenWeights(20));
+        // Wrap under a full 20-validator set, then re-attest a disjoint 20-set without any
+        // state-mutating vault call: the merged candidate set spans the 40-entry worst case
+        // and every balance sits under a rotated-out hotkey.
+        bytes32[] memory initialSet = _generateHotkeys(20);
+        _setValidators(NETUID1, initialSet, _rampWeights(20));
+        uint256 deposit = 100e9;
+        _simulateAlphaDepositHotkey(alice, NETUID1, deposit, initialSet[19]);
+        _wrapHotkey(alice, NETUID1, initialSet[19]);
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+
+        _setValidators(NETUID1, _generateHotkeys(20, "rotated-hotkey"), _rampWeights(20));
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
         vault.unwrapForTao(TOKEN1, shares, 0);
 
-        assertEq(alice.balance - balanceBefore, 100 ether);
+        assertEq(alice.balance - balanceBefore, deposit);
     }
 
     function test_MinTaoOutZero_AcceptsAnyRealizedTaoAmount() public {

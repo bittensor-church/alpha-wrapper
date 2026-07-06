@@ -43,11 +43,6 @@ contract ValidatorRegistryTest is AttestationHelper {
         maxValidators = registry.MAX_VALIDATORS();
     }
 
-    function _hotkeyAt(uint256 index) private pure returns (bytes32) {
-        return keccak256(abi.encode("hotkey", index));
-    }
-
-    /// @dev Distinct hotkeys and an even weight split (remainder on slot 0) summing to 10000.
     function _att(uint256 netuid, uint256 len, uint256 nonce, uint256 deadline)
         private
         pure
@@ -56,17 +51,8 @@ contract ValidatorRegistryTest is AttestationHelper {
         att.netuid = netuid;
         att.nonce = nonce;
         att.deadline = deadline;
-        att.hotkeys = new bytes32[](len);
-        att.weights = new uint256[](len);
-        if (len == 0) {
-            return att;
-        }
-        uint256 baseWeight = 10_000 / len;
-        for (uint256 i; i < len; ++i) {
-            att.hotkeys[i] = _hotkeyAt(i);
-            att.weights[i] = baseWeight;
-        }
-        att.weights[0] += 10_000 - baseWeight * len;
+        att.hotkeys = _generateHotkeys(len);
+        att.weights = len == 0 ? new uint256[](0) : _rampWeights(len);
     }
 
     function _assertStoredSetMatches(uint256 netuid, ValidatorRegistry.WeightAttestation memory att) private view {
@@ -431,12 +417,7 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_RevertWhen_UpdateEmptyHotkeys() public {
-        ValidatorRegistry.WeightAttestation memory att;
-        att.netuid = SN1;
-        att.nonce = 1;
-        att.deadline = block.timestamp + 60;
-        att.hotkeys = new bytes32[](0);
-        att.weights = new uint256[](0);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 0, 1, block.timestamp + 60);
         bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
         vm.expectRevert(ValidatorRegistry.InvalidValidatorCount.selector);
         registry.updateValidators(att, sigs);

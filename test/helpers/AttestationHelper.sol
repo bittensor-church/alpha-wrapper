@@ -5,6 +5,30 @@ import { Test } from "forge-std/Test.sol";
 import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
 
 abstract contract AttestationHelper is Test {
+    function _generateHotkeys(uint256 count) internal pure returns (bytes32[] memory) {
+        return _generateHotkeys(count, "generated-hotkey");
+    }
+
+    function _generateHotkeys(uint256 count, string memory tag) internal pure returns (bytes32[] memory hotkeys) {
+        hotkeys = new bytes32[](count);
+        for (uint256 i; i < count; ++i) {
+            hotkeys[i] = keccak256(abi.encode(tag, i));
+        }
+    }
+
+    /// @dev Distinct per-index weights summing to 10000 BPS: a descending ramp with the
+    ///      rounding remainder on slot 0, so a weight-to-index misalignment cannot round-trip.
+    function _rampWeights(uint256 count) internal pure returns (uint256[] memory weights) {
+        weights = new uint256[](count);
+        uint256 baseWeight = (10_000 - count * (count + 1) / 2) / count;
+        uint256 assigned;
+        for (uint256 i; i < count; ++i) {
+            weights[i] = baseWeight + (count - i);
+            assigned += weights[i];
+        }
+        weights[0] += 10_000 - assigned;
+    }
+
     function _domainSeparator(ValidatorRegistry registry) internal view returns (bytes32) {
         (, string memory name, string memory version, uint256 chainId, address verifyingContract,,) =
             registry.eip712Domain();
@@ -45,20 +69,6 @@ abstract contract AttestationHelper is Test {
             (uint8 v, bytes32 r, bytes32 s) = vm.sign(pks[i], digest);
             sigs[i] = abi.encodePacked(r, s, v);
         }
-    }
-
-    function _submitAttestation(
-        ValidatorRegistry registry,
-        uint256 netuid,
-        bytes32[] memory hotkeys,
-        uint16[] memory weights,
-        uint256[] memory signerPks
-    ) internal {
-        uint256[] memory wts = new uint256[](weights.length);
-        for (uint256 i = 0; i < weights.length; i++) {
-            wts[i] = weights[i];
-        }
-        _submitAttestation(registry, netuid, hotkeys, wts, signerPks);
     }
 
     function _submitAttestation(

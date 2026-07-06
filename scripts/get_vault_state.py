@@ -17,14 +17,15 @@ from common import (
 )
 
 
-# Mirrors ValidatorRegistry.MAX_VALIDATORS.
+# Fallback column count when no registry is configured; live value is read on-chain.
 MAX_VALIDATORS = 20
 
 
 def _validator_columns(registry: Contract | None, netuid: int) -> dict:
     """Up to MAX_VALIDATORS (hotkey, weight) slots + count; empty for unused slots or no registry."""
+    max_validators = MAX_VALIDATORS if registry is None else registry.functions.MAX_VALIDATORS().call()
     cols: dict = {"validators_count": ""}
-    for i in range(MAX_VALIDATORS):
+    for i in range(max_validators):
         cols[f"validator_{i+1}_hotkey"] = ""
         cols[f"validator_{i+1}_weight"] = ""
     if registry is None:

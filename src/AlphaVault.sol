@@ -155,18 +155,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         // forge-lint: disable-next-line(unsafe-typecast)
         uint16 nid = uint16(netuid);
         (bytes32[] memory hotkeys, uint16[] memory weights) = _resolveValidators(nid);
-
-        bool inSet;
-        for (uint256 i; i < hotkeys.length;) {
-            if (hotkeys[i] == chosenHotkey) {
-                inSet = true;
-                break;
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        if (!inSet) revert ChosenHotkeyNotInSet();
+        if (!_contains(hotkeys, chosenHotkey)) revert ChosenHotkeyNotInSet();
 
         address clone = subnetClone[tokenId];
         if (clone == address(0)) clone = _deploySubnetClone(tokenId);
