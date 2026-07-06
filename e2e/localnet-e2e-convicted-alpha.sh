@@ -119,6 +119,11 @@ MOVABLE_EST=$(python3 -c "print(max(0, $TOTAL_NOW - $LOCKED_NOW))")
 assert_ge "$ALICE_HK_A_PRE" "$((MOVABLE_EST + 2 * MARGIN_RAW))" \
     "premise broken: hk_a balance does not exceed movable ($MOVABLE_EST RAO) by 2x margin"
 
+# Phase 6's flush can leave <=1 RAO of share-rounding dust on the mailbox (it is
+# not the sole staker on the hotkey), so atomicity is asserted as "unchanged
+# across the refused transfer", not as an absolute zero.
+MAILBOX_PRE=$(get_stake "$POS_HK_B32" "$MAILBOX_SUB" "$POS_NET")
+
 info "Attempting to transfer Alice's full hk_a balance ($ALICE_HK_A_PRE RAO) into the mailbox..."
 PROBE=$(transfer_stake_py "$MAILBOX_SS58" "$POS_HK_SS58" "$POS_NET" "$ALICE_HK_A_PRE" 2>&1) \
     && fail "over-movable transferStake did NOT revert (locked alpha reached the mailbox!)"
@@ -126,18 +131,19 @@ grep -q AccountRejectsLockedAlpha <<<"$PROBE" \
     || fail "transferStake reverted but not with AccountRejectsLockedAlpha: $PROBE"
 ok "Chain refused with AccountRejectsLockedAlpha (mailbox rejects locked inflow by default)"
 
-MAILBOX_ALPHA=$(get_stake "$POS_HK_B32" "$MAILBOX_SUB" "$POS_NET")
-[[ "$MAILBOX_ALPHA" == "0" ]] || fail "mailbox holds $MAILBOX_ALPHA RAO after a refused transfer"
+MAILBOX_POST=$(get_stake "$POS_HK_B32" "$MAILBOX_SUB" "$POS_NET")
+[[ "$MAILBOX_POST" == "$MAILBOX_PRE" ]] \
+    || fail "mailbox balance changed by a refused transfer ($MAILBOX_PRE → $MAILBOX_POST RAO)"
 ALICE_HK_A_POST=$(get_stake "$POS_HK_B32" "$ALICE_COLDKEY_B32" "$POS_NET")
 assert_ge "$ALICE_HK_A_POST" "$ALICE_HK_A_PRE" "Alice's stake decreased despite the refused transfer"
-ok "Refusal was atomic: mailbox empty, Alice's stake intact"
+ok "Refusal was atomic: mailbox unchanged ($MAILBOX_POST RAO), Alice's stake intact"
 
 PRE_SHARES=$(vault_shares "$POS_TID")
-vault_send_expect_revert 1500000 "wrap on an empty mailbox did NOT revert" \
+vault_send_expect_revert 1500000 "wrap with no arrived deposit did NOT revert" \
     "wrap(address,uint256,bytes32)" "$WRAPPER_ADDR" "$POS_NET" "$POS_HK_B32"
 POST_SHARES=$(vault_shares "$POS_TID")
 [[ "$POST_SHARES" == "$PRE_SHARES" ]] || fail "shares changed after a reverted wrap ($PRE_SHARES → $POST_SHARES)"
-ok "wrap reverted cleanly (ZeroAmount); shares unchanged ($POST_SHARES)"
+ok "wrap reverted cleanly (ZeroAmount/DepositTooSmall); shares unchanged ($POST_SHARES)"
 
 log "Phase 9: The movable portion of a partially locked wallet wraps normally"
 
