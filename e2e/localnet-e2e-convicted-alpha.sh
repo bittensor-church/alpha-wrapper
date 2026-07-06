@@ -150,23 +150,31 @@ python3 -c "import sys; sys.exit(0 if $POST_SHARES > $PRE_SHARES else 1)" \
     || fail "no shares minted for the movable-portion wrap ($PRE_SHARES → $POST_SHARES)"
 LOCKED_AFTER_WRAP=$(alice_locked_mass "$POS_NET" "$POS_HK_SS58")
 assert_ge "$LOCKED_AFTER_WRAP" "$((LOCKED / 100 * 99))" "Alice's lock shrank from a free-portion transfer"
-ok "Movable portion wrapped: $((POST_SHARES - PRE_SHARES)) new shares; Alice's lock untouched"
+MINTED=$(python3 -c "print($POST_SHARES - $PRE_SHARES)")
+ok "Movable portion wrapped: $MINTED new shares; Alice's lock untouched"
 
 log "Phase 10: Unwrap pays out to a coldkey that HOLDS an active lock"
 
+# Shares are 1e18-scale — beyond bash's signed-64-bit arithmetic, so all share
+# math goes through python.
 SHARES=$(vault_shares "$POS_TID")
-HALF=$((SHARES / 2))
+HALF=$(python3 -c "print($SHARES // 2)")
+HALF_ALPHA=$(cast call "$VAULT_ADDR" "previewUnwrap(uint256,uint256)(uint256,uint256)" \
+    "$POS_TID" "$HALF" --rpc-url "$RPC_URL" | head -1 | awk '{print $1}')
 ALICE_TOTAL_PRE=$(alice_subnet_alpha "$POS_NET")
 
 vault_send 2000000 "unwrap to a lock-holding coldkey failed" \
     "unwrap(uint256,uint256,bytes32)" "$POS_TID" "$HALF" "$ALICE_COLDKEY_B32"
 
 ALICE_TOTAL_POST=$(alice_subnet_alpha "$POS_NET")
-python3 -c "import sys; sys.exit(0 if $ALICE_TOTAL_POST > $ALICE_TOTAL_PRE else 1)" \
-    || fail "Alice received no alpha from unwrap ($ALICE_TOTAL_PRE → $ALICE_TOTAL_POST)"
+ALICE_GAIN=$(python3 -c "print($ALICE_TOTAL_POST - $ALICE_TOTAL_PRE)")
+# Emissions between the reads only add, so the previewed amount (less a rounding/
+# drift allowance) is a safe lower bound for a REAL half-position payout.
+assert_ge "$ALICE_GAIN" "$((HALF_ALPHA / 100 * 85))" \
+    "unwrap paid a lock-holding coldkey far less than previewed ($ALICE_GAIN vs $HALF_ALPHA)"
 LOCKED_AFTER_UNWRAP=$(alice_locked_mass "$POS_NET" "$POS_HK_SS58")
 assert_ge "$LOCKED_AFTER_UNWRAP" "$((LOCKED / 100 * 99))" "Alice's lock disturbed by receiving unwrapped alpha"
-ok "Locked coldkey received $((ALICE_TOTAL_POST - ALICE_TOTAL_PRE)) RAO unlocked alpha; lock intact"
+ok "Locked coldkey received $ALICE_GAIN RAO unlocked alpha (preview $HALF_ALPHA); lock intact"
 
 log "Phase 11: unwrapForTao (removeStake rail) unaffected by other stakers' locks"
 
