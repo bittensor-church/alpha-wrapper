@@ -35,8 +35,6 @@ jobs:
     services:
       subtensor:
         # Pinned: :main drifted and broke the e2e staking floor; bump deliberately.
-        # v3.4.9-424 is the minimum for the convicted-alpha leg: it needs the
-        # conviction-v2 transfer gating (AccountRejectsLockedAlpha, spec 424).
         image: ghcr.io/opentensor/subtensor-localnet:v3.4.9-424
         ports:
           - 9944:9944
