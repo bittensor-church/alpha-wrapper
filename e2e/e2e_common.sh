@@ -83,9 +83,6 @@ transfer_stake_py() {
         --alpha-amount "$4"
 }
 
-# Stake TAO from Alice via a direct extrinsic. Recent btcli's `stake add` queries
-# `Swap.AlphaSqrtPrice`, which localnet runtimes may lack — this path has no such
-# dependency.
 add_stake_py() { # <hotkey_ss58> <netuid> <amount_rao>
     python3 scripts/chain_ops.py add_stake \
         --chain-endpoint "$CHAIN_ENDPOINT" \
