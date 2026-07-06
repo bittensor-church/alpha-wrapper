@@ -77,8 +77,8 @@ info "Alice subnet total: $ALICE_SUBNET_ALPHA_BEFORE_LOCK RAO; locking $LOCK_AMO
 lock_stake_py "$TEST_HOTKEY_SS58" "$TEST_NETUID" "$LOCK_AMOUNT_RAW" | tail -1
 
 INITIAL_LOCKED_MASS=$(alice_locked_mass "$TEST_NETUID" "$TEST_HOTKEY_SS58")
-# 99% bound absorbs the ~1e-6/block decay between lock and read.
-assert_ge "$INITIAL_LOCKED_MASS" "$((LOCK_AMOUNT_RAW / 100 * 99))" "lock not registered on chain"
+[[ "$INITIAL_LOCKED_MASS" == "$LOCK_AMOUNT_RAW" ]] \
+    || fail "lock not registered exactly (asked $LOCK_AMOUNT_RAW, stored $INITIAL_LOCKED_MASS)"
 ok "Lock live on chain: locked_mass=$INITIAL_LOCKED_MASS RAO (movable margin ≈ $UNLOCKED_MARGIN_RAW RAO + emissions)"
 
 log "Phase 7: Depositing MORE than the movable amount is refused by the chain"
@@ -124,6 +124,8 @@ SHARES_AFTER_MOVABLE_WRAP=$(vault_shares "$TEST_TOKEN_ID")
 python3 -c "import sys; sys.exit(0 if $SHARES_AFTER_MOVABLE_WRAP > $SHARES_AFTER_REVERTED_WRAP else 1)" \
     || fail "no shares minted for the movable-portion wrap"
 LOCKED_MASS_AFTER_MOVABLE_WRAP=$(alice_locked_mass "$TEST_NETUID" "$TEST_HOTKEY_SS58")
+# Touching the lock re-persists its lazily-decayed mass (factor e^(-1/UnlockRate)
+# ~= 1 - 1e-6 per block); 99% is a generous floor for the blocks elapsed here.
 assert_ge "$LOCKED_MASS_AFTER_MOVABLE_WRAP" "$((INITIAL_LOCKED_MASS / 100 * 99))" \
     "Alice's lock shrank from a free-portion transfer"
 ok "Movable portion wrapped: $SHARES_AFTER_MOVABLE_WRAP shares; Alice's lock untouched"
