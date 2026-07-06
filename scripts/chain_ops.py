@@ -21,19 +21,16 @@ Subcommands:
         btcli's SignedExtension mismatch with recent subtensor builds.
 
     add_stake --chain-endpoint URL --hotkey-ss58 ... --netuid N --amount RAW
-        Submit `SubtensorModule.add_stake` signed by //Alice: stake RAW rao of
-        TAO to the hotkey on the subnet. Replaces `btcli stake add` in the e2e
-        bootstrap (recent btcli queries `Swap.AlphaSqrtPrice`, which older
-        localnet runtimes lack).
+        Submit `SubtensorModule.add_stake` signed by //Alice. Avoids btcli's
+        `Swap.AlphaSqrtPrice` dependency, absent on older localnet runtimes.
 
     lock_stake --chain-endpoint URL --hotkey-ss58 ... --netuid N --amount RAW
-        Submit `SubtensorModule.lock_stake` signed by //Alice: lock RAW alpha of
-        Alice's stake on the subnet to the given conviction hotkey. Requires a
-        localnet runtime with conviction v2 (fails with a clear message otherwise).
+        Submit `SubtensorModule.lock_stake` signed by //Alice: lock RAW alpha
+        to the given conviction hotkey.
 
     get_lock --chain-endpoint URL --coldkey-ss58 ... --netuid N --hotkey-ss58 ...
-        Read `SubtensorModule.Lock[(coldkey, netuid, hotkey)]` and print the
-        current `locked_mass` in RAW alpha (0 when no lock exists).
+        Print `locked_mass` of `SubtensorModule.Lock[(coldkey, netuid, hotkey)]`
+        in RAW alpha (0 when no lock exists).
 
     set_validators --rpc-url URL --registry ADDR --signer-pk PK [--signer-pk PK ...]
                    --netuid N --hotkeys HK1,HK2,... --weights W1,W2,...
