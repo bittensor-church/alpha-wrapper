@@ -29,9 +29,9 @@ CHAIN_ID=42
 
 ALICE_WALLET="alice"
 ALICE_HOTKEY_NAME="default"
-# Substrate dev Alice: 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
 ALICE_COLDKEY_SEED="0xe5be9a5092b81bca64be81d212e7f2f9eba183bb7a90954f7b76361f6edb5c0a"
 ALICE_COLDKEY_B32="0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d"
+ALICE_COLDKEY_SS58="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 
 # Well-known localnet-only keys (not secrets).
 DEPLOYER_ADDR="0x7bD3E0F025FC388e08dd2A63595dbcaB486F335b"
@@ -83,6 +83,14 @@ transfer_stake_py() {
         --alpha-amount "$4"
 }
 
+add_stake_py() {
+    python3 scripts/chain_ops.py add_stake \
+        --chain-endpoint "$CHAIN_ENDPOINT" \
+        --hotkey-ss58 "$1" \
+        --netuid "$2" \
+        --amount "$3"
+}
+
 set_validators_py() {
     python3 scripts/chain_ops.py set_validators \
         --rpc-url "$RPC_URL" \
@@ -118,7 +126,7 @@ get_stake() { # <hotkey_b32> <coldkey_b32> <netuid>
 }
 
 # Total alpha stake for a coldkey summed across one or more hotkeys on a subnet.
-sum_stake() { # <coldkey_b32> <netuid> <hotkey_b32>...
+sum_stake() {
     local coldkey="$1" netuid="$2" total=0 hk bal
     shift 2
     for hk in "$@"; do
@@ -207,7 +215,7 @@ assert_tao_gain() { # <pre_wei> <post_wei> <quote_rao> <fail_msg>
 }
 
 # Transfer alpha from Alice into the user's mailbox under a hotkey, then wrap it into the vault.
-deposit_and_wrap() { # <netuid> <hotkey_b32> <hotkey_ss58> <amount_raw> <gas_limit> <fail_msg>
+deposit_and_wrap() {
     local netuid="$1" hk_b32="$2" hk_ss58="$3" amount="$4" gas="$5" msg="$6" mailbox
     mailbox=$(mailbox_addr "$netuid")
     info "Transferring $amount RAO from Alice → mailbox under ${hk_b32:0:18}..."
@@ -366,10 +374,9 @@ e2e_bootstrap() {
             AMOUNT="${STAKE_RATIOS[$j]}"
             HK="${ALL_HK_NAMES[$IDX]}"
 
-            btcli_cmd stake add --wallet-name "$ALICE_WALLET" --hotkey "$HK" \
-                --amount "$AMOUNT" --netuid "$NET" --no-mev-protection \
-                --no-prompt --unsafe 2>&1 | tail -2
+            add_stake_py "${ALL_HK_SS58S[$IDX]}" "$NET" "$((AMOUNT * 1000000000))" | tail -1
             STAKE=$(get_stake "${ALL_HK_B32S[$IDX]}" "$ALICE_COLDKEY_B32" "$NET")
+            [[ "$STAKE" -gt 0 ]] || fail "stake add landed but $HK reads 0 RAO on netuid $NET"
             ok "netuid $NET $HK: ${AMOUNT} TAO → $STAKE RAO"
         done
     done
@@ -400,8 +407,6 @@ e2e_bootstrap() {
         | python3 -c "import json,sys; print(json.load(sys.stdin)['deployedTo'])")
     ok "ValidatorRegistry: $VAL_REGISTRY_ADDR (admin=$DEPLOYER_ADDR, signers=[DEPLOYER,WRAPPER], threshold=2)"
 
-    # AlphaVault binds the registry as an immutable constructor arg (setValidatorRegistry was
-    # removed), so ValidatorRegistry must be deployed first.
     VAULT_ADDR=$(forge create src/AlphaVault.sol:AlphaVault \
         --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" $FORGE_FLAGS --json \
         --constructor-args "https://api.tao20.io/{id}.json" "$MAILBOX_ADDR" "$SUBNET_CLONE_ADDR" "$VAL_REGISTRY_ADDR" \
