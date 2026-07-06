@@ -338,7 +338,7 @@ deposit_and_wrap "$ROT_NET" "$ROT_HK0" "${ALL_HK_SS58S[3]}" 60000000000 1500000 
 
 ROT_SHARES=$(vault_shares "$ROT_TID")
 ROT_DEPOSITED=$(vault_total_stake "$ROT_TID")
-ROT_CLONE=$(cast call "$VAULT_ADDR" "subnetClone(uint256)(address)" "$ROT_TID" --rpc-url "$RPC_URL")
+ROT_CLONE=$(clone_addr "$ROT_TID")
 ROT_CLONE_SUB=$(h160_to_substrate_b32 "$ROT_CLONE")
 ROT_ORPHAN=$(get_stake "$ROT_HK2" "$ROT_CLONE_SUB" "$ROT_NET")
 [[ "$ROT_ORPHAN" != "0" ]] || fail "Phase 14: no stake under the 3rd validator to orphan"

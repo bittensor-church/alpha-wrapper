@@ -153,9 +153,19 @@ mailbox_addr() { # <netuid>
         --rpc-url "$RPC_URL"
 }
 
+# Per-token subnet clone address holding the position's alpha.
+clone_addr() { # <tokenId>
+    cast call "$VAULT_ADDR" "subnetClone(uint256)(address)" "$1" --rpc-url "$RPC_URL"
+}
+
+# Native TAO balance of any EVM address, in wei.
+evm_balance() { # <address>
+    cast balance "$1" --rpc-url "$RPC_URL" | awk '{print $1}'
+}
+
 # User's native TAO balance, in wei.
 user_tao_wei() {
-    cast balance "$WRAPPER_ADDR" --rpc-url "$RPC_URL" | awk '{print $1}'
+    evm_balance "$WRAPPER_ADDR"
 }
 
 # Broadcast a tx to the vault from the user key; capture the JSON receipt and its status in
@@ -192,6 +202,12 @@ assert_gain() { # <pre_wei> <post_wei> <fail_msg>
     delta=$(python3 -c "print($2 - $1)")
     python3 -c "import sys; sys.exit(0 if $delta > 0 else 1)" || fail "$3 (net $delta wei)"
     echo "$delta"
+}
+
+# Assert <actual> >= <min_expected>. RAW/share/wei magnitudes routinely exceed bash's
+# signed-64-bit range, so the comparison is done in Python.
+assert_ge() { # <actual> <min_expected> <fail_msg>
+    python3 -c "import sys; sys.exit(0 if $1 >= $2 else 1)" || fail "$3 ($1 < $2)"
 }
 
 # Chain's own alpha→TAO quote (RAO out) for selling <alpha_rao> on <netuid>. Capture it *before*
