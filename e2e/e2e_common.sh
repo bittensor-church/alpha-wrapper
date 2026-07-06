@@ -83,7 +83,7 @@ transfer_stake_py() {
         --alpha-amount "$4"
 }
 
-add_stake_py() { # <hotkey_ss58> <netuid> <amount_rao>
+add_stake_py() {
     python3 scripts/chain_ops.py add_stake \
         --chain-endpoint "$CHAIN_ENDPOINT" \
         --hotkey-ss58 "$1" \
@@ -126,7 +126,7 @@ get_stake() { # <hotkey_b32> <coldkey_b32> <netuid>
 }
 
 # Total alpha stake for a coldkey summed across one or more hotkeys on a subnet.
-sum_stake() { # <coldkey_b32> <netuid> <hotkey_b32>...
+sum_stake() {
     local coldkey="$1" netuid="$2" total=0 hk bal
     shift 2
     for hk in "$@"; do
@@ -215,7 +215,7 @@ assert_tao_gain() { # <pre_wei> <post_wei> <quote_rao> <fail_msg>
 }
 
 # Transfer alpha from Alice into the user's mailbox under a hotkey, then wrap it into the vault.
-deposit_and_wrap() { # <netuid> <hotkey_b32> <hotkey_ss58> <amount_raw> <gas_limit> <fail_msg>
+deposit_and_wrap() {
     local netuid="$1" hk_b32="$2" hk_ss58="$3" amount="$4" gas="$5" msg="$6" mailbox
     mailbox=$(mailbox_addr "$netuid")
     info "Transferring $amount RAO from Alice → mailbox under ${hk_b32:0:18}..."
@@ -407,8 +407,6 @@ e2e_bootstrap() {
         | python3 -c "import json,sys; print(json.load(sys.stdin)['deployedTo'])")
     ok "ValidatorRegistry: $VAL_REGISTRY_ADDR (admin=$DEPLOYER_ADDR, signers=[DEPLOYER,WRAPPER], threshold=2)"
 
-    # AlphaVault binds the registry as an immutable constructor arg, so
-    # ValidatorRegistry must be deployed first.
     VAULT_ADDR=$(forge create src/AlphaVault.sol:AlphaVault \
         --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" $FORGE_FLAGS --json \
         --constructor-args "https://api.tao20.io/{id}.json" "$MAILBOX_ADDR" "$SUBNET_CLONE_ADDR" "$VAL_REGISTRY_ADDR" \
