@@ -97,6 +97,10 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         _submitAttestation(registry, netuid, hks, wts, signerPks);
     }
 
+    function _setValidators(uint256 netuid, bytes32[] memory hks, uint256[] memory wts) internal {
+        _submitAttestation(registry, netuid, hks, wts, signerPks);
+    }
+
     function _hotkeys(bytes32 a) internal pure returns (bytes32[] memory arr) {
         arr = new bytes32[](1);
         arr[0] = a;
@@ -123,9 +127,9 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     }
 
     /// @dev Even weight split summing to BPS_BASE, remainder on slot 0.
-    function _evenWeights(uint16 count) internal pure returns (uint16[] memory arr) {
-        arr = new uint16[](count);
-        uint16 baseWeight = BPS_BASE / count;
+    function _evenWeights(uint256 count) internal pure returns (uint256[] memory arr) {
+        arr = new uint256[](count);
+        uint256 baseWeight = BPS_BASE / count;
         for (uint256 i; i < count; ++i) {
             arr[i] = baseWeight;
         }

@@ -407,7 +407,7 @@ contract ValidatorRegistryTest is AttestationHelper {
         _assertStoredSetMatches(SN2, a2);
     }
 
-    function testFuzz_Update_RoundTripsAnyCount(uint8 count) public {
+    function testFuzz_Update_RoundTripsAnyCount(uint256 count) public {
         uint256 len = bound(count, 1, maxValidators);
         ValidatorRegistry.WeightAttestation memory att = _att(SN1, len, 1, block.timestamp + 60);
         registry.updateValidators(att, _sign(att, _pks2(PK2, PK1)));
@@ -416,7 +416,7 @@ contract ValidatorRegistryTest is AttestationHelper {
         _assertStoredSetMatches(SN1, att);
     }
 
-    function testFuzz_Update_SequentialCommitsLeaveExactFinalSet(uint8 firstCount, uint8 secondCount) public {
+    function testFuzz_Update_SequentialCommitsLeaveExactFinalSet(uint256 firstCount, uint256 secondCount) public {
         uint256 firstLen = bound(firstCount, 1, maxValidators);
         uint256 secondLen = bound(secondCount, 1, maxValidators);
 

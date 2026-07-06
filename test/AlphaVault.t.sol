@@ -681,9 +681,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey1, NETUID1), 30 ether, "shrink consolidates onto the surviving hotkey");
     }
 
-    function testFuzz_Wrap_ConservesDepositAcrossSetSizes(uint16 validatorCountSeed) public {
-        // uint16 modulo instead of bound() keeps the count cast-free for the uint16[] weights helper.
-        uint16 count = validatorCountSeed % registry.MAX_VALIDATORS() + 1;
+    function testFuzz_Wrap_ConservesDepositAcrossSetSizes(uint256 validatorCountSeed) public {
+        uint256 count = bound(validatorCountSeed, 1, registry.MAX_VALIDATORS());
         bytes32[] memory hotkeys = _generateHotkeys(count);
         _setValidators(93, hotkeys, _evenWeights(count));
         _setRegBlock(93, 93);

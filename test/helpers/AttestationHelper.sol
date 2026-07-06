@@ -58,10 +58,20 @@ abstract contract AttestationHelper is Test {
         for (uint256 i = 0; i < weights.length; i++) {
             wts[i] = weights[i];
         }
+        _submitAttestation(registry, netuid, hotkeys, wts, signerPks);
+    }
+
+    function _submitAttestation(
+        ValidatorRegistry registry,
+        uint256 netuid,
+        bytes32[] memory hotkeys,
+        uint256[] memory weights,
+        uint256[] memory signerPks
+    ) internal {
         ValidatorRegistry.WeightAttestation memory att = ValidatorRegistry.WeightAttestation({
             netuid: netuid,
             hotkeys: hotkeys,
-            weights: wts,
+            weights: weights,
             nonce: registry.nonces(netuid) + 1,
             deadline: block.timestamp + 3600
         });
