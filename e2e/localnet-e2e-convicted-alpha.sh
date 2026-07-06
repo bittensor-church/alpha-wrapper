@@ -33,7 +33,7 @@ lock_stake_py() {
         --amount "$3"
 }
 
-alice_locked_mass() {
+alice_locked_alpha() {
     python3 scripts/chain_ops.py get_lock \
         --chain-endpoint "$CHAIN_ENDPOINT" \
         --coldkey-ss58 "$ALICE_COLDKEY_SS58" \
@@ -66,7 +66,7 @@ USER_MAILBOX_COLDKEY_B32=$(h160_to_substrate_b32 "$USER_MAILBOX_H160")
 USER_MAILBOX_COLDKEY_SS58=$(h160_to_ss58 "$USER_MAILBOX_H160")
 ALICE_OWNER_HOTKEY_B32=$(read_hotkey_pubkey "$ALICE_WALLET" "$ALICE_HOTKEY_NAME")
 
-log "Phase 6: Alice locks nearly all her alpha on netuid $TEST_NETUID"
+log "Phase 6: Alice locks all but the movable margin of her netuid $TEST_NETUID stake"
 
 ALICE_SUBNET_ALPHA_BEFORE_LOCK=$(alice_subnet_alpha "$TEST_NETUID")
 assert_ge "$ALICE_SUBNET_ALPHA_BEFORE_LOCK" "$((2 * UNLOCKED_MARGIN_RAW))" \
@@ -76,21 +76,23 @@ LOCK_AMOUNT_RAW=$((ALICE_SUBNET_ALPHA_BEFORE_LOCK - UNLOCKED_MARGIN_RAW))
 info "Alice subnet total: $ALICE_SUBNET_ALPHA_BEFORE_LOCK RAO; locking $LOCK_AMOUNT_RAW RAO to ${TEST_HOTKEY_SS58:0:12}... (margin $UNLOCKED_MARGIN_RAW)"
 lock_stake_py "$TEST_HOTKEY_SS58" "$TEST_NETUID" "$LOCK_AMOUNT_RAW" | tail -1
 
-INITIAL_LOCKED_MASS=$(alice_locked_mass "$TEST_NETUID" "$TEST_HOTKEY_SS58")
-[[ "$INITIAL_LOCKED_MASS" == "$LOCK_AMOUNT_RAW" ]] \
-    || fail "lock not registered exactly (asked $LOCK_AMOUNT_RAW, stored $INITIAL_LOCKED_MASS)"
-ok "Lock live on chain: locked_mass=$INITIAL_LOCKED_MASS RAO (movable margin ≈ $UNLOCKED_MARGIN_RAW RAO + emissions)"
+INITIAL_LOCKED_ALPHA=$(alice_locked_alpha "$TEST_NETUID" "$TEST_HOTKEY_SS58")
+[[ "$INITIAL_LOCKED_ALPHA" == "$LOCK_AMOUNT_RAW" ]] \
+    || fail "lock not registered exactly (asked $LOCK_AMOUNT_RAW, stored $INITIAL_LOCKED_ALPHA)"
+ok "Lock live on chain: $INITIAL_LOCKED_ALPHA RAO locked (movable margin ≈ $UNLOCKED_MARGIN_RAW RAO + emissions)"
 
 log "Phase 7: Depositing MORE than the movable amount is refused by the chain"
 
 # The chain clamps: a transfer within the movable amount passes legitimately, so
 # the refused transfer must exceed movable (which keeps growing with emissions).
 OVER_MOVABLE_AMOUNT=$(get_stake "$TEST_HOTKEY_B32" "$ALICE_COLDKEY_B32" "$TEST_NETUID")
-ALICE_MOVABLE_ALPHA=$(python3 -c "print(max(0, $(alice_subnet_alpha "$TEST_NETUID") - $(alice_locked_mass "$TEST_NETUID" "$TEST_HOTKEY_SS58")))")
+ALICE_MOVABLE_ALPHA=$(python3 -c "print(max(0, $(alice_subnet_alpha "$TEST_NETUID") - $(alice_locked_alpha "$TEST_NETUID" "$TEST_HOTKEY_SS58")))")
 assert_ge "$OVER_MOVABLE_AMOUNT" "$((ALICE_MOVABLE_ALPHA + 2 * UNLOCKED_MARGIN_RAW))" \
     "premise broken: Alice's test-hotkey stake does not exceed movable ($ALICE_MOVABLE_ALPHA RAO) by 2x margin"
 
 MAILBOX_ALPHA_BEFORE=$(get_stake "$TEST_HOTKEY_B32" "$USER_MAILBOX_COLDKEY_B32" "$TEST_NETUID")
+[[ "$MAILBOX_ALPHA_BEFORE" == "0" ]] \
+    || fail "mailbox not virgin before the refused transfer ($MAILBOX_ALPHA_BEFORE RAO)"
 
 info "Attempting to transfer $OVER_MOVABLE_AMOUNT RAO (Alice's full test-hotkey stake) into the mailbox..."
 REFUSED_TRANSFER_OUTPUT=$(transfer_stake_py "$USER_MAILBOX_COLDKEY_SS58" "$TEST_HOTKEY_SS58" "$TEST_NETUID" "$OVER_MOVABLE_AMOUNT" 2>&1) \
@@ -112,7 +114,7 @@ vault_send_expect_revert 1500000 "wrap with no arrived deposit did NOT revert" \
 SHARES_AFTER_REVERTED_WRAP=$(vault_shares "$TEST_TOKEN_ID")
 [[ "$SHARES_AFTER_REVERTED_WRAP" == "$SHARES_BEFORE_REVERTED_WRAP" ]] \
     || fail "shares changed after a reverted wrap ($SHARES_BEFORE_REVERTED_WRAP → $SHARES_AFTER_REVERTED_WRAP)"
-ok "wrap reverted cleanly (ZeroAmount/DepositTooSmall); shares unchanged ($SHARES_AFTER_REVERTED_WRAP)"
+ok "wrap reverted (ZeroAmount: mailbox is provably empty); shares unchanged ($SHARES_AFTER_REVERTED_WRAP)"
 
 log "Phase 8: The movable portion of the locked wallet wraps normally"
 
@@ -123,11 +125,13 @@ deposit_and_wrap "$TEST_NETUID" "$TEST_HOTKEY_B32" "$TEST_HOTKEY_SS58" "$MOVABLE
 SHARES_AFTER_MOVABLE_WRAP=$(vault_shares "$TEST_TOKEN_ID")
 python3 -c "import sys; sys.exit(0 if $SHARES_AFTER_MOVABLE_WRAP > $SHARES_AFTER_REVERTED_WRAP else 1)" \
     || fail "no shares minted for the movable-portion wrap"
-LOCKED_MASS_AFTER_MOVABLE_WRAP=$(alice_locked_mass "$TEST_NETUID" "$TEST_HOTKEY_SS58")
-# Touching the lock re-persists its lazily-decayed mass (factor e^(-1/UnlockRate)
-# ~= 1 - 1e-6 per block); 99% is a generous floor for the blocks elapsed here.
-assert_ge "$LOCKED_MASS_AFTER_MOVABLE_WRAP" "$((INITIAL_LOCKED_MASS / 100 * 99))" \
+LOCKED_ALPHA_AFTER_MOVABLE_WRAP=$(alice_locked_alpha "$TEST_NETUID" "$TEST_HOTKEY_SS58")
+# Touching the lock re-persists its lazily-decayed locked amount (factor
+# e^(-1/UnlockRate) ~= 1 - 1e-6 per block); 99% is a generous floor here.
+assert_ge "$LOCKED_ALPHA_AFTER_MOVABLE_WRAP" "$((INITIAL_LOCKED_ALPHA / 100 * 99))" \
     "Alice's lock shrank from a free-portion transfer"
+assert_ge "$INITIAL_LOCKED_ALPHA" "$LOCKED_ALPHA_AFTER_MOVABLE_WRAP" \
+    "Alice's lock grew during a free-portion wrap (a lock migrated unexpectedly)"
 ok "Movable portion wrapped: $SHARES_AFTER_MOVABLE_WRAP shares; Alice's lock untouched"
 
 log "Phase 9: Unwrap pays out to a coldkey that HOLDS an active lock"
@@ -148,12 +152,14 @@ ALICE_RECEIVED_ALPHA=$(python3 -c "print($ALICE_SUBNET_ALPHA_AFTER_UNWRAP - $ALI
 # is a safe lower bound proving a real half-position payout.
 assert_ge "$ALICE_RECEIVED_ALPHA" "$((PREVIEWED_HALF_ALPHA / 100 * 85))" \
     "unwrap paid a lock-holding coldkey far less than previewed ($ALICE_RECEIVED_ALPHA vs $PREVIEWED_HALF_ALPHA)"
-LOCKED_MASS_AFTER_UNWRAP=$(alice_locked_mass "$TEST_NETUID" "$TEST_HOTKEY_SS58")
-assert_ge "$LOCKED_MASS_AFTER_UNWRAP" "$((INITIAL_LOCKED_MASS / 100 * 99))" \
+LOCKED_ALPHA_AFTER_UNWRAP=$(alice_locked_alpha "$TEST_NETUID" "$TEST_HOTKEY_SS58")
+assert_ge "$LOCKED_ALPHA_AFTER_UNWRAP" "$((INITIAL_LOCKED_ALPHA / 100 * 99))" \
     "Alice's lock disturbed by receiving unwrapped alpha"
+assert_ge "$INITIAL_LOCKED_ALPHA" "$LOCKED_ALPHA_AFTER_UNWRAP" \
+    "Alice's lock grew from receiving unwrapped alpha (a lock arrived with the transfer)"
 ok "Locked coldkey received $ALICE_RECEIVED_ALPHA RAO unlocked alpha (preview $PREVIEWED_HALF_ALPHA); lock intact"
 
-log "Phase 10: unwrapForTao (removeStake rail) unaffected by other stakers' locks"
+log "Phase 10: unwrapForTao (removeStake rail) works while a large lock exists on the subnet"
 
 REMAINING_SHARES=$(vault_shares "$TEST_TOKEN_ID")
 PREVIEWED_REMAINING_ALPHA=$(cast call "$VAULT_ADDR" "previewUnwrap(uint256,uint256)(uint256,uint256)" \
@@ -174,5 +180,5 @@ ok "Remaining shares exited as TAO: gained $TAO_GAINED_WEI wei (quote $REMAINING
 log "E2E complete (convicted alpha)"
 echo "  AlphaVault:        $VAULT_ADDR"
 echo "  Subnet under test: netuid $TEST_NETUID / tokenId $TEST_TOKEN_ID"
-echo "  Alice lock:        locked_mass=$LOCKED_MASS_AFTER_UNWRAP RAO → ${TEST_HOTKEY_SS58:0:12}..."
+echo "  Alice lock:        $LOCKED_ALPHA_AFTER_UNWRAP RAO locked → ${TEST_HOTKEY_SS58:0:12}..."
 ok "All phases passed"
