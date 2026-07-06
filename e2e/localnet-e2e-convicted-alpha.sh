@@ -4,8 +4,7 @@
 # ============================================================================
 #
 # Prerequisites:
-#   - Local subtensor running at ws://127.0.0.1:9944, built from a runtime with
-#     conviction v2 (`SubtensorModule.lock_stake` present)
+#   - Local subtensor running at ws://127.0.0.1:9944
 #   - btcli installed with Alice wallet (hotkey "default")
 #   - forge/cast installed
 #   - python3 with substrate-interface

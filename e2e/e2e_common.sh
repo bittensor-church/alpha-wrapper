@@ -407,8 +407,8 @@ e2e_bootstrap() {
         | python3 -c "import json,sys; print(json.load(sys.stdin)['deployedTo'])")
     ok "ValidatorRegistry: $VAL_REGISTRY_ADDR (admin=$DEPLOYER_ADDR, signers=[DEPLOYER,WRAPPER], threshold=2)"
 
-    # AlphaVault binds the registry as an immutable constructor arg (setValidatorRegistry was
-    # removed), so ValidatorRegistry must be deployed first.
+    # AlphaVault binds the registry as an immutable constructor arg, so
+    # ValidatorRegistry must be deployed first.
     VAULT_ADDR=$(forge create src/AlphaVault.sol:AlphaVault \
         --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" $FORGE_FLAGS --json \
         --constructor-args "https://api.tao20.io/{id}.json" "$MAILBOX_ADDR" "$SUBNET_CLONE_ADDR" "$VAL_REGISTRY_ADDR" \

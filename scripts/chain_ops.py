@@ -17,12 +17,10 @@ Subcommands:
 
     transfer_stake --chain-endpoint URL --dest-ss58 ... --hotkey-ss58 ...
                    --netuid N --alpha-amount RAW
-        Submit `SubtensorModule.transfer_stake` signed by //Alice. Works around
-        btcli's SignedExtension mismatch with recent subtensor builds.
+        Submit `SubtensorModule.transfer_stake` signed by //Alice.
 
     add_stake --chain-endpoint URL --hotkey-ss58 ... --netuid N --amount RAW
-        Submit `SubtensorModule.add_stake` signed by //Alice. Avoids btcli's
-        `Swap.AlphaSqrtPrice` dependency, absent on older localnet runtimes.
+        Submit `SubtensorModule.add_stake` signed by //Alice.
 
     lock_stake --chain-endpoint URL --hotkey-ss58 ... --netuid N --amount RAW
         Submit `SubtensorModule.lock_stake` signed by //Alice: lock RAW alpha
@@ -178,11 +176,7 @@ def lock_stake(
             },
         )
     except ValueError as exc:
-        print(
-            f"FAIL: runtime has no SubtensorModule.lock_stake (conviction v2) — "
-            f"rebuild the localnet from a current subtensor: {exc}",
-            file=sys.stderr,
-        )
+        print(f"FAIL: runtime has no SubtensorModule.lock_stake: {exc}", file=sys.stderr)
         sys.exit(1)
     extrinsic = sub.create_signed_extrinsic(call=call, keypair=alice)
     receipt = sub.submit_extrinsic(extrinsic, wait_for_inclusion=True)
