@@ -60,6 +60,15 @@ assert_ge() { # <actual> <min_expected> <fail_msg>
     python3 -c "import sys; sys.exit(0 if $1 >= $2 else 1)" || fail "$3 ($1 < $2)"
 }
 
+# A coldkey's TOTAL alpha on a subnet, across ALL hotkeys. Locks bind this
+# subnet-wide total, so the lock in Phase 7 must be sized from it — summing a
+# hand-picked hotkey list undercounts (Alice also holds alpha under her
+# subnet-owner hotkey from subnet creation plus accruing emissions).
+total_coldkey_stake() { # <coldkey_b32> <netuid>
+    cast call "$STAKING" "getTotalColdkeyStakeOnSubnet(bytes32,uint256)(uint256)" "$1" "$2" \
+        --rpc-url "$RPC_URL" | awk '{print $1}'
+}
+
 e2e_bootstrap
 
 log "Phase 6: Baseline wrap before any lock exists"
@@ -68,8 +77,6 @@ POS_NET="${NETUIDS[0]}"
 POS_TID="${VAULT_IDS[0]}"
 POS_HK_B32="${ALL_HK_B32S[0]}"
 POS_HK_SS58="${ALL_HK_SS58S[0]}"
-HK_B_B32="${ALL_HK_B32S[1]}"
-HK_C_B32="${ALL_HK_B32S[2]}"
 
 MAILBOX=$(mailbox_addr "$POS_NET")
 MAILBOX_SUB=$(h160_to_substrate_b32 "$MAILBOX")
@@ -84,7 +91,7 @@ ok "Baseline position: $BASE_SHARES shares on tokenId $POS_TID"
 
 log "Phase 7: Alice locks nearly all her remaining alpha on netuid $POS_NET"
 
-ALICE_TOTAL=$(sum_stake "$ALICE_COLDKEY_B32" "$POS_NET" "$POS_HK_B32" "$HK_B_B32" "$HK_C_B32")
+ALICE_TOTAL=$(total_coldkey_stake "$ALICE_COLDKEY_B32" "$POS_NET")
 assert_ge "$ALICE_TOTAL" "$((2 * MARGIN_RAW))" "Alice's subnet stake too small to lock meaningfully"
 LOCK_RAW=$((ALICE_TOTAL - MARGIN_RAW))
 
@@ -99,7 +106,14 @@ ok "Lock live on chain: locked_mass=$LOCKED RAO (movable margin ≈ $MARGIN_RAW 
 log "Phase 8: Depositing MORE than the movable amount is refused by the chain"
 
 ALICE_HK_A_PRE=$(get_stake "$POS_HK_B32" "$ALICE_COLDKEY_B32" "$POS_NET")
-assert_ge "$ALICE_HK_A_PRE" "$((2 * MARGIN_RAW))" "premise broken: hk_a balance not above movable margin"
+# Premise: the transfer must exceed Alice's CURRENT movable alpha (subnet-wide total
+# minus locked mass, which keeps growing with emissions) by a comfortable margin,
+# otherwise the clamp would legitimately let it through as free-portion transfer.
+TOTAL_NOW=$(total_coldkey_stake "$ALICE_COLDKEY_B32" "$POS_NET")
+LOCKED_NOW=$(alice_locked_mass "$POS_NET" "$POS_HK_SS58")
+MOVABLE_EST=$(python3 -c "print(max(0, $TOTAL_NOW - $LOCKED_NOW))")
+assert_ge "$ALICE_HK_A_PRE" "$((MOVABLE_EST + 2 * MARGIN_RAW))" \
+    "premise broken: hk_a balance does not exceed movable ($MOVABLE_EST RAO) by 2x margin"
 
 info "Attempting to transfer Alice's full hk_a balance ($ALICE_HK_A_PRE RAO) into the mailbox..."
 PROBE=$(transfer_stake_py "$MAILBOX_SS58" "$POS_HK_SS58" "$POS_NET" "$ALICE_HK_A_PRE" 2>&1) \
@@ -138,12 +152,12 @@ log "Phase 10: Unwrap pays out to a coldkey that HOLDS an active lock"
 
 SHARES=$(vault_shares "$POS_TID")
 HALF=$((SHARES / 2))
-ALICE_TOTAL_PRE=$(sum_stake "$ALICE_COLDKEY_B32" "$POS_NET" "$POS_HK_B32" "$HK_B_B32" "$HK_C_B32")
+ALICE_TOTAL_PRE=$(total_coldkey_stake "$ALICE_COLDKEY_B32" "$POS_NET")
 
 vault_send 2000000 "unwrap to a lock-holding coldkey failed" \
     "unwrap(uint256,uint256,bytes32)" "$POS_TID" "$HALF" "$ALICE_COLDKEY_B32"
 
-ALICE_TOTAL_POST=$(sum_stake "$ALICE_COLDKEY_B32" "$POS_NET" "$POS_HK_B32" "$HK_B_B32" "$HK_C_B32")
+ALICE_TOTAL_POST=$(total_coldkey_stake "$ALICE_COLDKEY_B32" "$POS_NET")
 python3 -c "import sys; sys.exit(0 if $ALICE_TOTAL_POST > $ALICE_TOTAL_PRE else 1)" \
     || fail "Alice received no alpha from unwrap ($ALICE_TOTAL_PRE → $ALICE_TOTAL_POST)"
 LOCKED_AFTER_UNWRAP=$(alice_locked_mass "$POS_NET" "$POS_HK_SS58")
