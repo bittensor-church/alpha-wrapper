@@ -35,11 +35,12 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     // ────────────────── Best Validator Selection ─────────────────────────────
 
-    function test_GetBestValidatorsReturnsThree() public view {
-        bytes32[3] memory hks = vault.getBestValidators(NETUID1);
-        assertEq(hks[0], hotkey1);
-        assertEq(hks[1], hotkey2);
-        assertEq(hks[2], hotkey3);
+    function test_GetBestValidators_ReturnsAttestedSet() public view {
+        bytes32[] memory hotkeys = vault.getBestValidators(NETUID1);
+        assertEq(hotkeys.length, 3);
+        assertEq(hotkeys[0], hotkey1);
+        assertEq(hotkeys[1], hotkey2);
+        assertEq(hotkeys[2], hotkey3);
     }
 
     function test_SingleValidatorNoSplit() public {
@@ -463,10 +464,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(_countRebalancedLogs(vm.getRecordedLogs()), 0);
         assertEq(vault.subnetClone(TOKEN1), address(0));
         assertEq(vault.totalStake(TOKEN1), 0);
-        bytes32[3] memory seen = vault.lastSeenHotkeys(TOKEN1);
-        assertEq(seen[0], bytes32(0));
-        assertEq(seen[1], bytes32(0));
-        assertEq(seen[2], bytes32(0));
+        assertEq(vault.lastSeenHotkeys(TOKEN1).length, 0, "snapshot untouched without a clone");
     }
 
     function test_RebalanceEmitsEvent() public {
@@ -623,53 +621,129 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(_totalVaultStakeAcrossHotkeys(NETUID1), 90 ether);
     }
 
+    function test_Wrap_DistributesAcrossTwentyValidators() public {
+        bytes32[] memory hotkeys = _generateHotkeys(20);
+        _setValidators(93, hotkeys, _evenWeights(20));
+        _setRegBlock(93, 93);
+
+        _simulateAlphaDepositHotkey(alice, 93, 100 ether, hotkeys[0]);
+        _wrapHotkey(alice, 93, hotkeys[0]);
+
+        uint256 tokenId = vault.currentTokenId(93);
+        assertEq(vault.totalStake(tokenId), 100 ether);
+        bytes32 cloneColdkey = _toSubstrate(vault.subnetClone(tokenId));
+        for (uint256 i; i < hotkeys.length; ++i) {
+            assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkeys[i], cloneColdkey, 93), 5 ether);
+        }
+        assertEq(vault.lastSeenHotkeys(tokenId).length, 20);
+    }
+
+    function test_Unwrap_DrainsAcrossTwentyValidators() public {
+        bytes32[] memory hotkeys = _generateHotkeys(20);
+        _setValidators(93, hotkeys, _evenWeights(20));
+        _setRegBlock(93, 93);
+
+        _simulateAlphaDepositHotkey(alice, 93, 100 ether, hotkeys[0]);
+        _wrapHotkey(alice, 93, hotkeys[0]);
+
+        uint256 tokenId = vault.currentTokenId(93);
+        uint256 shares = vault.balanceOf(alice, tokenId);
+        vm.prank(alice);
+        vault.unwrap(tokenId, shares, _toSubstrate(alice));
+
+        uint256 received;
+        for (uint256 i; i < hotkeys.length; ++i) {
+            received += _getStake(hotkeys[i], alice, 93);
+        }
+        assertApproxEqAbs(received, 100 ether, 10, "user must receive the full deposit");
+    }
+
+    function test_Rotation_SweepsAcrossSetSizeChange() public {
+        _simulateAlphaDeposit(alice, NETUID1, 30 ether);
+        _wrap(alice, NETUID1);
+
+        // Grow to a 20-set keeping hotkey1/hotkey2; hotkey3 rotates out.
+        bytes32[] memory grownSet = _generateHotkeys(20);
+        grownSet[0] = hotkey1;
+        grownSet[1] = hotkey2;
+        _setValidators(NETUID1, grownSet, _evenWeights(20));
+        vault.rebalance(NETUID1);
+
+        assertEq(_getVaultStake(hotkey3, NETUID1), 0, "orphan swept on grow");
+        assertEq(vault.lastSeenHotkeys(TOKEN1).length, 20);
+        assertEq(vault.totalStake(TOKEN1), 30 ether, "grow conserves total alpha");
+
+        // Shrink to a single validator; the other 19 rotate out.
+        _setValidators(NETUID1, _hotkeys(hotkey1), _weights(10_000));
+        vault.rebalance(NETUID1);
+
+        assertEq(vault.lastSeenHotkeys(TOKEN1).length, 1);
+        assertEq(_getVaultStake(hotkey1, NETUID1), 30 ether, "shrink consolidates onto the surviving hotkey");
+    }
+
+    function testFuzz_Wrap_ConservesDepositAcrossSetSizes(uint16 validatorCountSeed) public {
+        // uint16 modulo instead of bound() keeps the count cast-free for the uint16[] weights helper.
+        uint16 count = validatorCountSeed % registry.MAX_VALIDATORS() + 1;
+        bytes32[] memory hotkeys = _generateHotkeys(count);
+        _setValidators(93, hotkeys, _evenWeights(count));
+        _setRegBlock(93, 93);
+
+        _simulateAlphaDepositHotkey(alice, 93, 100 ether, hotkeys[0]);
+        _wrapHotkey(alice, 93, hotkeys[0]);
+
+        uint256 tokenId = vault.currentTokenId(93);
+        assertEq(vault.totalStake(tokenId), 100 ether, "wrap conserves the deposit");
+
+        uint256 shares = vault.balanceOf(alice, tokenId);
+        vm.prank(alice);
+        vault.unwrap(tokenId, shares, _toSubstrate(alice));
+
+        uint256 received;
+        for (uint256 i; i < count; ++i) {
+            received += _getStake(hotkeys[i], alice, 93);
+        }
+        assertApproxEqAbs(received, 100 ether, 10, "unwrap returns the full deposit");
+    }
+
     // ────────────────── _resolveValidators sentinel ──────────────────────────
 
-    /// @dev `weights[0] == 0` is the "subnet not configured" sentinel. `_resolveValidators`
-    ///      must revert `NoValidatorFound` whether the registry returns all-zeros or just
-    ///      slot-0-zero with non-zero entries elsewhere. The corrupt-but-not-honest case
-    ///      cannot be produced by the real registry, so this test deploys a fresh vault
-    ///      against the mock.
-    function test_RevertWhen_ResolveValidatorsWhenWeightZero() public {
+    /// @dev An empty hotkeys array is the "subnet not configured" sentinel;
+    ///      `_resolveValidators` must revert `NoValidatorFound` on it.
+    function test_RevertWhen_ResolveValidatorsWhenSetEmpty() public {
         MockValidatorRegistry mock = new MockValidatorRegistry();
         AlphaVault mockVault = _deployVault(address(mock));
 
         _setRegBlock(91, 91);
         vm.expectRevert(AlphaVault.NoValidatorFound.selector);
         mockVault.getBestValidators(91);
+    }
 
-        bytes32[3] memory corruptHks;
-        uint16[3] memory corruptWts;
-        corruptHks[1] = hotkey1;
-        corruptHks[2] = hotkey2;
-        corruptWts[1] = 5_000;
-        corruptWts[2] = 5_000;
-        mock.setRaw(92, corruptHks, corruptWts);
-        _setRegBlock(92, 92);
+    /// @dev The real registry always returns equal-length arrays; a nonconforming
+    ///      implementation must fail the resolve step, not panic deeper in the flow.
+    function test_RevertWhen_ResolveValidatorsWhenLengthsMismatch() public {
+        MockValidatorRegistry mock = new MockValidatorRegistry();
+        AlphaVault mockVault = _deployVault(address(mock));
+
+        mock.setRaw(91, _hotkeys(hotkey1, hotkey2), _weights(10_000));
+        _setRegBlock(91, 91);
         vm.expectRevert(AlphaVault.NoValidatorFound.selector);
-        mockVault.getBestValidators(92);
+        mockVault.getBestValidators(91);
     }
 
     // ────────────────── getBestValidators raw registry resolution ─────────────
 
+    /// @dev The vault performs no validation of registry content beyond the empty-set
+    ///      check; getBestValidators surfaces raw state the real registry would reject.
     function test_GetBestValidatorsSurfacesCorruptRegistryRawState() public {
         MockValidatorRegistry mock = new MockValidatorRegistry();
         AlphaVault mockVault = _deployVault(address(mock));
 
-        bytes32[3] memory hks;
-        uint16[3] memory wts;
-        hks[0] = hotkey4;
-        wts[0] = 5_000;
-        wts[1] = 5_000;
-        mock.setRaw(91, hks, wts);
+        mock.setRaw(91, _hotkeys(hotkey4), _weights(123));
         _setRegBlock(91, 91);
 
-        // _resolveValidators tolerates the corrupt mid-array entry (slot 0 is non-zero,
-        // so the "configured" sentinel passes); getBestValidators surfaces the raw state.
-        bytes32[3] memory result = mockVault.getBestValidators(91);
+        bytes32[] memory result = mockVault.getBestValidators(91);
+        assertEq(result.length, 1);
         assertEq(result[0], hotkey4);
-        assertEq(result[1], bytes32(0));
-        assertEq(result[2], bytes32(0));
     }
 
     function test_SubnetCloneCanMoveStake() public {
@@ -1466,10 +1540,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(_countRebalancedLogs(vm.getRecordedLogs()), 0);
         assertEq(vault.subnetClone(newTokenId), address(0));
         assertEq(vault.totalStake(newTokenId), 0);
-        bytes32[3] memory seen = vault.lastSeenHotkeys(newTokenId);
-        assertEq(seen[0], bytes32(0));
-        assertEq(seen[1], bytes32(0));
-        assertEq(seen[2], bytes32(0));
+        assertEq(vault.lastSeenHotkeys(newTokenId).length, 0, "snapshot untouched without a clone");
 
         uint256 oldStakeAfter = _getStake(hotkey1, oldClone, NETUID1) + _getStake(hotkey2, oldClone, NETUID1)
             + _getStake(hotkey3, oldClone, NETUID1);
@@ -1649,7 +1720,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     function test_RotationSnapshotInitializedOnFirstWrap() public {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
-        bytes32[3] memory snapshot = vault.lastSeenHotkeys(TOKEN1);
+        bytes32[] memory snapshot = vault.lastSeenHotkeys(TOKEN1);
+        assertEq(snapshot.length, 3);
         assertEq(snapshot[0], hotkey1);
         assertEq(snapshot[1], hotkey2);
         assertEq(snapshot[2], hotkey3);
@@ -1670,7 +1742,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey3, NETUID1), 0, "orphan must be drained");
         assertGe(_countRebalancedLogs(logs), 1, "sweep must emit Rebalanced");
 
-        bytes32[3] memory snapshot = vault.lastSeenHotkeys(TOKEN1);
+        bytes32[] memory snapshot = vault.lastSeenHotkeys(TOKEN1);
         assertEq(snapshot[2], hotkey4, "snapshot must be refreshed to current set");
     }
 
@@ -1743,7 +1815,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         // Below-threshold orphan is left stranded; snapshot still refreshes.
         assertEq(_getVaultStake(hotkey3, NETUID1), 2e6 - 1, "sub-threshold orphan not swept");
-        bytes32[3] memory snapshot = vault.lastSeenHotkeys(TOKEN1);
+        bytes32[] memory snapshot = vault.lastSeenHotkeys(TOKEN1);
         assertEq(snapshot[2], hotkey4, "snapshot refreshed regardless");
     }
 
@@ -2031,7 +2103,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(a1 + a2 + a4, expectedActiveTotal, "active set holds the post-sweep total");
         assertEq(vault.totalStake(TOKEN1), expectedActiveTotal, "totalStake synced to post-sweep total");
 
-        bytes32[3] memory snapshot = vault.lastSeenHotkeys(TOKEN1);
+        bytes32[] memory snapshot = vault.lastSeenHotkeys(TOKEN1);
         assertEq(snapshot[2], hotkey4, "snapshot refreshed to current set regardless of sweep");
     }
 

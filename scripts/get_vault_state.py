@@ -17,16 +17,20 @@ from common import (
 )
 
 
+# Mirrors ValidatorRegistry.MAX_VALIDATORS.
+MAX_VALIDATORS = 20
+
+
 def _validator_columns(registry: Contract | None, netuid: int) -> dict:
-    """Three (hotkey, weight) slots + count; empty for unused slots or no registry."""
+    """Up to MAX_VALIDATORS (hotkey, weight) slots + count; empty for unused slots or no registry."""
     cols: dict = {"validators_count": ""}
-    for i in range(3):
+    for i in range(MAX_VALIDATORS):
         cols[f"validator_{i+1}_hotkey"] = ""
         cols[f"validator_{i+1}_weight"] = ""
     if registry is None:
         return cols
     hotkeys, weights = registry.functions.getValidators(netuid).call()
-    count = sum(1 for w in weights if w != 0)
+    count = len(hotkeys)
     cols["validators_count"] = count
     for i in range(count):
         cols[f"validator_{i+1}_hotkey"] = "0x" + hotkeys[i].hex()

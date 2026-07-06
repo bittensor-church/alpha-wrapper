@@ -115,6 +115,23 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         arr[2] = c;
     }
 
+    function _generateHotkeys(uint256 count) internal pure returns (bytes32[] memory arr) {
+        arr = new bytes32[](count);
+        for (uint256 i; i < count; ++i) {
+            arr[i] = keccak256(abi.encode("generated-hotkey", i));
+        }
+    }
+
+    /// @dev Even weight split summing to BPS_BASE, remainder on slot 0.
+    function _evenWeights(uint16 count) internal pure returns (uint16[] memory arr) {
+        arr = new uint16[](count);
+        uint16 baseWeight = BPS_BASE / count;
+        for (uint256 i; i < count; ++i) {
+            arr[i] = baseWeight;
+        }
+        arr[0] += BPS_BASE - baseWeight * count;
+    }
+
     function _weights(uint16 a) internal pure returns (uint16[] memory arr) {
         arr = new uint16[](1);
         arr[0] = a;

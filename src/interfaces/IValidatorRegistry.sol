@@ -6,10 +6,9 @@ pragma solidity ^0.8.20;
 ///         to stake under, and in what BPS proportions, for a given subnet.
 interface IValidatorRegistry {
     /// @notice Returns the per-subnet validator hotkeys and their BPS weights.
-    /// @dev    Returned arrays are packed from index 0: populated entries occupy
-    ///         indices `0..count-1`, trailing entries are zero. Callers derive count
-    ///         as the index of the first zero weight. A subnet is configured iff
-    ///         `weights[0] > 0`; weights sum to 10000 across populated entries.
+    /// @dev    Arrays are equal-length and exactly sized to the attested set; empty when
+    ///         the subnet has no attested set. Entries are non-zero, weights sum to 10000,
+    ///         and set size is bounded (at most 20) so consumers may iterate freely.
     /// @param  netuid Subnet id.
-    function getValidators(uint256 netuid) external view returns (bytes32[3] memory hotkeys, uint16[3] memory weights);
+    function getValidators(uint256 netuid) external view returns (bytes32[] memory hotkeys, uint16[] memory weights);
 }

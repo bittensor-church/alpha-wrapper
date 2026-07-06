@@ -15,7 +15,10 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     );
 
     uint16 private constant BPS_BASE = 10_000;
-    uint8 private constant MAX_VALIDATORS = 3;
+    /// @notice Bounds attested set size so consumers iterating the set stay within block gas
+    ///         limits; the worst case is the vault's unwrap-for-TAO path, which walks the
+    ///         merged current + last-seen sets (up to 2N precompile calls) after a full rotation.
+    uint8 public constant MAX_VALIDATORS = 20;
     /// @dev Bounds `_setSigners` churn so a careless or compromised admin can't install a set
     ///      so large that subsequent rotation exceeds the block gas limit.
     uint8 private constant MAX_SIGNERS = 16;
@@ -29,8 +32,8 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     }
 
     struct ValidatorSet {
-        bytes32[3] hotkeys;
-        uint16[3] weights;
+        bytes32[] hotkeys;
+        uint16[] weights;
     }
 
     mapping(address => bool) public isSigner;
@@ -99,7 +102,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         external
         view
         override
-        returns (bytes32[3] memory hotkeys, uint16[3] memory weights)
+        returns (bytes32[] memory hotkeys, uint16[] memory weights)
     {
         ValidatorSet storage vs = _validators[netuid];
         return (vs.hotkeys, vs.weights);
@@ -191,15 +194,12 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     function _commit(WeightAttestation calldata att, uint256 len) private {
         nonces[att.netuid] = att.nonce;
         ValidatorSet storage vs = _validators[att.netuid];
-        for (uint256 i; i < MAX_VALIDATORS;) {
-            bytes32 newHk;
-            uint16 newWt;
-            if (i < len) {
-                newHk = att.hotkeys[i];
-                newWt = uint16(att.weights[i]);
-            }
-            if (vs.hotkeys[i] != newHk) vs.hotkeys[i] = newHk;
-            if (vs.weights[i] != newWt) vs.weights[i] = newWt;
+        delete vs.hotkeys;
+        delete vs.weights;
+        for (uint256 i; i < len;) {
+            vs.hotkeys.push(att.hotkeys[i]);
+            // Weights sum to BPS_BASE, so each fits uint16.
+            vs.weights.push(uint16(att.weights[i]));
             unchecked {
                 ++i;
             }

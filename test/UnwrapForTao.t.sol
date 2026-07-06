@@ -86,6 +86,21 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         assertEq(alice.balance - balanceBefore, 100 ether);
     }
 
+    function test_RotatedToTwentyDisjointValidators_DrainsMergedSet() public {
+        _setRemoveStakeRate(1, 1);
+        uint256 shares = _depositForAlice(100 ether);
+
+        // Re-attest to a disjoint 20-validator set without any state-mutating vault call;
+        // the merged candidate set spans 3 historical + 20 current hotkeys.
+        _setValidators(NETUID1, _generateHotkeys(20), _evenWeights(20));
+
+        uint256 balanceBefore = alice.balance;
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares, 0);
+
+        assertEq(alice.balance - balanceBefore, 100 ether);
+    }
+
     function test_MinTaoOutZero_AcceptsAnyRealizedTaoAmount() public {
         _setRemoveStakeRate(1, 100);
         uint256 shares = _depositForAlice(100 ether);
