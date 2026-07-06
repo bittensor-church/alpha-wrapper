@@ -83,6 +83,17 @@ transfer_stake_py() {
         --alpha-amount "$4"
 }
 
+# Stake TAO from Alice via a direct extrinsic. Recent btcli's `stake add` queries
+# `Swap.AlphaSqrtPrice`, which localnet runtimes may lack — this path has no such
+# dependency.
+add_stake_py() { # <hotkey_ss58> <netuid> <amount_rao>
+    python3 scripts/chain_ops.py add_stake \
+        --chain-endpoint "$CHAIN_ENDPOINT" \
+        --hotkey-ss58 "$1" \
+        --netuid "$2" \
+        --amount "$3"
+}
+
 set_validators_py() {
     python3 scripts/chain_ops.py set_validators \
         --rpc-url "$RPC_URL" \
@@ -366,10 +377,9 @@ e2e_bootstrap() {
             AMOUNT="${STAKE_RATIOS[$j]}"
             HK="${ALL_HK_NAMES[$IDX]}"
 
-            btcli_cmd stake add --wallet-name "$ALICE_WALLET" --hotkey "$HK" \
-                --amount "$AMOUNT" --netuid "$NET" --no-mev-protection \
-                --no-prompt --unsafe 2>&1 | tail -2
+            add_stake_py "${ALL_HK_SS58S[$IDX]}" "$NET" "$((AMOUNT * 1000000000))" | tail -1
             STAKE=$(get_stake "${ALL_HK_B32S[$IDX]}" "$ALICE_COLDKEY_B32" "$NET")
+            [[ "$STAKE" -gt 0 ]] || fail "stake add landed but $HK reads 0 RAO on netuid $NET"
             ok "netuid $NET $HK: ${AMOUNT} TAO → $STAKE RAO"
         done
     done

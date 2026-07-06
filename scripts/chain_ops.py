@@ -20,6 +20,21 @@ Subcommands:
         Submit `SubtensorModule.transfer_stake` signed by //Alice. Works around
         btcli's SignedExtension mismatch with recent subtensor builds.
 
+    add_stake --chain-endpoint URL --hotkey-ss58 ... --netuid N --amount RAW
+        Submit `SubtensorModule.add_stake` signed by //Alice: stake RAW rao of
+        TAO to the hotkey on the subnet. Replaces `btcli stake add` in the e2e
+        bootstrap (recent btcli queries `Swap.AlphaSqrtPrice`, which older
+        localnet runtimes lack).
+
+    lock_stake --chain-endpoint URL --hotkey-ss58 ... --netuid N --amount RAW
+        Submit `SubtensorModule.lock_stake` signed by //Alice: lock RAW alpha of
+        Alice's stake on the subnet to the given conviction hotkey. Requires a
+        localnet runtime with conviction v2 (fails with a clear message otherwise).
+
+    get_lock --chain-endpoint URL --coldkey-ss58 ... --netuid N --hotkey-ss58 ...
+        Read `SubtensorModule.Lock[(coldkey, netuid, hotkey)]` and print the
+        current `locked_mass` in RAW alpha (0 when no lock exists).
+
     set_validators --rpc-url URL --registry ADDR --signer-pk PK [--signer-pk PK ...]
                    --netuid N --hotkeys HK1,HK2,... --weights W1,W2,...
                    [--deadline-secs N]
@@ -116,6 +131,83 @@ def transfer_stake(
         print(f"FAIL: {receipt.error_message}", file=sys.stderr)
         sys.exit(1)
     print(f"ok block={receipt.block_hash}")
+
+
+def add_stake(
+    chain_endpoint: str,
+    hotkey_ss58: str,
+    netuid: int,
+    amount: int,
+) -> None:
+    from substrateinterface import Keypair, SubstrateInterface
+
+    sub = SubstrateInterface(url=chain_endpoint)
+    alice = Keypair.create_from_uri("//Alice")
+    call = sub.compose_call(
+        call_module="SubtensorModule",
+        call_function="add_stake",
+        call_params={
+            "hotkey": hotkey_ss58,
+            "netuid": netuid,
+            "amount_staked": amount,
+        },
+    )
+    extrinsic = sub.create_signed_extrinsic(call=call, keypair=alice)
+    receipt = sub.submit_extrinsic(extrinsic, wait_for_inclusion=True)
+    if not receipt.is_success:
+        print(f"FAIL: {receipt.error_message}", file=sys.stderr)
+        sys.exit(1)
+    print(f"ok block={receipt.block_hash}")
+
+
+def lock_stake(
+    chain_endpoint: str,
+    hotkey_ss58: str,
+    netuid: int,
+    amount: int,
+) -> None:
+    from substrateinterface import Keypair, SubstrateInterface
+
+    sub = SubstrateInterface(url=chain_endpoint)
+    alice = Keypair.create_from_uri("//Alice")
+    try:
+        call = sub.compose_call(
+            call_module="SubtensorModule",
+            call_function="lock_stake",
+            call_params={
+                "hotkey": hotkey_ss58,
+                "netuid": netuid,
+                "amount": amount,
+            },
+        )
+    except ValueError as exc:
+        print(
+            f"FAIL: runtime has no SubtensorModule.lock_stake (conviction v2) — "
+            f"rebuild the localnet from a current subtensor: {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    extrinsic = sub.create_signed_extrinsic(call=call, keypair=alice)
+    receipt = sub.submit_extrinsic(extrinsic, wait_for_inclusion=True)
+    if not receipt.is_success:
+        print(f"FAIL: {receipt.error_message}", file=sys.stderr)
+        sys.exit(1)
+    print(f"ok block={receipt.block_hash}")
+
+
+def get_lock(
+    chain_endpoint: str,
+    coldkey_ss58: str,
+    netuid: int,
+    hotkey_ss58: str,
+) -> None:
+    from substrateinterface import SubstrateInterface
+
+    sub = SubstrateInterface(url=chain_endpoint)
+    result = sub.query("SubtensorModule", "Lock", [coldkey_ss58, netuid, hotkey_ss58])
+    value = result.value if result is not None else None
+    locked_mass = value.get("locked_mass", 0) if isinstance(value, dict) else 0
+    print(locked_mass)
 
 
 def toggle_transfer(
@@ -304,6 +396,27 @@ def main() -> None:
     p.add_argument("--netuid", required=True, type=int)
     p.add_argument("--alpha-amount", required=True, type=int)
 
+    p = sub.add_parser("add_stake")
+    p.add_argument("--chain-endpoint", required=True)
+    p.add_argument("--hotkey-ss58", required=True)
+    p.add_argument("--netuid", required=True, type=int)
+    p.add_argument("--amount", required=True, type=int,
+                   help="TAO amount to stake, in RAW (rao)")
+
+    p = sub.add_parser("lock_stake")
+    p.add_argument("--chain-endpoint", required=True)
+    p.add_argument("--hotkey-ss58", required=True,
+                   help="Conviction hotkey the lock points at")
+    p.add_argument("--netuid", required=True, type=int)
+    p.add_argument("--amount", required=True, type=int,
+                   help="Alpha amount to lock, in RAW (rao)")
+
+    p = sub.add_parser("get_lock")
+    p.add_argument("--chain-endpoint", required=True)
+    p.add_argument("--coldkey-ss58", required=True)
+    p.add_argument("--netuid", required=True, type=int)
+    p.add_argument("--hotkey-ss58", required=True)
+
     p = sub.add_parser("toggle_transfer")
     p.add_argument("--chain-endpoint", required=True)
     p.add_argument("--netuid", required=True, type=int)
@@ -339,6 +452,27 @@ def main() -> None:
             hotkey_ss58=args.hotkey_ss58,
             netuid=args.netuid,
             alpha_amount=args.alpha_amount,
+        )
+    elif args.cmd == "add_stake":
+        add_stake(
+            chain_endpoint=args.chain_endpoint,
+            hotkey_ss58=args.hotkey_ss58,
+            netuid=args.netuid,
+            amount=args.amount,
+        )
+    elif args.cmd == "lock_stake":
+        lock_stake(
+            chain_endpoint=args.chain_endpoint,
+            hotkey_ss58=args.hotkey_ss58,
+            netuid=args.netuid,
+            amount=args.amount,
+        )
+    elif args.cmd == "get_lock":
+        get_lock(
+            chain_endpoint=args.chain_endpoint,
+            coldkey_ss58=args.coldkey_ss58,
+            netuid=args.netuid,
+            hotkey_ss58=args.hotkey_ss58,
         )
     elif args.cmd == "toggle_transfer":
         toggle_transfer(
