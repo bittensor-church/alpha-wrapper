@@ -24,9 +24,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=e2e/e2e_common.sh
 source "$SCRIPT_DIR/e2e_common.sh"
 
-# Substrate dev Alice (e2e_common.sh only carries the b32 form).
-ALICE_COLDKEY_SS58="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
-
 UNLOCKED_MARGIN_RAW=10000000000 # 10 alpha
 
 lock_stake_py() { # <hotkey_ss58> <netuid> <amount_raw>
