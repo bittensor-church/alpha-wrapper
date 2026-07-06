@@ -8,6 +8,7 @@ import { AttestationHelper } from "./helpers/AttestationHelper.sol";
 
 contract ValidatorRegistryTest is AttestationHelper {
     event SignersUpdated(address[] newSigners, uint8 newThreshold);
+    event MaxValidatorsUpdated(uint8 oldMaxValidators, uint8 newMaxValidators);
     event ValidatorsUpdated(uint256 indexed netuid, uint256 nonce, bytes32[] hotkeys, uint256[] weights);
 
     uint256 private constant SN1 = 1;
@@ -40,7 +41,7 @@ contract ValidatorRegistryTest is AttestationHelper {
         init[2] = s3;
 
         registry = new ValidatorRegistry(admin, init, 2);
-        maxValidators = registry.MAX_VALIDATORS();
+        maxValidators = registry.maxValidators();
     }
 
     function _att(uint256 netuid, uint256 len, uint256 nonce, uint256 deadline)
@@ -328,6 +329,87 @@ contract ValidatorRegistryTest is AttestationHelper {
         assertTrue(registry.isSigner(d));
         assertFalse(registry.isSigner(s2));
         assertFalse(registry.isSigner(s3));
+    }
+
+    function test_Constructor_MaxValidatorsDefaultsToTwenty() public view {
+        assertEq(registry.maxValidators(), 20);
+    }
+
+    function test_SetMaxValidators_UpdatesCap() public {
+        vm.expectEmit(true, true, true, true);
+        emit MaxValidatorsUpdated(20, 30);
+        registry.setMaxValidators(30);
+        assertEq(registry.maxValidators(), 30);
+    }
+
+    function test_RevertWhen_SetMaxValidatorsCallerNotAdmin() public {
+        bytes32 adminRole = registry.DEFAULT_ADMIN_ROLE();
+        vm.prank(nobody);
+        vm.expectRevert(
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, nobody, adminRole)
+        );
+        registry.setMaxValidators(10);
+    }
+
+    function test_RevertWhen_SetMaxValidatorsZero() public {
+        vm.expectRevert(ValidatorRegistry.ZeroValue.selector);
+        registry.setMaxValidators(0);
+    }
+
+    function test_SetMaxValidators_AcceptsLimit() public {
+        registry.setMaxValidators(registry.MAX_VALIDATORS_LIMIT());
+        assertEq(registry.maxValidators(), registry.MAX_VALIDATORS_LIMIT());
+    }
+
+    function test_RevertWhen_SetMaxValidatorsAboveLimit() public {
+        uint8 aboveLimit = registry.MAX_VALIDATORS_LIMIT() + 1;
+        vm.expectRevert(ValidatorRegistry.MaxValidatorsAboveLimit.selector);
+        registry.setMaxValidators(aboveLimit);
+    }
+
+    function test_Update_AcceptsSetSizedToRaisedCap() public {
+        registry.setMaxValidators(30);
+
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 30, 1, block.timestamp + 60);
+        registry.updateValidators(att, _sign(att, _pks2(PK2, PK1)));
+
+        _assertStoredSetMatches(SN1, att);
+    }
+
+    function test_RevertWhen_UpdateExceedsLoweredCap() public {
+        registry.setMaxValidators(2);
+
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 3, 1, block.timestamp + 60);
+        bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
+        vm.expectRevert(ValidatorRegistry.InvalidValidatorCount.selector);
+        registry.updateValidators(att, sigs);
+    }
+
+    function test_Update_KeepsStoredSetWhenCapLoweredBelowIt() public {
+        ValidatorRegistry.WeightAttestation memory att1 = _att(SN1, 3, 1, block.timestamp + 60);
+        registry.updateValidators(att1, _sign(att1, _pks2(PK2, PK1)));
+
+        registry.setMaxValidators(2);
+        _assertStoredSetMatches(SN1, att1);
+
+        ValidatorRegistry.WeightAttestation memory att2 = _att(SN1, 2, 2, block.timestamp + 60);
+        registry.updateValidators(att2, _sign(att2, _pks2(PK2, PK1)));
+        _assertStoredSetMatches(SN1, att2);
+    }
+
+    function testFuzz_SetMaxValidators_BoundsAttestationCount(uint8 capSeed) public {
+        // uint8 arithmetic keeps the cap cast-free for the uint8 setter.
+        uint8 cap = capSeed % registry.MAX_VALIDATORS_LIMIT() + 1;
+        registry.setMaxValidators(cap);
+
+        ValidatorRegistry.WeightAttestation memory oversized = _att(SN1, cap + 1, 1, block.timestamp + 60);
+        bytes[] memory oversizedSigs = _sign(oversized, _pks2(PK2, PK1));
+        vm.expectRevert(ValidatorRegistry.InvalidValidatorCount.selector);
+        registry.updateValidators(oversized, oversizedSigs);
+
+        ValidatorRegistry.WeightAttestation memory exact = _att(SN1, cap, 1, block.timestamp + 60);
+        registry.updateValidators(exact, _sign(exact, _pks2(PK2, PK1)));
+        _assertStoredSetMatches(SN1, exact);
     }
 
     function test_Update_PersistsTwoValidators() public {

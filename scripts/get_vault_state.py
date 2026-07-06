@@ -22,8 +22,8 @@ MAX_VALIDATORS = 20
 
 
 def _validator_columns(registry: Contract | None, netuid: int) -> dict:
-    """Up to MAX_VALIDATORS (hotkey, weight) slots + count; empty for unused slots or no registry."""
-    max_validators = MAX_VALIDATORS if registry is None else registry.functions.MAX_VALIDATORS().call()
+    """(hotkey, weight) slots + count, sized by the registry's live cap; empty for unused slots or no registry."""
+    max_validators = MAX_VALIDATORS if registry is None else registry.functions.maxValidators().call()
     cols: dict = {"validators_count": ""}
     for i in range(max_validators):
         cols[f"validator_{i+1}_hotkey"] = ""

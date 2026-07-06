@@ -731,7 +731,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function testFuzz_Wrap_ConservesDepositAcrossSetSizes(uint256 validatorCountSeed, uint256 depositSeed) public {
-        uint256 count = bound(validatorCountSeed, 1, registry.MAX_VALIDATORS());
+        uint256 count = bound(validatorCountSeed, 1, registry.maxValidators());
         uint256 deposit = bound(depositSeed, vault.minRebalanceAmt(), type(uint64).max);
         (bytes32[] memory hotkeys,, uint256 tokenId) = _wrapFreshSubnet(count, deposit);
 

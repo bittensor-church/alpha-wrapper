@@ -15,13 +15,13 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     );
 
     uint16 private constant BPS_BASE = 10_000;
-    /// @notice Bounds attested set size so consumers iterating the set stay within block gas
-    ///         limits; the worst case is the vault's unwrap-for-TAO path, which walks the
-    ///         merged current + last-seen sets (up to 2N precompile calls) after a full rotation.
-    uint8 public constant MAX_VALIDATORS = 20;
     /// @dev Bounds `_setSigners` churn so a careless or compromised admin can't install a set
     ///      so large that subsequent rotation exceeds the block gas limit.
     uint8 private constant MAX_SIGNERS = 16;
+    /// @notice Hard ceiling on `maxValidators` so a careless or compromised admin can't lift
+    ///         the cap into set sizes whose iteration exceeds block gas limits in consumers;
+    ///         64 matches Bittensor's standard per-subnet validator-permit slot count.
+    uint8 public constant MAX_VALIDATORS_LIMIT = 64;
 
     struct WeightAttestation {
         uint256 netuid;
@@ -40,14 +40,22 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     address[] public signers;
     uint8 public threshold;
 
+    /// @notice Admin-tunable bound on attested set size, keeping consumers that iterate the
+    ///         set within block gas limits; the worst case is the vault's unwrap-for-TAO path,
+    ///         which walks the merged current + last-seen sets (up to 2N precompile calls)
+    ///         after a full rotation. Lowering the cap does not shrink already-committed sets.
+    uint8 public maxValidators = 20;
+
     mapping(uint256 => ValidatorSet) private _validators;
     mapping(uint256 => uint256) public nonces;
 
     event SignersUpdated(address[] newSigners, uint8 newThreshold);
+    event MaxValidatorsUpdated(uint8 oldMaxValidators, uint8 newMaxValidators);
     event ValidatorsUpdated(uint256 indexed netuid, uint256 nonce, bytes32[] hotkeys, uint256[] weights);
 
     error ZeroAddress();
     error ZeroValue();
+    error MaxValidatorsAboveLimit();
     error ZeroWeight();
     error DuplicateValue();
     error LengthMismatch();
@@ -112,6 +120,14 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         _setSigners(newSigners, newThreshold);
     }
 
+    function setMaxValidators(uint8 newMaxValidators) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (newMaxValidators == 0) revert ZeroValue();
+        if (newMaxValidators > MAX_VALIDATORS_LIMIT) revert MaxValidatorsAboveLimit();
+        uint8 oldMaxValidators = maxValidators;
+        maxValidators = newMaxValidators;
+        emit MaxValidatorsUpdated(oldMaxValidators, newMaxValidators);
+    }
+
     function _setSigners(address[] memory newSigners, uint8 newThreshold) private {
         uint256 newLen = newSigners.length;
         if (newLen < 2) revert InsufficientSigners();
@@ -145,9 +161,9 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         emit SignersUpdated(newSigners, newThreshold);
     }
 
-    function _validatePayload(WeightAttestation calldata att, uint256 len) private pure {
+    function _validatePayload(WeightAttestation calldata att, uint256 len) private view {
         if (att.netuid > type(uint16).max) revert NetuidOutOfRange();
-        if (len == 0 || len > MAX_VALIDATORS) revert InvalidValidatorCount();
+        if (len == 0 || len > maxValidators) revert InvalidValidatorCount();
         if (len != att.weights.length) revert LengthMismatch();
 
         uint256 sum;
