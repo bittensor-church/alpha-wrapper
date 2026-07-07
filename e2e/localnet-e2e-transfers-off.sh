@@ -21,7 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/e2e_common.sh"
 
 # Flip a subnet's alpha TransferToggle via Sudo (//Alice). Specific to this test.
-toggle_transfer_py() { # <netuid> <true|false>
+toggle_transfer_py() {
     python3 scripts/chain_ops.py toggle_transfer \
         --chain-endpoint "$CHAIN_ENDPOINT" \
         --netuid "$1" \

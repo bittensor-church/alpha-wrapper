@@ -17,8 +17,18 @@ Subcommands:
 
     transfer_stake --chain-endpoint URL --dest-ss58 ... --hotkey-ss58 ...
                    --netuid N --alpha-amount RAW
-        Submit `SubtensorModule.transfer_stake` signed by //Alice. Works around
-        btcli's SignedExtension mismatch with recent subtensor builds.
+        Submit `SubtensorModule.transfer_stake` signed by //Alice.
+
+    add_stake --chain-endpoint URL --hotkey-ss58 ... --netuid N --amount RAW
+        Submit `SubtensorModule.add_stake` signed by //Alice.
+
+    lock_stake --chain-endpoint URL --hotkey-ss58 ... --netuid N --amount RAW
+        Submit `SubtensorModule.lock_stake` signed by //Alice: lock RAW alpha
+        to the given conviction hotkey.
+
+    get_lock --chain-endpoint URL --coldkey-ss58 ... --netuid N --hotkey-ss58 ...
+        Print `locked_mass` of `SubtensorModule.Lock[(coldkey, netuid, hotkey)]`
+        in RAW alpha (0 when no lock exists).
 
     lock_stake --chain-endpoint URL --hotkey-ss58 ... --netuid N --amount RAW
         Submit `SubtensorModule.lock_stake` signed by //Alice: lock RAW alpha of
@@ -122,6 +132,33 @@ def transfer_stake(
     if not receipt.is_success:
         # `error_message` is the metadata-decoded module error, e.g.
         # {'type': 'Module', 'name': 'TransferDisallowed', ...} — callers grep the name.
+        print(f"FAIL: {receipt.error_message}", file=sys.stderr)
+        sys.exit(1)
+    print(f"ok block={receipt.block_hash}")
+
+
+def add_stake(
+    chain_endpoint: str,
+    hotkey_ss58: str,
+    netuid: int,
+    amount: int,
+) -> None:
+    from substrateinterface import Keypair, SubstrateInterface
+
+    sub = SubstrateInterface(url=chain_endpoint)
+    alice = Keypair.create_from_uri("//Alice")
+    call = sub.compose_call(
+        call_module="SubtensorModule",
+        call_function="add_stake",
+        call_params={
+            "hotkey": hotkey_ss58,
+            "netuid": netuid,
+            "amount_staked": amount,
+        },
+    )
+    extrinsic = sub.create_signed_extrinsic(call=call, keypair=alice)
+    receipt = sub.submit_extrinsic(extrinsic, wait_for_inclusion=True)
+    if not receipt.is_success:
         print(f"FAIL: {receipt.error_message}", file=sys.stderr)
         sys.exit(1)
     print(f"ok block={receipt.block_hash}")
@@ -362,6 +399,13 @@ def main() -> None:
     p.add_argument("--hotkey-ss58", required=True)
     p.add_argument("--netuid", required=True, type=int)
     p.add_argument("--alpha-amount", required=True, type=int)
+
+    p = sub.add_parser("add_stake")
+    p.add_argument("--chain-endpoint", required=True)
+    p.add_argument("--hotkey-ss58", required=True)
+    p.add_argument("--netuid", required=True, type=int)
+    p.add_argument("--amount", required=True, type=int,
+                   help="TAO amount to stake, in RAW (rao)")
 
     p = sub.add_parser("lock_stake")
     p.add_argument("--chain-endpoint", required=True)
