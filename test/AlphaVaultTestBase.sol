@@ -52,7 +52,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     uint16 public constant BPS_BASE = 10_000;
 
-    // Mirrors the simulated chain min-stake floor (MockStaking.MIN_STAKE).
+    // Mirrors the simulated chain min-stake floor (MockStaking.DEFAULT_MIN_STAKE).
     uint256 internal constant MIN_STAKE_FLOOR = 2e6;
 
     uint256 public TOKEN1;

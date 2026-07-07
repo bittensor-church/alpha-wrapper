@@ -26,6 +26,11 @@ interface IStaking {
     function getStake(bytes32 hotkey, bytes32 coldkey, uint256 netuid) external view returns (uint256);
 
     function removeStake(bytes32 hotkey, uint256 amount, uint256 netuid) external payable;
+
+    /// @notice Minimum TAO-equivalent value (RAO) a stake operation must reach to be accepted.
+    /// @dev Added by the staking precompile V2; reverts on runtimes predating it, so callers must
+    ///      handle a failed call rather than assume support.
+    function getStakeOperationThreshold() external view returns (uint256);
 }
 
 /// @dev Staking precompile address on Bittensor EVM.

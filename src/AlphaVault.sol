@@ -45,10 +45,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///      refreshed only after a clean consolidation.
     mapping(uint256 => bytes32[3]) private _lastSeenHotkeys;
 
-    /// @notice Tao floor the vault uses to skip stake moves the chain would reject as too small.
-    ///         Owner-tunable to follow the chain's minimum without a redeploy, up to STAKE_FLOOR_CAP.
-    ///         Not clamped below: the owner must keep it at or above the chain's floor, or the vault
-    ///         attempts doomed moves that revert at full gas cost.
+    /// @notice Fallback Tao floor for the min-stake pre-check, used only when the chain's live
+    ///         `getStakeOperationThreshold()` view is unavailable (older runtimes) or reads zero.
+    ///         Owner-tunable up to STAKE_FLOOR_CAP; keep it at or above the chain's floor so the
+    ///         vault never attempts doomed moves while on a runtime without the precompile.
     uint256 public minStakeTaoFloor;
 
     // ──────────────────── Precision ─────────────────────────────────────────────
@@ -722,6 +722,27 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         return hk != bytes32(0) && hk != currentSet[0] && hk != currentSet[1] && hk != currentSet[2];
     }
 
+    /// @notice The min-stake floor the vault currently enforces, in RAO: the chain's live
+    ///         `getStakeOperationThreshold()` when the staking precompile exposes it, else the
+    ///         owner-set `minStakeTaoFloor` fallback.
+    function effectiveStakeFloor() external view returns (uint256) {
+        return _stakeFloor();
+    }
+
+    /// @dev Chain's live min-stake threshold when readable and non-zero, else `minStakeTaoFloor`.
+    ///      `getStakeOperationThreshold()` is unreleased on older runtimes; there the staticcall
+    ///      reverts (ok == false) and the fallback holds, so the vault adopts the chain's own value
+    ///      automatically once the precompile ships - no redeploy or owner action.
+    function _stakeFloor() private view returns (uint256) {
+        (bool ok, bytes memory data) =
+            STAKING_PRECOMPILE.staticcall(abi.encodeWithSelector(IStaking.getStakeOperationThreshold.selector));
+        if (ok && data.length == 32) {
+            uint256 chainFloor = abi.decode(data, (uint256));
+            if (chainFloor != 0) return chainFloor;
+        }
+        return minStakeTaoFloor;
+    }
+
     /// @dev Applies to transfers, moves, and partial unstakes. Full-balance unstakes are exempt on
     ///      the chain and must never be gated by this check - they are the only exit for sub-floor positions.
     ///      The oracle quantizes at the EVM boundary, so this label can under-read within one price
@@ -729,7 +750,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///      0.004 TAO absolute; the chain itself remains the enforcer at full precision.
     ///      A zero oracle read is not a label: callers skip this check and choose their own fall-through.
     function _isBelowMinStakeTaoFloor(uint256 alphaAmount, uint256 alphaPriceE18) private view returns (bool) {
-        return (alphaAmount * alphaPriceE18) / 1e18 < minStakeTaoFloor;
+        return (alphaAmount * alphaPriceE18) / 1e18 < _stakeFloor();
     }
 
     /// @dev True only when `alphaAmount` cannot clear the floor even at the highest price the

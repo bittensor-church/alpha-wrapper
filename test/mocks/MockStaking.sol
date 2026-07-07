@@ -7,7 +7,54 @@ import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 /// @dev Uses keccak256("evm:", h160) for coldkey derivation instead of the real
 ///      blake2b, matching the test helper `_toSubstrate`.
 contract MockStaking {
-    uint256 private constant MIN_STAKE = 2e6;
+    /// @dev The chain's DefaultMinStake: exposed via getStakeOperationThreshold() and enforced by
+    ///      every operation below, so the reported threshold and the real floor never diverge.
+    ///      Etch-safe: vm.etch copies code but not constructor-initialized storage, so a zero
+    ///      override reads as the default and the floor binds without a constructor run.
+    uint256 private constant DEFAULT_MIN_STAKE = 2e6;
+    uint256 public minStakeOverride;
+    bool public stakeThresholdReverts;
+    bool public stakeThresholdReadsZero;
+    bool public stakeThresholdReturnsShort;
+
+    function setStakeOperationThreshold(uint256 v) external {
+        minStakeOverride = v;
+    }
+
+    /// @dev Model a runtime whose staking precompile predates getStakeOperationThreshold() (the
+    ///      selector reverts). The chain still enforces the floor via the operation calls below.
+    function setStakeThresholdReverts(bool v) external {
+        stakeThresholdReverts = v;
+    }
+
+    /// @dev Model the view returning zero, exercising the vault's zero-read fallback while the
+    ///      operations still enforce the real floor.
+    function setStakeThresholdReadsZero(bool v) external {
+        stakeThresholdReadsZero = v;
+    }
+
+    /// @dev Model a precompile that answers but returns a non-32-byte payload, exercising the
+    ///      vault's length guard: it must fall back rather than let abi.decode revert the operation.
+    function setStakeThresholdReturnsShort(bool v) external {
+        stakeThresholdReturnsShort = v;
+    }
+
+    function _minStake() private view returns (uint256) {
+        return minStakeOverride == 0 ? DEFAULT_MIN_STAKE : minStakeOverride;
+    }
+
+    function getStakeOperationThreshold() external view returns (uint256) {
+        require(!stakeThresholdReverts, "MockStaking: getStakeOperationThreshold unimplemented");
+        if (stakeThresholdReturnsShort) {
+            // Non-32-byte answer: exercises the caller's length guard, which must fall back rather
+            // than let abi.decode revert.
+            assembly {
+                mstore(0, 1)
+                return(0, 4)
+            }
+        }
+        return stakeThresholdReadsZero ? 0 : _minStake();
+    }
 
     mapping(bytes32 => mapping(bytes32 => mapping(uint256 => uint256))) public stakes;
     uint256 public moveStakeRoundingLoss;
@@ -49,7 +96,7 @@ contract MockStaking {
     function _belowMinStake(uint256 amount, uint256 netuid) private view returns (bool) {
         // forge-lint: disable-next-line(unsafe-typecast)
         uint256 alphaPriceE18 = MockAlpha(ALPHA_PRECOMPILE).chainAlphaPrice(uint16(netuid));
-        return (amount * alphaPriceE18) / 1e18 < MIN_STAKE;
+        return (amount * alphaPriceE18) / 1e18 < _minStake();
     }
 
     function transferStake(
@@ -127,7 +174,7 @@ contract MockStaking {
         // credits rao * 1e9 wei. Wei-denominated payouts are asserted by the e2e run.
         uint256 taoOut = (alphaAmount * taoPerAlpha) / taoPerAlphaDenom;
         // Mirrors subtensor validate_remove_stake: the floor binds only when stake remains after.
-        if (alphaAmount != staked && taoOut < MIN_STAKE) {
+        if (alphaAmount != staked && taoOut < _minStake()) {
             _fail("MockStaking: AmountTooLow");
         }
         stakes[hotkey][_senderColdkey()][netuid] = staked - alphaAmount;
