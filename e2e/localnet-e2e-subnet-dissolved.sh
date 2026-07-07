@@ -11,14 +11,12 @@
 #   - Funded EVM deployer (see DEPLOYER in e2e/e2e_common.sh)
 #
 # What this checks:
-#   When subtensor dissolves a subnet (`root_dissolve_network`), it converts every
-#   staker's alpha into a pro-rata share of the subnet's TAO reserve, credited to
-#   the staker's coldkey — which, for the vault's clones, surfaces as their native
-#   EVM balance. The vault detects the dead subnet (`NetworkRegisteredAt == 0`) and
-#   opens its dissolved rail: `unwrap` pays the position's refund as native TAO and
-#   `reclaimTaoFromMailbox` sweeps the mailbox's refund. The alpha-selling exits
-#   (`unwrapForTao` / `reclaimMailboxAlphaAsTao`) revert — dissolution left no alpha
-#   to sell — with shares intact, and an untouched subnet keeps exiting normally.
+#   Dissolving (deregistering) a subnet returns its staked alpha to holders as native
+#   TAO. Two users wrap a shared position on a subnet (and one also parks raw alpha in
+#   a mailbox); the test dissolves it and checks each user recovers their pro-rata
+#   share as native TAO — from both the position and the mailbox — while the alpha-based
+#   exits no longer apply (they revert without touching shares) and a position on an
+#   untouched subnet keeps exiting normally.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=e2e/e2e_common.sh
@@ -33,22 +31,30 @@ dissolve_network_py() { # <netuid>
 
 e2e_bootstrap
 
-log "Phase 6: Wrap a position on the soon-dissolved subnet"
+log "Phase 6: Two users wrap positions on the soon-dissolved subnet"
 
 DEAD_NET="${NETUIDS[0]}"
 DEAD_TID="${VAULT_IDS[0]}"
 DEAD_HK_B32="${ALL_HK_B32S[0]}"
 DEAD_HK_SS58="${ALL_HK_SS58S[0]}"
 
-deposit_and_wrap "$DEAD_NET" "$DEAD_HK_B32" "$DEAD_HK_SS58" "$PER_HOTKEY_RAW" 1500000 \
-    "wrap for dissolution setup failed"
+# The deployer key doubles as a second share-holder so the dissolved payout splits pro-rata.
+USER2_ADDR="$DEPLOYER_ADDR"
+USER2_PK="$DEPLOYER_PK"
 
-DEAD_SHARES=$(vault_shares "$DEAD_TID")
-[[ "$DEAD_SHARES" != "0" ]] || fail "no shares minted by wrap on netuid $DEAD_NET"
+deposit_and_wrap "$DEAD_NET" "$DEAD_HK_B32" "$DEAD_HK_SS58" "$PER_HOTKEY_RAW" 1500000 \
+    "primary-user wrap failed"
+deposit_and_wrap "$DEAD_NET" "$DEAD_HK_B32" "$DEAD_HK_SS58" "$PER_HOTKEY_RAW" 1500000 \
+    "second-user wrap failed" "$USER2_ADDR" "$USER2_PK"
+
+USER1_SHARES=$(vault_shares "$DEAD_TID")
+USER2_SHARES=$(vault_shares "$DEAD_TID" "$USER2_ADDR")
+[[ "$USER1_SHARES" != "0" ]] || fail "no shares minted for user1 on netuid $DEAD_NET"
+[[ "$USER2_SHARES" != "0" ]] || fail "no shares minted for user2 on netuid $DEAD_NET"
 DEAD_CLONE=$(clone_addr "$DEAD_TID")
 [[ "$(vault_total_stake "$DEAD_TID")" != "0" ]] || fail "wrap on netuid $DEAD_NET left zero backing alpha"
 [[ "$(evm_balance "$DEAD_CLONE")" == "0" ]] || fail "clone holds native TAO before dissolution"
-ok "netuid $DEAD_NET (tokenId $DEAD_TID): $DEAD_SHARES shares, clone $DEAD_CLONE backed by alpha"
+ok "netuid $DEAD_NET (tokenId $DEAD_TID): user1 $USER1_SHARES + user2 $USER2_SHARES shares, clone $DEAD_CLONE backed by alpha"
 
 log "Phase 7: Seed raw (unwrapped) alpha in the user's mailbox on the same subnet"
 
@@ -84,8 +90,8 @@ log "Phase 9: Dissolve the subnet"
 
 dissolve_network_py "$DEAD_NET" | tail -1
 
-# The refund is credited to the clone/mailbox coldkeys — which are their own EVM
-# balances (HashedAddressMapping) — so those turn positive as the alpha is wiped.
+# Dissolution returns the position's and mailbox's alpha as native TAO to their
+# addresses, so those balances turn positive as the alpha is wiped.
 DEAD_CLONE_TAO=$(evm_balance "$DEAD_CLONE")
 DEAD_MAILBOX_TAO=$(evm_balance "$DEAD_MAILBOX")
 assert_ge "$DEAD_CLONE_TAO" 1 "clone received no TAO refund after dissolution"
@@ -97,31 +103,41 @@ ok "Dissolved: clone holds $DEAD_CLONE_TAO wei, mailbox $DEAD_MAILBOX_TAO wei; a
 
 log "Phase 10: Alpha-selling exits revert — dissolution left no alpha to sell"
 
-vault_send_expect_revert 2000000 "unwrapForTao (alpha rail) did NOT revert on the dissolved subnet" \
-    "unwrapForTao(uint256,uint256,uint256)" "$DEAD_TID" "$DEAD_SHARES" 0
-[[ "$(vault_shares "$DEAD_TID")" == "$DEAD_SHARES" ]] || fail "shares changed after a reverted unwrapForTao"
+vault_send_expect_revert 2000000 "unwrapForTao did NOT revert on the dissolved subnet" \
+    "unwrapForTao(uint256,uint256,uint256)" "$DEAD_TID" "$USER1_SHARES" 0
+[[ "$(vault_shares "$DEAD_TID")" == "$USER1_SHARES" ]] || fail "shares changed after a reverted unwrapForTao"
 
 vault_send_expect_revert 1500000 "reclaimMailboxAlphaAsTao did NOT revert on wiped mailbox alpha" \
     "reclaimMailboxAlphaAsTao(uint256,bytes32,uint256)" "$DEAD_NET" "$MAILBOX_HK_B32" 0
-ok "Alpha-selling exits reverted; position shares preserved ($DEAD_SHARES)"
+ok "Alpha-selling exits reverted; position shares preserved ($USER1_SHARES)"
 
-log "Phase 11: Recover the position as native TAO via the dissolved unwrap rail"
+log "Phase 11: Both users recover their pro-rata slice of the refund as native TAO"
 
 CLONE_TAO_PRE=$(evm_balance "$DEAD_CLONE")
+SUPPLY=$(python3 -c "print($USER1_SHARES + $USER2_SHARES)")
+EXP_USER1=$(python3 -c "print($CLONE_TAO_PRE * $USER1_SHARES // $SUPPLY)")
+
 PREVIEW_TAO=$(cast call "$VAULT_ADDR" "previewUnwrap(uint256,uint256)(uint256,uint256)" \
-    "$DEAD_TID" "$DEAD_SHARES" --rpc-url "$RPC_URL" | tail -1 | awk '{print $1}')
-[[ "$PREVIEW_TAO" == "$CLONE_TAO_PRE" ]] \
-    || fail "previewUnwrap tao ($PREVIEW_TAO) != clone balance ($CLONE_TAO_PRE) for the sole holder"
+    "$DEAD_TID" "$USER1_SHARES" --rpc-url "$RPC_URL" | tail -1 | awk '{print $1}')
+[[ "$PREVIEW_TAO" == "$EXP_USER1" ]] \
+    || fail "previewUnwrap tao ($PREVIEW_TAO) != user1's pro-rata share ($EXP_USER1) of clone $CLONE_TAO_PRE"
+python3 -c "import sys; sys.exit(0 if 0 < $EXP_USER1 < $CLONE_TAO_PRE else 1)" \
+    || fail "dissolved payout did not split between holders (share $EXP_USER1 of $CLONE_TAO_PRE)"
 
-USER_TAO_PRE=$(user_tao_wei)
-vault_send 2000000 "dissolved unwrap failed" \
-    "unwrap(uint256,uint256,bytes32)" "$DEAD_TID" "$DEAD_SHARES" "$WRAPPER_SUB_B32"
+USER1_TAO_PRE=$(user_tao_wei)
+vault_send 2000000 "user1 dissolved unwrap failed" \
+    "unwrap(uint256,uint256,bytes32)" "$DEAD_TID" "$USER1_SHARES" "$WRAPPER_SUB_B32"
+[[ "$(vault_shares "$DEAD_TID")" == "0" ]] || fail "user1 shares not burned after the dissolved unwrap"
+GAINED1=$(assert_gain "$USER1_TAO_PRE" "$(user_tao_wei)" "user1 gained no TAO from the dissolved unwrap")
 
-[[ "$(vault_shares "$DEAD_TID")" == "0" ]] || fail "shares not burned after the dissolved unwrap"
-[[ "$(evm_balance "$DEAD_CLONE")" == "0" ]] || fail "clone not fully drained after the dissolved unwrap"
-USER_TAO_POST=$(user_tao_wei)
-GAINED=$(assert_gain "$USER_TAO_PRE" "$USER_TAO_POST" "user gained no TAO from the dissolved unwrap")
-ok "Position recovered ($PREVIEW_TAO wei); user net +$GAINED wei after gas, clone drained to 0"
+USER2_TAO_PRE=$(evm_balance "$USER2_ADDR")
+vault_send_as "$USER2_PK" 2000000 "user2 dissolved unwrap failed" \
+    "unwrap(uint256,uint256,bytes32)" "$DEAD_TID" "$USER2_SHARES" "$WRAPPER_SUB_B32"
+[[ "$(vault_shares "$DEAD_TID" "$USER2_ADDR")" == "0" ]] || fail "user2 shares not burned after the dissolved unwrap"
+GAINED2=$(assert_gain "$USER2_TAO_PRE" "$(evm_balance "$USER2_ADDR")" "user2 gained no TAO from the dissolved unwrap")
+
+[[ "$(evm_balance "$DEAD_CLONE")" == "0" ]] || fail "clone not fully drained after both users unwrapped"
+ok "Pro-rata recovery: user1 +$GAINED1 wei (preview $EXP_USER1), user2 +$GAINED2 wei; clone drained to 0"
 
 log "Phase 12: Recover the mailbox refund as native TAO via reclaimTaoFromMailbox"
 

@@ -136,9 +136,9 @@ sum_stake() {
     echo "$total"
 }
 
-# User's ERC1155 share balance for a tokenId.
-vault_shares() { # <tokenId>
-    cast call "$VAULT_ADDR" "balanceOf(address,uint256)(uint256)" "$WRAPPER_ADDR" "$1" \
+# ERC1155 share balance for a tokenId, held by <holder> (defaults to the user).
+vault_shares() { # <tokenId> [holder]
+    cast call "$VAULT_ADDR" "balanceOf(address,uint256)(uint256)" "${2:-$WRAPPER_ADDR}" "$1" \
         --rpc-url "$RPC_URL" | awk '{print $1}'
 }
 
@@ -147,9 +147,9 @@ vault_total_stake() { # <tokenId>
     cast call "$VAULT_ADDR" "totalStake(uint256)(uint256)" "$1" --rpc-url "$RPC_URL" | awk '{print $1}'
 }
 
-# Deterministic per-user mailbox deposit address for a subnet.
-mailbox_addr() { # <netuid>
-    cast call "$VAULT_ADDR" "getDepositAddress(address,uint256)(address)" "$WRAPPER_ADDR" "$1" \
+# Deterministic mailbox deposit address for <user> (defaults to the user) on a subnet.
+mailbox_addr() { # <netuid> [user]
+    cast call "$VAULT_ADDR" "getDepositAddress(address,uint256)(address)" "${2:-$WRAPPER_ADDR}" "$1" \
         --rpc-url "$RPC_URL"
 }
 
@@ -168,23 +168,31 @@ user_tao_wei() {
     evm_balance "$WRAPPER_ADDR"
 }
 
-# Broadcast a tx to the vault from the user key; capture the JSON receipt and its status in
+# Broadcast a tx to the vault signed by <pk>; capture the JSON receipt and its status in
 # LAST_TX_RECEIPT / LAST_TX_STATUS ("fail" if the send or receipt parse errored).
-vault_broadcast() { # <gas_limit> <sig> [args...]
-    local gas="$1" sig="$2"
-    shift 2
+vault_broadcast_as() { # <pk> <gas_limit> <sig> [args...]
+    local pk="$1" gas="$2" sig="$3"
+    shift 3
     LAST_TX_RECEIPT=$(cast send "$VAULT_ADDR" "$sig" "$@" \
-        --private-key "$WRAPPER_PK" --rpc-url "$RPC_URL" \
+        --private-key "$pk" --rpc-url "$RPC_URL" \
         $EVM_FLAGS --gas-limit "$gas" --json || true)
     LAST_TX_STATUS=$(echo "$LAST_TX_RECEIPT" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "fail")
 }
 
-# Send a tx to the vault from the user key and assert it succeeded (status 0x1).
-vault_send() { # <gas_limit> <fail_msg> <sig> [args...]
-    local gas="$1" msg="$2"
-    shift 2
-    vault_broadcast "$gas" "$@"
+vault_broadcast() { # <gas_limit> <sig> [args...]
+    vault_broadcast_as "$WRAPPER_PK" "$@"
+}
+
+# Send a tx to the vault signed by <pk> and assert it succeeded (status 0x1).
+vault_send_as() { # <pk> <gas_limit> <fail_msg> <sig> [args...]
+    local pk="$1" gas="$2" msg="$3"
+    shift 3
+    vault_broadcast_as "$pk" "$gas" "$@"
     [[ "$LAST_TX_STATUS" == "0x1" ]] || { echo "$LAST_TX_RECEIPT"; fail "$msg"; }
+}
+
+vault_send() { # <gas_limit> <fail_msg> <sig> [args...]
+    vault_send_as "$WRAPPER_PK" "$@"
 }
 
 # Send a tx to the vault that is EXPECTED to revert; assert it did not succeed.
@@ -230,13 +238,15 @@ assert_tao_gain() { # <pre_wei> <post_wei> <quote_rao> <fail_msg>
     echo "$gain"
 }
 
-# Transfer alpha from Alice into the user's mailbox under a hotkey, then wrap it into the vault.
+# Transfer alpha from Alice into a user's mailbox under a hotkey, then wrap it into the vault.
+# Defaults to the primary user; pass trailing [user_addr] [user_pk] to run it for another holder.
 deposit_and_wrap() {
-    local netuid="$1" hk_b32="$2" hk_ss58="$3" amount="$4" gas="$5" msg="$6" mailbox
-    mailbox=$(mailbox_addr "$netuid")
+    local netuid="$1" hk_b32="$2" hk_ss58="$3" amount="$4" gas="$5" msg="$6"
+    local user="${7:-$WRAPPER_ADDR}" pk="${8:-$WRAPPER_PK}" mailbox
+    mailbox=$(mailbox_addr "$netuid" "$user")
     info "Transferring $amount RAO from Alice → mailbox under ${hk_b32:0:18}..."
     transfer_stake_py "$(h160_to_ss58 "$mailbox")" "$hk_ss58" "$netuid" "$amount" | tail -1
-    vault_send "$gas" "$msg" "wrap(address,uint256,bytes32)" "$WRAPPER_ADDR" "$netuid" "$hk_b32"
+    vault_send_as "$pk" "$gas" "$msg" "wrap(address,uint256,bytes32)" "$user" "$netuid" "$hk_b32"
 }
 
 # ─── Bootstrap: pre-flight + phases 0-5 ──────────────────────────────────────
