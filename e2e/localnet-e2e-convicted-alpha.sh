@@ -41,11 +41,6 @@ alice_locked_alpha() {
         --hotkey-ss58 "$2"
 }
 
-# RAW/share magnitudes can exceed bash's signed-64-bit arithmetic; compare in python.
-assert_ge() { # <actual> <min_expected> <fail_msg>
-    python3 -c "import sys; sys.exit(0 if $1 >= $2 else 1)" || fail "$3 ($1 < $2)"
-}
-
 # Locks bind Alice's subnet-wide alpha across ALL her hotkeys, including the
 # subnet-owner hotkey. getTotalColdkeyStakeOnSubnet cannot size the lock: it
 # returns TAO value (sim-swap), not the alpha the lock is denominated in.

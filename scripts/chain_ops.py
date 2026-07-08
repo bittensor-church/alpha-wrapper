@@ -54,6 +54,13 @@ Subcommands:
         hyperparameter ops (toggle_transfer, max_regs_per_block, ...) are only accepted
         on 1 block in 11 near each subnet epoch boundary. The e2e bootstrap sets the
         window to 0 so those sudo writes apply on the first attempt.
+
+    dissolve_network --chain-endpoint URL --netuid N
+        Dissolve (deregister) a subnet via
+        `Sudo.sudo(SubtensorModule.root_dissolve_network(netuid))` as //Alice. The
+        chain converts every staker's alpha into a pro-rata share of the subnet's
+        TAO reserve, credits it to their coldkey, and removes the subnet. Confirms
+        with a `NetworksAdded` read-back since `Sudo.sudo` masks inner-call failure.
 """
 
 import argparse
@@ -268,6 +275,33 @@ def set_admin_freeze_window(
     print(f"ok admin_freeze_window={window} block={receipt.block_hash}")
 
 
+def dissolve_network(
+    chain_endpoint: str,
+    netuid: int,
+) -> None:
+    from substrateinterface import Keypair, SubstrateInterface
+
+    sub = SubstrateInterface(url=chain_endpoint)
+    alice = Keypair.create_from_uri("//Alice")
+    inner = sub.compose_call(
+        call_module="SubtensorModule",
+        call_function="root_dissolve_network",
+        call_params={"netuid": netuid},
+    )
+    call = sub.compose_call(
+        call_module="Sudo",
+        call_function="sudo",
+        call_params={"call": inner},
+    )
+    extrinsic = sub.create_signed_extrinsic(call=call, keypair=alice)
+    receipt = sub.submit_extrinsic(extrinsic, wait_for_inclusion=True)
+    # Sudo.sudo reports success even when the inner call reverts, so trust chain state.
+    if sub.query("SubtensorModule", "NetworksAdded", [netuid]).value:
+        print(f"FAIL: dissolve_network netuid={netuid} left the subnet registered", file=sys.stderr)
+        sys.exit(1)
+    print(f"ok netuid={netuid} dissolved block={receipt.block_hash}")
+
+
 def set_validators(
     rpc_url: str,
     registry: str,
@@ -420,6 +454,10 @@ def main() -> None:
     p.add_argument("--window", required=True, type=int,
                    help="Terminal blocks per tempo during which admin ops are frozen (0 disables)")
 
+    p = sub.add_parser("dissolve_network")
+    p.add_argument("--chain-endpoint", required=True)
+    p.add_argument("--netuid", required=True, type=int)
+
     p = sub.add_parser("set_validators")
     p.add_argument("--rpc-url", required=True)
     p.add_argument("--registry", required=True)
@@ -476,6 +514,11 @@ def main() -> None:
         set_admin_freeze_window(
             chain_endpoint=args.chain_endpoint,
             window=args.window,
+        )
+    elif args.cmd == "dissolve_network":
+        dissolve_network(
+            chain_endpoint=args.chain_endpoint,
+            netuid=args.netuid,
         )
     elif args.cmd == "set_validators":
         set_validators(
