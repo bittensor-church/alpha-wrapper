@@ -9,6 +9,7 @@ call the Python tooling in [`../scripts/`](../scripts/).
 | `localnet-e2e.sh` | Full end-to-end flow against a local subtensor |
 | `localnet-e2e-transfers-off.sh` | E2E with subnet alpha transfers disabled: alpha rail reverts, TAO rails still pay |
 | `localnet-e2e-convicted-alpha.sh` | E2E with conviction-locked alpha: over-movable deposits refused on-chain, movable portion wraps, vault flows and unwraps unaffected |
+| `localnet-e2e-subnet-dissolved.sh` | E2E with a dissolved subnet: dissolved unwrap and mailbox reclaim recover native TAO, alpha rails revert, untouched subnet unaffected |
 | `localnet-e2e-min-stake-floor.sh` | E2E for min-stake floor handling: wrap enforces the floor at the exact boundary, rotated-out dust is consolidated by the next wrap, sub-floor rebalance moves are skipped in-budget |
 | `e2e_common.sh` | Shared config + helpers + bootstrap (phases 0-5) sourced by the tests |
 | `verify_csv.py` | Asserts invariants on the CSV output of the `../scripts/` observability readers |

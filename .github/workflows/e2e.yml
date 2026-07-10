@@ -31,6 +31,7 @@ jobs:
           - localnet-e2e.sh
           - localnet-e2e-transfers-off.sh
           - localnet-e2e-convicted-alpha.sh
+          - localnet-e2e-subnet-dissolved.sh
           - localnet-e2e-min-stake-floor.sh
 
     services:
