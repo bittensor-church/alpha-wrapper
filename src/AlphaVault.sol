@@ -236,7 +236,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         emit UnwrappedForTao(msg.sender, tokenId, shares, assets, taoOut);
     }
 
-    /// @dev Sell `assets` alpha across `hotkeys` and return the native TAO credited to the clone.
     function _sellAlphaForTao(
         address clone,
         uint16 netuid,
@@ -661,10 +660,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     function _sweepRotatedStake(uint256 tokenId, address clone, bytes32 coldkey, bytes32[] memory currentSet) private {
         if (clone != address(0)) {
             bytes32[] storage seen = _lastSeenHotkeys[tokenId];
+            uint256 seenCount = seen.length;
             uint16 netuid = _netuid(tokenId);
             uint256 threshold = minRebalanceAmt;
             IStaking staking = IStaking(STAKING_PRECOMPILE);
-            for (uint256 i; i < seen.length;) {
+            for (uint256 i; i < seenCount;) {
                 bytes32 hk = seen[i];
                 if (!_contains(currentSet, hk)) {
                     uint256 bal = staking.getStake(hk, coldkey, netuid);

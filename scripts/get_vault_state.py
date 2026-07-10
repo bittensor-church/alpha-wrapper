@@ -17,25 +17,16 @@ from common import (
 )
 
 
-# Fallback column count when no registry is configured; live value is read on-chain.
-MAX_VALIDATORS = 20
-
-
 def _validator_columns(registry: Contract | None, netuid: int) -> dict:
-    """(hotkey, weight) slots + count, sized by the registry's live cap; empty for unused slots or no registry."""
-    max_validators = MAX_VALIDATORS if registry is None else registry.functions.maxValidators().call()
+    """One (hotkey, weight) column pair per attested validator, plus the count."""
     cols: dict = {"validators_count": ""}
-    for i in range(max_validators):
-        cols[f"validator_{i+1}_hotkey"] = ""
-        cols[f"validator_{i+1}_weight"] = ""
     if registry is None:
         return cols
     hotkeys, weights = registry.functions.getValidators(netuid).call()
-    count = len(hotkeys)
-    cols["validators_count"] = count
-    for i in range(count):
-        cols[f"validator_{i+1}_hotkey"] = "0x" + hotkeys[i].hex()
-        cols[f"validator_{i+1}_weight"] = weights[i]
+    cols["validators_count"] = len(hotkeys)
+    for i, (hotkey, weight) in enumerate(zip(hotkeys, weights), start=1):
+        cols[f"validator_{i}_hotkey"] = "0x" + hotkey.hex()
+        cols[f"validator_{i}_weight"] = weight
     return cols
 
 

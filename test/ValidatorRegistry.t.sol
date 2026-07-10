@@ -14,8 +14,6 @@ contract ValidatorRegistryTest is AttestationHelper {
     uint256 private constant SN1 = 1;
     uint256 private constant SN2 = 2;
 
-    uint8 private maxValidators;
-
     uint256 private constant PK1 = 0xA11CE;
     uint256 private constant PK2 = 0xB0B;
     uint256 private constant PK3 = 0xCAFE;
@@ -41,7 +39,6 @@ contract ValidatorRegistryTest is AttestationHelper {
         init[2] = s3;
 
         registry = new ValidatorRegistry(admin, init, 2);
-        maxValidators = registry.maxValidators();
     }
 
     function _att(uint256 netuid, uint256 len, uint256 nonce, uint256 deadline)
@@ -58,10 +55,9 @@ contract ValidatorRegistryTest is AttestationHelper {
 
     function _assertStoredSetMatches(uint256 netuid, ValidatorRegistry.WeightAttestation memory att) private view {
         (bytes32[] memory hotkeys, uint16[] memory weights) = registry.getValidators(netuid);
-        assertEq(hotkeys.length, att.hotkeys.length);
+        assertEq(hotkeys, att.hotkeys);
         assertEq(weights.length, att.weights.length);
-        for (uint256 i; i < hotkeys.length; ++i) {
-            assertEq(hotkeys[i], att.hotkeys[i]);
+        for (uint256 i; i < weights.length; ++i) {
             assertEq(weights[i], att.weights[i]);
         }
     }
@@ -425,7 +421,7 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_Update_PersistsMaxValidators() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, maxValidators, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, registry.maxValidators(), 1, block.timestamp + 60);
         bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
 
         vm.expectEmit(true, true, true, true);
@@ -437,7 +433,7 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_Update_ShrinksSetToExactLength() public {
-        ValidatorRegistry.WeightAttestation memory att1 = _att(SN1, maxValidators, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att1 = _att(SN1, registry.maxValidators(), 1, block.timestamp + 60);
         registry.updateValidators(att1, _sign(att1, _pks2(PK2, PK1)));
 
         ValidatorRegistry.WeightAttestation memory att2 = _att(SN1, 1, 2, block.timestamp + 60);
@@ -451,7 +447,7 @@ contract ValidatorRegistryTest is AttestationHelper {
         ValidatorRegistry.WeightAttestation memory att1 = _att(SN1, 1, 1, block.timestamp + 60);
         registry.updateValidators(att1, _sign(att1, _pks2(PK2, PK1)));
 
-        ValidatorRegistry.WeightAttestation memory att2 = _att(SN1, maxValidators, 2, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att2 = _att(SN1, registry.maxValidators(), 2, block.timestamp + 60);
         registry.updateValidators(att2, _sign(att2, _pks2(PK2, PK1)));
 
         assertEq(registry.nonces(SN1), 2);
@@ -476,7 +472,7 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function testFuzz_Update_RoundTripsAnyCount(uint256 count) public {
-        uint256 len = bound(count, 1, maxValidators);
+        uint256 len = bound(count, 1, registry.maxValidators());
         ValidatorRegistry.WeightAttestation memory att = _att(SN1, len, 1, block.timestamp + 60);
         registry.updateValidators(att, _sign(att, _pks2(PK2, PK1)));
 
@@ -485,8 +481,8 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function testFuzz_Update_SequentialCommitsLeaveExactFinalSet(uint256 firstCount, uint256 secondCount) public {
-        uint256 firstLen = bound(firstCount, 1, maxValidators);
-        uint256 secondLen = bound(secondCount, 1, maxValidators);
+        uint256 firstLen = bound(firstCount, 1, registry.maxValidators());
+        uint256 secondLen = bound(secondCount, 1, registry.maxValidators());
 
         ValidatorRegistry.WeightAttestation memory att1 = _att(SN1, firstLen, 1, block.timestamp + 60);
         registry.updateValidators(att1, _sign(att1, _pks2(PK2, PK1)));
@@ -506,7 +502,8 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_RevertWhen_UpdateTooManyHotkeys() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, uint256(maxValidators) + 1, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att =
+            _att(SN1, uint256(registry.maxValidators()) + 1, 1, block.timestamp + 60);
         bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
         vm.expectRevert(ValidatorRegistry.InvalidValidatorCount.selector);
         registry.updateValidators(att, sigs);

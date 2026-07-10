@@ -93,8 +93,8 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         return new AlphaVault("https://api.tao20.io/{id}.json", address(mailboxLogic), address(subnetLogic), _registry);
     }
 
-    function _setValidators(uint256 netuid, bytes32[] memory hks, uint256[] memory wts) internal {
-        _submitAttestation(registry, netuid, hks, wts, signerPks);
+    function _setValidators(uint256 netuid, bytes32[] memory hotkeys, uint256[] memory weights) internal {
+        _submitAttestation(registry, netuid, hotkeys, weights, signerPks);
     }
 
     function _hotkeys(bytes32 a) internal pure returns (bytes32[] memory arr) {

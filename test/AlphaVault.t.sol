@@ -16,6 +16,10 @@ import { AlphaVaultTestBase, STORAGE_QUERY } from "./AlphaVaultTestBase.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 contract AlphaVaultTest is AlphaVaultTestBase {
+    uint256 private constant FRESH_NETUID = 93;
+    // 100 TAO plus an uneven tail, so exact-equality conservation asserts catch lost dust.
+    uint256 private constant FRESH_DEPOSIT = 100e9 + 12_345;
+
     // ────────────────── Constructor ──────────────────────────────────────────
 
     function test_RevertWhen_ConstructorZeroMailboxLogic() public {
@@ -621,13 +625,9 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(_totalVaultStakeAcrossHotkeys(NETUID1), 90 ether);
     }
 
-    uint256 private constant FRESH_NETUID = 93;
-    // 100 TAO plus an uneven remainder so per-slot weight targets exercise real rounding.
-    uint256 private constant FRESH_DEPOSIT = 100e9 + 12_345;
-
     /// @dev Attest a `count`-validator ramp-weighted set on a fresh subnet, then wrap
     ///      `deposit` entering at the last hotkey in the set.
-    function _wrapFreshSubnet(uint256 count, uint256 deposit)
+    function _setValidatorsAndWrapDeposit(uint256 count, uint256 deposit)
         private
         returns (bytes32[] memory hotkeys, uint256[] memory weights, uint256 tokenId)
     {
@@ -646,34 +646,36 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         }
     }
 
-    /// @dev Mirrors the documented weight-to-target rule: BPS share per slot, remainder on
-    ///      the last slot.
-    function _expectedTargets(uint256 total, uint256[] memory weights) private pure returns (uint256[] memory targets) {
-        targets = new uint256[](weights.length);
-        uint256 assigned;
-        for (uint256 i; i + 1 < weights.length; ++i) {
-            targets[i] = (total * weights[i]) / BPS_BASE;
-            assigned += targets[i];
-        }
-        targets[weights.length - 1] = total - assigned;
-    }
-
     function test_Wrap_DistributesAcrossTwentyValidators() public {
-        (bytes32[] memory hotkeys, uint256[] memory weights, uint256 tokenId) = _wrapFreshSubnet(20, FRESH_DEPOSIT);
+        // 100 TAO over 10_000 BPS divides evenly: each validator's share is weight x 1e7 RAO.
+        uint256 deposit = 100e9;
+        (bytes32[] memory hotkeys, uint256[] memory weights, uint256 tokenId) =
+            _setValidatorsAndWrapDeposit(20, deposit);
 
-        assertEq(vault.totalStake(tokenId), FRESH_DEPOSIT);
-        uint256[] memory targets = _expectedTargets(FRESH_DEPOSIT, weights);
+        assertEq(vault.totalStake(tokenId), deposit);
         for (uint256 i; i < hotkeys.length; ++i) {
-            assertEq(_getVaultStake(hotkeys[i], FRESH_NETUID), targets[i]);
+            assertEq(_getVaultStake(hotkeys[i], FRESH_NETUID), weights[i] * 1e7);
         }
         assertEq(vault.lastSeenHotkeys(tokenId).length, 20);
+    }
+
+    function test_Wrap_PutsRoundingRemainderOnLastValidator() public {
+        _setValidators(FRESH_NETUID, _hotkeys(hotkey1, hotkey2), _weights(2500, 7500));
+        _setRegBlock(FRESH_NETUID, 93);
+        uint256 deposit = 1e9 + 1;
+        _simulateAlphaDepositHotkey(alice, FRESH_NETUID, deposit, hotkey2);
+        _wrapHotkey(alice, FRESH_NETUID, hotkey2);
+
+        // 25% of 1e9 + 1 floors to 250_000_000; the last validator absorbs the extra RAO.
+        assertEq(_getVaultStake(hotkey1, FRESH_NETUID), 250_000_000);
+        assertEq(_getVaultStake(hotkey2, FRESH_NETUID), 750_000_001);
     }
 
     function test_Wrap_LeavesDepositOnChosenHotkeyBelowRebalanceFloor() public {
         // Per-slot targets of a 3e7 RAO deposit across 20 validators all sit below the
         // 2e6 rebalance floor, so distribution is skipped and the deposit stays put.
         uint256 deposit = 3e7;
-        (bytes32[] memory hotkeys,, uint256 tokenId) = _wrapFreshSubnet(20, deposit);
+        (bytes32[] memory hotkeys,, uint256 tokenId) = _setValidatorsAndWrapDeposit(20, deposit);
 
         assertEq(_getVaultStake(hotkeys[19], FRESH_NETUID), deposit);
         assertEq(vault.totalStake(tokenId), deposit);
@@ -681,7 +683,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_Unwrap_DrainsAcrossTwentyValidators() public {
-        (bytes32[] memory hotkeys,, uint256 tokenId) = _wrapFreshSubnet(20, FRESH_DEPOSIT);
+        (bytes32[] memory hotkeys,, uint256 tokenId) = _setValidatorsAndWrapDeposit(20, FRESH_DEPOSIT);
 
         uint256 shares = vault.balanceOf(alice, tokenId);
         vm.prank(alice);
@@ -692,7 +694,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_Unwrap_SweepsShrinkRotationDuringExit() public {
-        (bytes32[] memory hotkeys,, uint256 tokenId) = _wrapFreshSubnet(20, FRESH_DEPOSIT);
+        (bytes32[] memory hotkeys,, uint256 tokenId) = _setValidatorsAndWrapDeposit(20, FRESH_DEPOSIT);
 
         // Shrink to a single surviving validator with no keeper rebalance in between; the
         // unwrap itself must sweep the 19 rotated-out hotkeys before draining.
@@ -733,7 +735,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     function testFuzz_Wrap_ConservesDepositAcrossSetSizes(uint256 validatorCountSeed, uint256 depositSeed) public {
         uint256 count = bound(validatorCountSeed, 1, registry.maxValidators());
         uint256 deposit = bound(depositSeed, vault.minRebalanceAmt(), type(uint64).max);
-        (bytes32[] memory hotkeys,, uint256 tokenId) = _wrapFreshSubnet(count, deposit);
+        (bytes32[] memory hotkeys,, uint256 tokenId) = _setValidatorsAndWrapDeposit(count, deposit);
 
         assertEq(vault.totalStake(tokenId), deposit, "wrap conserves the deposit");
 
@@ -744,10 +746,10 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(_stakeReceivedAcross(hotkeys, alice), deposit, "unwrap returns the full deposit");
     }
 
-    // ────────────────── _resolveValidators sentinel ──────────────────────────
+    // ────────────────── Unconfigured-registry sentinel ───────────────────────
 
-    /// @dev An empty hotkeys array is the "subnet not configured" sentinel;
-    ///      `_resolveValidators` must revert `NoValidatorFound` on it.
+    /// @dev An empty hotkeys array is the "subnet not configured" sentinel; the vault
+    ///      must refuse it with `NoValidatorFound` instead of treating it as a usable set.
     function test_RevertWhen_ResolveValidatorsWhenSetEmpty() public {
         MockValidatorRegistry mock = new MockValidatorRegistry();
         AlphaVault mockVault = _deployVault(address(mock));
@@ -758,7 +760,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     /// @dev The real registry always returns equal-length arrays; a nonconforming
-    ///      implementation must fail the resolve step, not panic deeper in the flow.
+    ///      implementation must be refused up front, not panic deeper in the flow.
     function test_RevertWhen_ResolveValidatorsWhenLengthsMismatch() public {
         MockValidatorRegistry mock = new MockValidatorRegistry();
         AlphaVault mockVault = _deployVault(address(mock));

@@ -23,14 +23,6 @@ Subcommands:
         Submit `SubtensorModule.add_stake` signed by //Alice.
 
     lock_stake --chain-endpoint URL --hotkey-ss58 ... --netuid N --amount RAW
-        Submit `SubtensorModule.lock_stake` signed by //Alice: lock RAW alpha
-        to the given conviction hotkey.
-
-    get_lock --chain-endpoint URL --coldkey-ss58 ... --netuid N --hotkey-ss58 ...
-        Print `locked_mass` of `SubtensorModule.Lock[(coldkey, netuid, hotkey)]`
-        in RAW alpha (0 when no lock exists).
-
-    lock_stake --chain-endpoint URL --hotkey-ss58 ... --netuid N --amount RAW
         Submit `SubtensorModule.lock_stake` signed by //Alice: lock RAW alpha of
         Alice's stake on the subnet to the given conviction hotkey. Requires a
         localnet runtime with conviction v2 (fails with a clear message otherwise).
@@ -186,7 +178,7 @@ def lock_stake(
         )
     except ValueError as exc:
         print(
-            f"FAIL: runtime has no SubtensorModule.lock_stake (conviction v2) — "
+            f"FAIL: runtime has no SubtensorModule.lock_stake (conviction v2); "
             f"rebuild the localnet from a current subtensor: {exc}",
             file=sys.stderr,
         )
@@ -365,11 +357,12 @@ def set_validators(
 
     att_tuple = (netuid, hotkey_bytes, weights, next_nonce, deadline)
     tx_nonce = w3.eth.get_transaction_count(submitter.address)
+    # No explicit gas: commit cost scales with the attested count (~673k at 20 validators),
+    # so let build_transaction size it via eth_estimateGas.
     tx = registry_contract.functions.updateValidators(att_tuple, sigs).build_transaction(
         {
             "from": submitter.address,
             "nonce": tx_nonce,
-            "gas": 500_000,
             "gasPrice": w3.to_wei(10, "gwei"),
             "chainId": chain_id,
         }
@@ -457,6 +450,13 @@ def main() -> None:
             netuid=args.netuid,
             alpha_amount=args.alpha_amount,
         )
+    elif args.cmd == "add_stake":
+        add_stake(
+            chain_endpoint=args.chain_endpoint,
+            hotkey_ss58=args.hotkey_ss58,
+            netuid=args.netuid,
+            amount=args.amount,
+        )
     elif args.cmd == "lock_stake":
         lock_stake(
             chain_endpoint=args.chain_endpoint,
@@ -493,6 +493,10 @@ def main() -> None:
             weights=[int(w) for w in args.weights.split(",")],
             deadline_secs=args.deadline_secs,
         )
+    else:
+        # A registered subcommand with no dispatch arm would otherwise exit 0
+        # having done nothing; fail loudly instead.
+        sys.exit(f"BUG: no dispatch for subcommand {args.cmd!r}")
 
 
 if __name__ == "__main__":

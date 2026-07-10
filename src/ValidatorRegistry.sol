@@ -41,9 +41,10 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     uint8 public threshold;
 
     /// @notice Admin-tunable bound on attested set size, keeping consumers that iterate the
-    ///         set within block gas limits; the worst case is the vault's unwrap-for-TAO path,
-    ///         which walks the merged current + last-seen sets (up to 2N precompile calls)
-    ///         after a full rotation. Lowering the cap does not shrink already-committed sets.
+    ///         set within block gas limits; the worst case is a vault exit after a full
+    ///         rotation, which walks the merged current + last-seen sets: up to 2N stake
+    ///         reads plus up to ~3N stake-moving precompile calls across sweep, drain, and
+    ///         re-align. Lowering the cap does not shrink already-committed sets.
     uint8 public maxValidators = 20;
 
     mapping(uint256 => ValidatorSet) private _validators;
