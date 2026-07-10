@@ -203,6 +203,20 @@ vault_send_expect_revert() { # <gas_limit> <fail_msg> <sig> [args...]
     [[ "$LAST_TX_STATUS" != "0x1" ]] || fail "$msg"
 }
 
+# Assert a vault call reverts with a SPECIFIC custom error: an eth_call from the user must surface
+# the error (decoded name, or its selector at the start of the revert data), then the broadcast
+# must also fail on-chain. A bare status check would also pass on gas exhaustion or the wrong revert.
+assert_vault_reverts_with() { # <error_sig> <gas_limit> <fail_msg> <sig> [args...]
+    local error_sig="$1" gas="$2" msg="$3"
+    shift 3
+    local error_name selector output
+    error_name="${error_sig%%(*}"
+    selector=$(cast sig "$error_sig")
+    output=$(cast call "$VAULT_ADDR" "$@" --from "$WRAPPER_ADDR" --rpc-url "$RPC_URL" 2>&1 || true)
+    echo "$output" | grep -qiE "${error_name}|${selector}" || fail "$msg (missing $error_sig in: $output)"
+    vault_send_expect_revert "$gas" "$msg" "$@"
+}
+
 # Assert a strictly positive wei delta and echo it. Wei deltas routinely exceed bash's
 # signed-64-bit range, so the comparison is done in Python.
 assert_gain() { # <pre_wei> <post_wei> <fail_msg>

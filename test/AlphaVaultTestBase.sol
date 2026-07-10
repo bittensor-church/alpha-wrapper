@@ -6,7 +6,7 @@ import { AlphaVault } from "src/AlphaVault.sol";
 import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
 import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
-import { MockStaking } from "./mocks/MockStaking.sol";
+import { MockStaking, CHAIN_MIN_STAKE } from "./mocks/MockStaking.sol";
 import { MockAddressMapping } from "./mocks/MockAddressMapping.sol";
 import { MockStorageQuery } from "./mocks/MockStorageQuery.sol";
 import { MockAlpha } from "./mocks/MockAlpha.sol";
@@ -52,8 +52,8 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     uint16 public constant BPS_BASE = 10_000;
 
-    // Mirrors the simulated chain min-stake floor (MockStaking.MIN_STAKE).
-    uint256 internal constant MIN_STAKE_FLOOR = 2e6;
+    // The simulated chain min-stake floor; aliased so the two can never drift apart.
+    uint256 internal constant MIN_STAKE_FLOOR = CHAIN_MIN_STAKE;
 
     uint256 public TOKEN1;
     uint256 public TOKEN2;
@@ -67,6 +67,9 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         MockStorageQuery(STORAGE_QUERY).setRegisteredAt(uint16(NETUID2), 200);
         // Pre-fund so the staking precompile mock can credit native TAO back to callers.
         vm.deal(STAKING_PRECOMPILE, 1_000_000 ether);
+        // etch copies code, not storage, so the sell rate starts 0/0 and any un-parameterized sell
+        // panics on division; a 1:1 default keeps unrelated tests meaningful.
+        MockStaking(STAKING_PRECOMPILE).setRemoveStakeRate(1, 1);
 
         mailboxLogic = new DepositMailbox();
         subnetLogic = new SubnetClone();
@@ -283,9 +286,15 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         MockAlpha(ALPHA_PRECOMPILE).setAlphaPrice(uint16(netuid), alphaPriceE18);
     }
 
-    function _setAlphaPriceZero(uint256 netuid) internal {
-        // Zero models a sub-1e-9 subnet the EVM oracle cannot represent; the chain floor still binds.
-        _setAlphaPrice(netuid, 0);
+    function _alphaPriceRead(uint256 netuid) internal view returns (uint256) {
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return MockAlpha(ALPHA_PRECOMPILE).getAlphaPrice(uint16(netuid));
+    }
+
+    function _setAlphaPriceReadsZero(uint256 netuid) internal {
+        // A sub-quantum chain price rounds to 0 at the EVM boundary while the chain floor still
+        // binds at full precision - the real shape of a sub-1e-9 subnet.
+        _setAlphaPrice(netuid, 0.5e9);
     }
 
     function _setRemoveStakeRate(uint256 num, uint256 denom) internal {

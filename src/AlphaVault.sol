@@ -68,6 +68,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     // ──────────────────── Events ────────────────────────────────────────────────
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
     event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 amountOut);
+    /// @notice Emitted for every stake move the vault performs: weight-alignment moves as well as
+    ///         consolidation and gather hops, whose `toHotkey` can be a rotated-out hotkey mid-roll.
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
     event UnwrappedForTao(
@@ -217,8 +219,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///             native TAO from the clone's refund balance. Reverts
     ///             `SubnetInDissolutionBlackoutPeriod` if subtensor cleanup is still in progress.
     ///           - live: consolidates the position onto one hotkey and delivers the full pro-rata
-    ///             alpha to `userSubstrateColdkey` in a single transfer (exact or reverting, never
-    ///             partial), then re-splits the remainder toward the attested weights. The live path
+    ///             alpha to `userSubstrateColdkey` in a single transfer (exact to within a few RAO
+    ///             of chain-side share rounding, or reverting - never partial), then re-splits the
+    ///             remainder toward the attested weights. The live path
     ///             does not pre-check the dissolved-networks queue; during pass-1 of a dissolving
     ///             current registration the staking precompile itself rejects with `SubnetNotExists`.
     ///             At a readable price, reverts `WithdrawTooSmall` when the request or the gather
@@ -245,8 +248,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///         left unsold, so realized TAO may fall short of the burned assets by bounded dust.
     ///         `minTaoOut` guards the caller; reverts `WithdrawTooSmall` if nothing sells.
     ///         Full-balance sells read no price oracle and are exempt from the chain's amount
-    ///         floor, though the chain can still refuse them when the pool cannot absorb the
-    ///         sell; the vault adds no gate of its own on that path.
+    ///         floor, though the chain can still refuse them - or fill them partially, leaving the
+    ///         unsold alpha staked - when the pool cannot absorb the sell; `minTaoOut` covers the
+    ///         shortfall either way and the vault adds no gate of its own on that path.
     /// @param  tokenId    Vault token id.
     /// @param  shares     Shares to burn.
     /// @param  minTaoOut  Slippage floor; revert if realized TAO is less.
@@ -557,8 +561,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Preview the redemption of `shares` for a position.
-    /// @dev    Live-path delivery is exact: unwrap either delivers this amount in full or reverts,
-    ///         so a sub-floor total is not deliverable here and must be exited via unwrapForTao.
+    /// @dev    Live-path delivery is exact to within a few RAO of chain-side share rounding: unwrap
+    ///         delivers this amount or reverts, so a sub-floor total is not deliverable here and
+    ///         must be exited via unwrapForTao.
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, regBlock) position.
     /// @param  shares  Shares being previewed.
     /// @return alpha   Alpha redeemable on the live path.
@@ -742,10 +747,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
 
     /// @dev Consolidate all stake off rotated-out hotkeys, then refresh the snapshot. Any failure
     ///      reverts the call - atomicity, not tracking, is what makes the refresh safe. A pending
-    ///      roll whose seed (the union's largest position) provably cannot clear the chain's floor
-    ///      is rejected up front as `ConsolidationBelowFloor`; a fresh above-floor deposit re-seeds
-    ///      the roll and clears it. At a zero price read the roll falls through bare, so on a
-    ///      dead-priced subnet a chain-rejected roll consumes the forwarded gas.
+    ///      roll whose seed provably cannot clear the chain's floor is rejected up front as
+    ///      `ConsolidationBelowFloor`; a fresh above-floor deposit re-seeds the roll and clears it.
+    ///      At a zero price read the roll falls through bare, so on a dead-priced subnet a
+    ///      chain-rejected roll consumes the forwarded gas.
     function _sweepRotatedStake(
         uint256 tokenId,
         address clone,
@@ -756,24 +761,20 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         bytes32[3] storage lastSeen = _lastSeenHotkeys[tokenId];
         if (clone != address(0) && _anyRotatedOut(lastSeen, currentSet)) {
             uint16 netuid = _netuid(tokenId);
-            (bytes32 rollerHotkey, uint256 rollerBalance, uint256[3] memory lastSeenBalances) =
-                _richestUnionHotkey(lastSeen, currentSet, coldkey, netuid);
-            // If any rotated-out slot holds a balance, a roll will run; the seed is the largest of
-            // them and every hop moves the whole pile, so clearing the floor at the seed clears it
-            // for every hop.
-            bool rollPending = lastSeenBalances[0] > 0 || lastSeenBalances[1] > 0 || lastSeenBalances[2] > 0;
+            (bytes32 rollerHotkey, uint256 rollerBalance, uint256[3] memory lastSeenBalances, bool rollPending) =
+                _chooseRollSeed(lastSeen, currentSet, coldkey, netuid);
+            // Every hop moves the whole pile and the pile only grows, so the seed is the binding
+            // floor check for the entire roll.
             if (rollPending && _provablyBelowFloor(rollerBalance, alphaPriceE18)) {
                 revert ConsolidationBelowFloor();
             }
             // The seed's balance is already in the pile; its cached slot is stale once the pile
-            // departs, so the roll must never revisit it.
+            // departs, so the roll must never revisit it. No other slot can repeat: a validator
+            // set holds no duplicate hotkeys.
             bytes32 seedHotkey = rollerHotkey;
             for (uint256 i; i < 3;) {
                 bytes32 rotatedOut = lastSeen[i];
-                if (
-                    rotatedOut != rollerHotkey && rotatedOut != seedHotkey && _isRotatedOut(rotatedOut, currentSet)
-                        && lastSeenBalances[i] > 0
-                ) {
+                if (rotatedOut != seedHotkey && _isRotatedOut(rotatedOut, currentSet) && lastSeenBalances[i] > 0) {
                     _rollStep(tokenId, clone, netuid, rollerHotkey, rotatedOut, rollerBalance);
                     rollerHotkey = rotatedOut;
                     rollerBalance += lastSeenBalances[i];
@@ -796,28 +797,53 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
             || _isRotatedOut(lastSeen[2], currentSet);
     }
 
-    /// @dev Also returns the rotated-out slots' balances so the roll loop reuses this scan's reads.
-    function _richestUnionHotkey(
-        bytes32[3] storage lastSeen,
-        bytes32[3] memory currentSet,
-        bytes32 coldkey,
-        uint16 netuid
-    ) private view returns (bytes32 richest, uint256 richestBalance, uint256[3] memory lastSeenBalances) {
-        richest = currentSet[0];
-        for (uint256 i; i < 6;) {
-            bytes32 candidateHotkey = i < 3 ? currentSet[i] : lastSeen[i - 3];
-            bool eligible = i < 3 ? candidateHotkey != bytes32(0) : _isRotatedOut(candidateHotkey, currentSet);
-            if (eligible) {
-                uint256 candidateBalance = IStaking(STAKING_PRECOMPILE).getStake(candidateHotkey, coldkey, netuid);
-                if (i >= 3) lastSeenBalances[i - 3] = candidateBalance;
-                if (candidateBalance > richestBalance) {
-                    richest = candidateHotkey;
-                    richestBalance = candidateBalance;
+    /// @dev Pick the roll's seed - the richest union hotkey - and report the rotated-out slots'
+    ///      balances (reused by the roll loop) plus whether any of them holds a balance. The
+    ///      current set is scanned only when a roll is pending. The seed must be the union's
+    ///      richest balance: seeding from anything smaller would break the self-healing property
+    ///      that a fresh above-floor deposit re-seeds a roll whose orphans are all dust, and the
+    ///      owner floor cannot prove chain acceptance for a smaller seed when it lags the chain's.
+    function _chooseRollSeed(bytes32[3] storage lastSeen, bytes32[3] memory currentSet, bytes32 coldkey, uint16 netuid)
+        private
+        view
+        returns (bytes32 seed, uint256 seedBalance, uint256[3] memory lastSeenBalances, bool rollPending)
+    {
+        bytes32 richestRotatedOut;
+        uint256 richestRotatedOutBalance;
+        for (uint256 i; i < 3;) {
+            bytes32 candidate = lastSeen[i];
+            if (_isRotatedOut(candidate, currentSet)) {
+                uint256 balance = IStaking(STAKING_PRECOMPILE).getStake(candidate, coldkey, netuid);
+                lastSeenBalances[i] = balance;
+                if (balance > richestRotatedOutBalance) {
+                    richestRotatedOut = candidate;
+                    richestRotatedOutBalance = balance;
                 }
             }
             unchecked {
                 ++i;
             }
+        }
+        if (richestRotatedOutBalance == 0) return (currentSet[0], 0, lastSeenBalances, false);
+
+        rollPending = true;
+        seed = currentSet[0];
+        for (uint256 i; i < 3;) {
+            bytes32 candidate = currentSet[i];
+            if (candidate != bytes32(0)) {
+                uint256 balance = IStaking(STAKING_PRECOMPILE).getStake(candidate, coldkey, netuid);
+                if (balance > seedBalance) {
+                    seed = candidate;
+                    seedBalance = balance;
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        if (richestRotatedOutBalance > seedBalance) {
+            seed = richestRotatedOut;
+            seedBalance = richestRotatedOutBalance;
         }
     }
 

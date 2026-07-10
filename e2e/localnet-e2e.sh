@@ -152,14 +152,14 @@ verify_script "get_unwraps" \
     --rows "$SUBNET_COUNT" \
     --column-set "token_id=$VAULT_IDS_CSV" \
     --column-eq "user=$WRAPPER_ADDR" \
-    --column-positive assets \
+    --column-positive amount_out \
     --column-positive shares \
     -- python3 scripts/get_unwraps.py \
         --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
         --block-start "$BLOCK_START" --block-end "$BLOCK_END"
 
-# Per-netuid: 0 or 1 emission depending on whether post-drain leftover (emissions
-# accrued between deposit and unwrap) clears `minRebalanceAmt`. Assert membership only.
+# Per-netuid: 0 or 1 emission depending on whether the post-drain leftover (emissions
+# accrued between deposit and unwrap) clears the vault's tao stake floor. Assert membership only.
 verify_script "get_rebalances" \
     --column-subset "token_id=$VAULT_IDS_CSV" \
     --column-positive amount \

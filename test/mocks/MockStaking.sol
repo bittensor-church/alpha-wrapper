@@ -4,11 +4,12 @@ pragma solidity ^0.8.20;
 import { MockAlpha } from "./MockAlpha.sol";
 import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 
+/// @dev The simulated chain's min-stake floor; the test base aliases it so the two cannot drift.
+uint256 constant CHAIN_MIN_STAKE = 2e6;
+
 /// @dev Uses keccak256("evm:", h160) for coldkey derivation instead of the real
 ///      blake2b, matching the test helper `_toSubstrate`.
 contract MockStaking {
-    uint256 private constant MIN_STAKE = 2e6;
-
     mapping(bytes32 => mapping(bytes32 => mapping(uint256 => uint256))) public stakes;
     uint256 public moveStakeRoundingLoss;
     bool public transferStakeReverts;
@@ -43,13 +44,13 @@ contract MockStaking {
     }
 
     // The floor is tao-denominated: the chain rejects transfers and moves whose tao value is below
-    // MIN_STAKE. Reads the chain-side (full-precision) price, which is unaffected by the EVM
+    // CHAIN_MIN_STAKE. Reads the chain-side (full-precision) price, which is unaffected by the EVM
     // getAlphaPrice quantization, so a sub-1e-9 subnet whose EVM price reads 0 still has a binding
     // chain floor. Price is scaled 1e18 to match the precompile.
     function _belowMinStake(uint256 amount, uint256 netuid) private view returns (bool) {
         // forge-lint: disable-next-line(unsafe-typecast)
         uint256 alphaPriceE18 = MockAlpha(ALPHA_PRECOMPILE).chainAlphaPrice(uint16(netuid));
-        return (amount * alphaPriceE18) / 1e18 < MIN_STAKE;
+        return (amount * alphaPriceE18) / 1e18 < CHAIN_MIN_STAKE;
     }
 
     function transferStake(
@@ -127,7 +128,7 @@ contract MockStaking {
         // credits rao * 1e9 wei. Wei-denominated payouts are asserted by the e2e run.
         uint256 taoOut = (alphaAmount * taoPerAlpha) / taoPerAlphaDenom;
         // Mirrors subtensor validate_remove_stake: the floor binds only when stake remains after.
-        if (alphaAmount != staked && taoOut < MIN_STAKE) {
+        if (alphaAmount != staked && taoOut < CHAIN_MIN_STAKE) {
             _fail("MockStaking: AmountTooLow");
         }
         stakes[hotkey][_senderColdkey()][netuid] = staked - alphaAmount;

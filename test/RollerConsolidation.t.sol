@@ -24,7 +24,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
 
     /// @dev Headline: two hotkeys rotate out at once and the roller chains the whole pile through
     ///      both, emptying each orphan and refreshing the snapshot - no tracking, no forfeiture.
-    function test_Roller_ConsolidatesMultipleRotatedOrphans() public {
+    function test_Rebalance_ConsolidatesMultipleRotatedOrphans() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 totalBefore = vault.totalStake(TOKEN1);
 
@@ -62,7 +62,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
 
     /// @dev Full-set rotation where the RICHER orphan sits at a later snapshot index: the roll
     ///      seeds from it, and revisiting the seed's slot must not re-add its departed balance.
-    function test_Roller_ConsolidatesWhenRicherOrphanSitsAtLaterIndex() public {
+    function test_Rebalance_ConsolidatesWhenRicherOrphanSitsAtLaterIndex() public {
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(3000, 7000));
         _depositAndWrap(alice, NETUID1, 10 ether);
         uint256 totalBefore = vault.totalStake(TOKEN1);
@@ -77,10 +77,35 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(vault.totalStake(TOKEN1), totalBefore, "total conserved");
     }
 
+    /// @dev A funded orphan is consolidated by rolling the union-richest pile through it: the pile
+    ///      hops onto the orphan, returns carrying its balance, and the re-split restores targets.
+    ///      The hop amounts are pinned so a seed choice smaller than the union's richest balance
+    ///      (which could not prove chain acceptance) fails this test.
+    function test_Rebalance_RollsPileThroughFundedOrphan() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(5000, 5000));
+        uint256 pileSeed = _weighted(30 ether, NETUID1_BPS_HK1);
+        uint256 orphanBalance = _weighted(30 ether, NETUID1_BPS_HK3);
+        uint256 target = _weighted(30 ether, 5000);
+
+        vm.expectEmit(true, true, true, true, address(vault));
+        emit Rebalanced(TOKEN1, hotkey1, hotkey3, pileSeed);
+        vm.expectEmit(true, true, true, true, address(vault));
+        emit Rebalanced(TOKEN1, hotkey3, hotkey1, pileSeed + orphanBalance);
+        vm.expectEmit(true, true, true, true, address(vault));
+        emit Rebalanced(TOKEN1, hotkey1, hotkey2, pileSeed + orphanBalance - target);
+        vault.rebalance(NETUID1);
+
+        assertEq(_getVaultStake(hotkey3, NETUID1), 0, "orphan consolidated by the roll");
+        assertEq(_getVaultStake(hotkey1, NETUID1), target);
+        assertEq(_getVaultStake(hotkey2, NETUID1), target);
+        assertEq(vault.totalStake(TOKEN1), 30 ether, "total conserved");
+    }
+
     function test_Unwrap_SucceedsWhenPriceReadsZero() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
         (uint256 previewedAssets,) = vault.previewUnwrap(TOKEN1, shares);
-        _setAlphaPriceZero(NETUID1);
+        _setAlphaPriceReadsZero(NETUID1);
 
         vm.prank(alice);
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
@@ -108,11 +133,26 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         vault.unwrap(tokenId, shares, _toSubstrate(alice));
     }
 
+    // The rail ConsolidationBelowFloor points at: the same dust-only vault exits in full via the
+    // floor-exempt full-balance sell.
+    function test_UnwrapForTao_ExitsDustOnlyVault() public {
+        uint256 tokenId = _seedDustOnlyVault();
+        uint256 dust = MIN_STAKE_FLOOR - 1;
+
+        uint256 shares = vault.balanceOf(alice, tokenId);
+        uint256 balanceBefore = alice.balance;
+        vm.prank(alice);
+        vault.unwrapForTao(tokenId, shares, 0);
+
+        assertEq(alice.balance - balanceBefore, dust, "full dust value recovered as TAO");
+        assertEq(vault.totalStake(tokenId), 0, "nothing left behind");
+    }
+
     // At a zero price read the sweep cannot label the seed, so it falls through and the chain's
     // own full-precision floor rejects the roll with the raw error.
     function test_RevertWhen_ConsolidatingDustOnlyVaultAtZeroPrice() public {
         _seedDustOnlyVault();
-        _setAlphaPriceZero(99);
+        _setAlphaPriceReadsZero(99);
 
         vm.expectRevert(bytes("MockStaking: AmountTooLow"));
         vault.rebalance(99);
@@ -129,13 +169,14 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         (uint256 previewAssets,) = vault.previewUnwrap(TOKEN1, burnShares);
         assertGt(previewAssets, 10 ether, "request must exceed any single slot to force a gather");
 
-        vm.recordLogs();
+        // The gather's one deterministic hop: the whole first slot rolls onto the second.
+        vm.expectEmit(true, true, true, true, address(vault));
+        emit Rebalanced(TOKEN1, hotkey1, hotkey2, 10 ether);
         vm.prank(alice);
         vault.unwrap(TOKEN1, burnShares, _toSubstrate(alice));
 
         uint256 received = _userStakeAcrossHotkeys(alice, NETUID1);
         assertEq(received, previewAssets, "delivery is exact and matches the preview");
-        assertGe(_countRebalancedLogs(vm.getRecordedLogs()), 1, "gather and re-split emit Rebalanced");
         assertEq(vault.totalStake(TOKEN1), 30 ether - previewAssets, "only the delivered alpha left the vault");
     }
 
@@ -159,7 +200,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
     /// @dev Oracle-soft wrap: when the spot price reads 0 the DepositTooSmall precheck is skipped
     ///      and the chain's own full-precision floor decides; an above-floor deposit is accepted.
     function test_Wrap_AcceptsDepositWhenPriceReadsZero() public {
-        _setAlphaPriceZero(NETUID1);
+        _setAlphaPriceReadsZero(NETUID1);
         _depositAndWrap(alice, NETUID1, 30 ether);
 
         assertGt(vault.balanceOf(alice, TOKEN1), 0, "wrap succeeds when the oracle reads 0");
@@ -175,7 +216,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         uint256 total = _setVaultStakes(NETUID1, 5e6, 0, 40 ether);
         uint256 shares = _sharesForExactAssets(TOKEN1, 5e6 + 1e6, total);
 
-        _setAlphaPriceZero(NETUID1);
+        _setAlphaPriceReadsZero(NETUID1);
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
@@ -189,7 +230,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
     /// @dev A zero-price (sub-1e-9) vault still exits fully via floor-exempt full-balance sells.
     function test_UnwrapForTao_FullSlotExitWhenPriceReadsZero() public {
         _setRemoveStakeRate(1, 1);
-        _setAlphaPriceZero(NETUID1);
+        _setAlphaPriceReadsZero(NETUID1);
         uint256 shares = _depositAndWrap(alice, NETUID1, 100 ether);
 
         uint256 balanceBefore = alice.balance;

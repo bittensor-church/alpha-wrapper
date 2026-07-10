@@ -647,7 +647,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(result[2], bytes32(0));
     }
 
-    // ────────────────── Deposit/Unwrap verify state changes ─────────
+    // ------------------ Deposit/Unwrap verify state changes ---------
 
     function test_UnwrapDecreasesTotalStake() public {
         _simulateAlphaDeposit(alice, NETUID1, 10 ether);

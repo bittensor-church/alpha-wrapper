@@ -28,6 +28,57 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         assertEq(vault.totalStake(TOKEN1), 0);
     }
 
+    // Whatever the slot distribution, burn size, and price, the exit realizes everything except an
+    // unsellable tail: the payout equals the sold alpha's spot value (the rate is coupled to the
+    // price, as on the real chain where output tracks spot within the fee), and anything left
+    // short of the request is either zero or sub-floor at the oracle read. A revert may fire only
+    // when nothing at all was sellable. Under a rate decoupled far from spot the whole exit can
+    // instead revert on the chain's output floor (test_RevertWhen_PartialSellBelowSimFloor).
+    function testFuzz_UnwrapForTao_LeavesOnlySubFloorDust(
+        uint256 a,
+        uint256 b,
+        uint256 c,
+        uint256 shareBps,
+        uint256 chainPriceE18
+    ) public {
+        a = bound(a, 0, 1e16);
+        b = bound(b, 0, 1e16);
+        c = bound(c, 1e10, 1e16);
+        shareBps = bound(shareBps, 1, 10_000);
+        chainPriceE18 = bound(chainPriceE18, 1, 100e18);
+        uint256 supply = _depositForAlice(30 ether);
+        _setAlphaPrice(NETUID1, chainPriceE18);
+        _setRemoveStakeRate(chainPriceE18, 1e18);
+        uint256 total = _setVaultStakes(NETUID1, a, b, c);
+        uint256 shares = (supply * shareBps) / 10_000;
+        uint256 expected = (shares * (total + 1)) / (supply + 1e9);
+        uint256 read = _alphaPriceRead(NETUID1);
+        uint256 balanceBefore = alice.balance;
+
+        vm.prank(alice);
+        (bool ok, bytes memory ret) = address(vault).call(abi.encodeCall(vault.unwrapForTao, (TOKEN1, shares, 0)));
+
+        // Up to six per-slot sells each floor-divide their payout, losing under one RAO apiece.
+        if (ok) {
+            uint256 sold = total - vault.totalStake(TOKEN1);
+            assertApproxEqAbs(
+                alice.balance - balanceBefore, (sold * chainPriceE18) / 1e18, 6, "payout is the sold spot value"
+            );
+            uint256 leftover = expected - sold;
+            assertTrue(
+                leftover == 0 || read == 0 || (leftover * read) / 1e18 < MIN_STAKE_FLOOR,
+                "any shortfall is sub-floor dust at the read"
+            );
+        } else {
+            assertEq(bytes4(ret), AlphaVault.WithdrawTooSmall.selector, "only the nothing-sold revert may fire");
+            assertTrue(
+                read == 0 || (expected * read) / 1e18 < MIN_STAKE_FLOOR + 6,
+                "nothing sold only when the whole request is an unsellable tail"
+            );
+            assertEq(vault.totalStake(TOKEN1), total, "nothing moved on revert");
+        }
+    }
+
     // Override the stake distribution after deposit to get a clean 60/40 split between two hotkeys.
     function test_PartialBurn_PaysProportionalTaoAcrossMultipleHotkeys() public {
         _setRemoveStakeRate(1, 1);
