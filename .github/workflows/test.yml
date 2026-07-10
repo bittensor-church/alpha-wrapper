@@ -47,10 +47,11 @@ jobs:
           forge build --sizes | tee -a "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      # Thread count and fuzz seed are pinned in [profile.ci] so the snapshot is
-      # reproducible; regenerate locally with `FOUNDRY_PROFILE=ci forge snapshot`.
+      # Fuzz input streams depend on test-runner thread scheduling and the `threads`
+      # config key is ignored by forge 1.7.x, so pin the count on the CLI; regenerate
+      # .gas-snapshot locally with the same --threads value.
       - name: Run tests and check gas snapshot
-        run: forge snapshot --check --tolerance 1 -vvv
+        run: forge snapshot --check --tolerance 1 -vvv --threads 4
 
       - name: Check per-call gas snapshots have not drifted
         run: git diff --exit-code snapshots/

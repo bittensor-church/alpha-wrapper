@@ -12,10 +12,6 @@ fuzz = { runs = 256 }
 
 [profile.ci]
 gas_snapshot_check = true
-# Fuzz input streams depend on test-runner thread scheduling, so pin the thread count;
-# with the pinned seed below this makes `FOUNDRY_PROFILE=ci forge snapshot` reproducible
-# across machines.
-threads = 4
 
 # Pin the fuzz seed in CI so the gas snapshot is stable across runs.
 # Locally we let fuzz pick a random seed for broader exploration.
