@@ -35,8 +35,9 @@ jobs:
 
     services:
       subtensor:
-        # Pinned: :main is a moving target; bump deliberately.
-        image: ghcr.io/opentensor/subtensor-localnet:v3.4.9-424
+        # :testnet — carries the subnet-dissolution refactor (DissolveCleanupQueue +
+        # isSubnetDissolving precompile) that v3.4.9-424 predated. Moving tag; bump deliberately.
+        image: ghcr.io/opentensor/subtensor-localnet:testnet
         ports:
           - 9944:9944
           - 9945:9945
