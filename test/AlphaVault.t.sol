@@ -1641,7 +1641,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         Vm.Log[] memory logs = vm.getRecordedLogs();
 
         assertEq(_getVaultStake(hotkey3, NETUID1), 0, "orphan must be drained");
-        assertGe(_countRebalancedLogs(logs), 1, "sweep must emit Rebalanced");
+        assertEq(_countRebalancedLogs(logs), 1, "silent sweep; only the post-sweep alignment logs");
 
         bytes32[3] memory lastSeen = vault.lastSeenHotkeys(TOKEN1);
         assertEq(lastSeen[2], hotkey4, "cleared orphan slot follows the current set");

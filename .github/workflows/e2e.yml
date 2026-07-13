@@ -33,6 +33,9 @@ jobs:
           - localnet-e2e-convicted-alpha.sh
           - localnet-e2e-subnet-dissolved.sh
           - localnet-e2e-min-stake-floor.sh
+          - localnet-e2e-dust-dos.sh
+          - localnet-e2e-hostile-dust.sh
+          - localnet-e2e-min-stake-liveness.sh
 
     services:
       subtensor:

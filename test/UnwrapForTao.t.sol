@@ -3,6 +3,8 @@ pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
+import { MockAlpha } from "./mocks/MockAlpha.sol";
+import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 import { RevertingReceiver, UnwrapForTaoReentrantReceiver } from "./helpers/TaoRailReceivers.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
@@ -28,13 +30,45 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         assertEq(vault.totalStake(TOKEN1), 0);
     }
 
-    // Whatever the slot distribution, burn size, and price, the exit realizes everything except an
-    // unsellable tail: the payout equals the sold alpha's spot value (the rate is coupled to the
-    // price, as on the real chain where output tracks spot within the fee), and anything left
-    // short of the request is either zero or sub-floor at the oracle read. A revert may fire only
-    // when nothing at all was sellable. Under a rate decoupled far from spot the whole exit can
-    // instead revert on the chain's output floor (test_RevertWhen_PartialSellBelowSimFloor).
-    function testFuzz_UnwrapForTao_LeavesOnlySubFloorDust(
+    function test_FullBurnAfterEmissionGrowth_DrainsSubFloorDust() public {
+        uint256 supply = _depositForAlice(3_000_000);
+        // Emission growth prices the rounded-down full burn one RAO below the slot, and the
+        // price drop leaves the position sub-floor, so a partial sell of it can never clear
+        // the chain's floor - the whole exit hinges on the full-drain exemption.
+        _setVaultStakes(NETUID1, 3_200_000, 0, 0);
+        _setAlphaPrice(NETUID1, 0.5e18);
+        _setRemoveStakeRate(0.5e18, 1e18);
+        uint256 aliceBalanceBefore = alice.balance;
+
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, supply, 1);
+
+        assertEq(vault.balanceOf(alice, TOKEN1), 0);
+        assertEq(vault.totalStake(TOKEN1), 0);
+        assertGt(alice.balance, aliceBalanceBefore);
+    }
+
+    // Whatever the emission growth and price, a full burn always drains the entire position:
+    // its assets are exact, so every slot sells as a floor-exempt full drain.
+    function testFuzz_FullBurn_DrainsWholePosition(uint256 growth, uint256 chainPriceE18) public {
+        growth = bound(growth, 0, 1e12);
+        chainPriceE18 = bound(chainPriceE18, 1e15, 100e18);
+        uint256 supply = _depositForAlice(3_000_000);
+        _setVaultStakes(NETUID1, 3_000_000 + growth, 0, 0);
+        _setAlphaPrice(NETUID1, chainPriceE18);
+        _setRemoveStakeRate(chainPriceE18, 1e18);
+
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, supply, 1);
+
+        assertEq(vault.balanceOf(alice, TOKEN1), 0);
+        assertEq(vault.totalStake(TOKEN1), 0);
+    }
+
+    // Whatever the slot distribution, burn size, and price: the payout equals the sold alpha's
+    // spot value and never exceeds the request's value, the withheld tail stays pinned by the
+    // floor and dust thresholds, and a revert may fire only when nothing at all was sellable.
+    function testFuzz_UnwrapForTao_LeavesOnlyThresholdPinnedDust(
         uint256 a,
         uint256 b,
         uint256 c,
@@ -53,6 +87,9 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         uint256 shares = (supply * shareBps) / 10_000;
         uint256 expected = (shares * (total + 1)) / (supply + 1e9);
         uint256 read = _alphaPriceRead(NETUID1);
+        // Slack: the payout floor-div and the leftover ceil-div each cost under one RAO of
+        // read-value (at most 100 at the price cap), plus one RAO of leftover headroom.
+        uint256 unsellableTailBound = DUST_THRESHOLD + MIN_STAKE_FLOOR + 201;
         uint256 balanceBefore = alice.balance;
 
         vm.prank(alice);
@@ -61,18 +98,18 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         // Up to six per-slot sells each floor-divide their payout, losing under one RAO apiece.
         if (ok) {
             uint256 sold = total - vault.totalStake(TOKEN1);
-            assertApproxEqAbs(
-                alice.balance - balanceBefore, (sold * chainPriceE18) / 1e18, 6, "payout is the sold spot value"
-            );
+            uint256 paid = alice.balance - balanceBefore;
+            assertApproxEqAbs(paid, _expectedTaoFor(sold), 6, "payout is the sold spot value");
+            assertLe(paid, _expectedTaoFor(expected) + 6, "payout never exceeds the request's value");
             uint256 leftover = expected - sold;
             assertTrue(
-                leftover == 0 || read == 0 || (leftover * read) / 1e18 < MIN_STAKE_FLOOR,
-                "any shortfall is sub-floor dust at the read"
+                leftover == 0 || read == 0 || (leftover * read) / 1e18 < unsellableTailBound,
+                "any shortfall is threshold-pinned dust at the read"
             );
         } else {
             assertEq(bytes4(ret), AlphaVault.WithdrawTooSmall.selector, "only the nothing-sold revert may fire");
             assertTrue(
-                read == 0 || (expected * read) / 1e18 < MIN_STAKE_FLOOR + 6,
+                read == 0 || (expected * read) / 1e18 < unsellableTailBound,
                 "nothing sold only when the whole request is an unsellable tail"
             );
             assertEq(vault.totalStake(TOKEN1), total, "nothing moved on revert");
@@ -368,9 +405,8 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         vm.prank(alice);
         vault.unwrapForTao(TOKEN1, shares, 0);
 
-        // The share-price cushion trims a couple of wei off the nominal 110 ether; the
-        // tolerance pins the value while accommodating that rounding.
-        assertApproxEqAbs(alice.balance - balanceBefore, 110 ether, 2);
+        // The share-price cushion and the sweep-safe leftover withhold dust from the nominal total.
+        assertApproxEqAbs(alice.balance - balanceBefore, 110 ether, DUST_THRESHOLD + 2);
     }
 
     // Event payload must carry every field off-chain indexers rely on.
@@ -569,24 +605,132 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         assertGe(expectedAssets, 6e6 - 1, "dust value recovered in full alongside the top-up");
     }
 
-    // The spot floor and the chain's realized-output floor disagree in a narrow band: a partial
-    // remainder can clear the spot floor yet be rejected once the swap fee is applied. The sell is
-    // bare, so the rejection bubbles and the whole exit reverts with shares intact.
+    // A chunk can clear the spot floor yet undercut it after the swap fee; the simulated-output
+    // gate skips it, so with nothing else sellable the exit reverts cleanly, shares intact.
     function test_RevertWhen_PartialSellBelowSimFloor() public {
         _setRemoveStakeRate(999, 1000);
         _depositForAlice(100 ether);
-        // Concentrate everything on one hotkey so the first slice is a partial sell.
         _setVaultStakes(NETUID1, 100 ether, 0, 0);
 
-        uint256 targetAssets = MIN_STAKE_FLOOR; // clears the spot floor, but not after the sim fee
+        uint256 targetAssets = MIN_STAKE_FLOOR;
         uint256 burnShares = _sharesForExactAssets(TOKEN1, targetAssets, 100 ether);
 
         uint256 sharesBefore = vault.balanceOf(alice, TOKEN1);
         vm.prank(alice);
-        vm.expectRevert(bytes("MockStaking: AmountTooLow"));
+        vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
         vault.unwrapForTao(TOKEN1, burnShares, 0);
 
-        assertEq(vault.balanceOf(alice, TOKEN1), sharesBefore, "shares intact after the bubbled sim-floor rejection");
+        assertEq(vault.balanceOf(alice, TOKEN1), sharesBefore, "shares intact after the clean skip");
+        assertEq(_getVaultStake(hotkey1, NETUID1), 100 ether, "the doomed sell was never attempted");
+    }
+
+    function test_PartialSell_ShrinksToLeaveSweepSafeLeftover() public {
+        _setRemoveStakeRate(1, 1);
+        _depositForAlice(100 ether);
+        uint256 total = _setVaultStakes(NETUID1, 50e6, 0, 0);
+        // At price 1 the sweep-safe leftover is the threshold plus its one RAO of headroom.
+        uint256 sweepSafeLeftover = DUST_THRESHOLD + 1;
+        uint256 shares = _sharesForExactAssets(TOKEN1, 45e6, total);
+
+        uint256 balanceBefore = alice.balance;
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares, 0);
+
+        assertEq(alice.balance - balanceBefore, 50e6 - sweepSafeLeftover, "paid only the sweep-safe chunk");
+        assertEq(_getVaultStake(hotkey1, NETUID1), sweepSafeLeftover, "slot keeps the sweep-safe minimum");
+        assertEq(vault.totalStake(TOKEN1), sweepSafeLeftover, "nothing was force-swept");
+    }
+
+    // Selling anything from this slot would strand a remainder the chain force-sells into the
+    // caller's payout at the other holders' expense; skipping is the only clean outcome.
+    function test_RevertWhen_PartialSellWouldStrandSweepableDust() public {
+        _setRemoveStakeRate(1, 1);
+        _depositForAlice(100 ether);
+        uint256 total = _setVaultStakes(NETUID1, 15e6, 0, 0);
+        uint256 sharesBefore = vault.balanceOf(alice, TOKEN1);
+        uint256 shares = _sharesForExactAssets(TOKEN1, 10e6, total);
+
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
+        vault.unwrapForTao(TOKEN1, shares, 0);
+
+        assertEq(vault.balanceOf(alice, TOKEN1), sharesBefore, "burn rolled back with the revert");
+        assertEq(_getVaultStake(hotkey1, NETUID1), 15e6, "slot untouched rather than left sweepable");
+    }
+
+    function testFuzz_PartialSell_NeverLeavesSweepableRemainder(uint256 balance, uint256 assets, uint256 priceE18)
+        public
+    {
+        priceE18 = bound(priceE18, 0.5e18, 10e18);
+        balance = bound(balance, 1e6, 1e15);
+        assets = bound(assets, 1, balance - 1);
+        _setAlphaPrice(NETUID1, priceE18);
+        _setRemoveStakeRate(priceE18, 1e18);
+        _depositForAlice(100 ether);
+        uint256 total = _setVaultStakes(NETUID1, balance, 0, 0);
+        uint256 shares = _sharesForExactAssets(TOKEN1, assets, total);
+        uint256 balanceBefore = alice.balance;
+
+        vm.prank(alice);
+        (bool ok,) = address(vault).call(abi.encodeCall(vault.unwrapForTao, (TOKEN1, shares, 0)));
+
+        uint256 slotAfter = _getVaultStake(hotkey1, NETUID1);
+        assertTrue(
+            slotAfter == balance || (slotAfter * priceE18) / 1e18 >= DUST_THRESHOLD,
+            "slot is untouched or keeps a sweep-safe balance"
+        );
+        if (ok) {
+            assertLe(alice.balance - balanceBefore, _expectedTaoFor(assets) + 2, "no value beyond the request");
+        }
+    }
+
+    // A later slot that exactly fits sells in full before any earlier partial is attempted, so a
+    // shrunk partial can never starve an exact-fit floor-exempt drain.
+    function test_ExactFitLaterSlot_PreferredOverEarlierPartial() public {
+        _setRemoveStakeRate(1, 1);
+        _depositForAlice(100 ether);
+        uint256 total = _setVaultStakes(NETUID1, 25e6, 10e6, 0);
+        uint256 shares = _sharesForExactAssets(TOKEN1, 10e6, total);
+
+        uint256 balanceBefore = alice.balance;
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares, 0);
+
+        assertEq(alice.balance - balanceBefore, 10e6, "full delivery from the exact-fit slot");
+        assertEq(_getVaultStake(hotkey1, NETUID1), 25e6, "earlier slot untouched");
+        assertEq(_getVaultStake(hotkey2, NETUID1), 0, "exact-fit slot drained via the exemption");
+    }
+
+    // A chunk under the spot floor is skipped before the simulation is consulted, keeping the
+    // all-gas-on-failure sim swap away from dust the pool cannot price.
+    function test_PartialSellBelowSpotFloor_NeverReachesSimSwap() public {
+        _setRemoveStakeRate(1, 1);
+        _depositForAlice(100 ether);
+        uint256 total = _setVaultStakes(NETUID1, 40 ether, 0, 0);
+        MockAlpha(ALPHA_PRECOMPILE).setSimSwapReverts(true);
+        uint256 shares = _sharesForExactAssets(TOKEN1, 1e6, total);
+
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
+        vault.unwrapForTao(TOKEN1, shares, 0);
+    }
+
+    // The chain values the leftover at the post-sale price: when the chunk's own impact would push
+    // it under the threshold, the marginal quote exposes that and the slot is skipped, not leaked.
+    function test_PartialSellWithPriceImpact_SkipsWhenLeftoverWouldSweepPostSale() public {
+        _setRemoveStakeRate(1, 1);
+        _depositForAlice(100 ether);
+        uint256 total = _setVaultStakes(NETUID1, 50e6, 0, 0);
+        uint256 shares = _sharesForExactAssets(TOKEN1, 25e6, total);
+        // Degrade the full-balance quote 12% below the linear rate: the leftover's marginal value
+        // reads 44e6 - 25e6 = 19e6, under the 20e6 threshold.
+        MockAlpha(ALPHA_PRECOMPILE).setSimSwapQuote(50e6, 44e6);
+
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
+        vault.unwrapForTao(TOKEN1, shares, 0);
+
+        assertEq(_getVaultStake(hotkey1, NETUID1), 50e6, "impact-endangered leftover left untouched");
     }
 
     receive() external payable { }

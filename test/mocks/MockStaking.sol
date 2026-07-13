@@ -7,6 +7,9 @@ import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 /// @dev The simulated chain's min-stake floor; the test base aliases it so the two cannot drift.
 uint256 constant CHAIN_MIN_STAKE = 2e6;
 
+/// @dev The simulated chain's nominator dust threshold; aliased by the test base the same way.
+uint256 constant CHAIN_NOMINATOR_MIN_STAKE = 20e6;
+
 /// @dev Uses keccak256("evm:", h160) for coldkey derivation instead of the real
 ///      blake2b, matching the test helper `_toSubstrate`.
 contract MockStaking {
@@ -43,14 +46,19 @@ contract MockStaking {
         return keccak256(abi.encodePacked("evm:", msg.sender));
     }
 
-    // The floor is tao-denominated: the chain rejects transfers and moves whose tao value is below
-    // CHAIN_MIN_STAKE. Reads the chain-side (full-precision) price, which is unaffected by the EVM
-    // getAlphaPrice quantization, so a sub-1e-9 subnet whose EVM price reads 0 still has a binding
-    // chain floor. Price is scaled 1e18 to match the precompile.
-    function _belowMinStake(uint256 amount, uint256 netuid) private view returns (bool) {
+    // Thresholds are tao-denominated: the chain values alpha at the chain-side (full-precision)
+    // price, which is unaffected by the EVM getAlphaPrice quantization, so a sub-1e-9 subnet whose
+    // EVM price reads 0 still has binding chain thresholds. Price is scaled 1e18 to match the
+    // precompile.
+    function _belowTaoValue(uint256 amount, uint256 netuid, uint256 thresholdTao) private view returns (bool) {
         // forge-lint: disable-next-line(unsafe-typecast)
         uint256 alphaPriceE18 = MockAlpha(ALPHA_PRECOMPILE).chainAlphaPrice(uint16(netuid));
-        return (amount * alphaPriceE18) / 1e18 < CHAIN_MIN_STAKE;
+        return (amount * alphaPriceE18) / 1e18 < thresholdTao;
+    }
+
+    // The chain rejects transfers and moves whose tao value is below CHAIN_MIN_STAKE.
+    function _belowMinStake(uint256 amount, uint256 netuid) private view returns (bool) {
+        return _belowTaoValue(amount, netuid, CHAIN_MIN_STAKE);
     }
 
     function transferStake(
@@ -105,10 +113,25 @@ contract MockStaking {
     uint256 public taoPerAlphaDenom;
     bool public removeStakeReverts;
     mapping(bytes32 => bool) public removeStakeRevertsFor;
+    uint256 public nominatorMinRequiredStake;
+
+    function setNominatorMinRequiredStake(uint256 thresholdTao) external {
+        nominatorMinRequiredStake = thresholdTao;
+    }
+
+    function getNominatorMinRequiredStake() external view returns (uint256) {
+        return nominatorMinRequiredStake;
+    }
 
     function setRemoveStakeRate(uint256 num, uint256 denom) external {
         taoPerAlpha = num;
         taoPerAlphaDenom = denom;
+    }
+
+    /// @notice The one payout formula behind removeStake, the sweep, and the alpha mock's sim
+    ///         quotes, so they cannot drift apart.
+    function quoteTaoOut(uint256 alpha) public view returns (uint256) {
+        return (alpha * taoPerAlpha) / taoPerAlphaDenom;
     }
 
     function setRemoveStakeReverts(bool v) external {
@@ -126,12 +149,23 @@ contract MockStaking {
         uint256 staked = stakes[hotkey][_senderColdkey()][netuid];
         // Unit seam: proceeds are credited 1:1 (rao as wei) for test readability; the real chain
         // credits rao * 1e9 wei. Wei-denominated payouts are asserted by the e2e run.
-        uint256 taoOut = (alphaAmount * taoPerAlpha) / taoPerAlphaDenom;
-        // Mirrors subtensor validate_remove_stake: the floor binds only when stake remains after.
+        uint256 taoOut = quoteTaoOut(alphaAmount);
+        // As on the chain, the floor binds only when stake remains after the unstake.
         if (alphaAmount != staked && taoOut < CHAIN_MIN_STAKE) {
             _fail("MockStaking: AmountTooLow");
         }
-        stakes[hotkey][_senderColdkey()][netuid] = staked - alphaAmount;
+        uint256 remainder = staked - alphaAmount;
+        // As on the chain, a remainder spot-valued below the nominator threshold is force-sold and
+        // credited to the unstaker within the same call; a zero threshold disables the sweep. The
+        // threshold gates first: standalone suites etch this mock alone, and only an armed sweep
+        // may reach the alpha mock's price.
+        if (remainder != 0 && nominatorMinRequiredStake != 0) {
+            if (_belowTaoValue(remainder, netuid, nominatorMinRequiredStake)) {
+                taoOut += quoteTaoOut(remainder);
+                remainder = 0;
+            }
+        }
+        stakes[hotkey][_senderColdkey()][netuid] = remainder;
         (bool ok,) = msg.sender.call{ value: taoOut }("");
         require(ok, "MockStaking: TAO credit failed");
     }

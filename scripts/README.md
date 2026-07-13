@@ -1,7 +1,7 @@
 # scripts/
 
-Python tooling for the alpha-wrapper contracts: on-chain observability readers,
-chain-operation subcommands, and the shared library they build on.
+Python tooling for the alpha-wrapper contracts: read-only on-chain observability
+readers and the shared library they build on.
 
 | Script | Description |
 |---|---|
@@ -12,8 +12,7 @@ chain-operation subcommands, and the shared library they build on.
 | `get_validator_updates.py` | `ValidatorsUpdated` events |
 | `get_volumes.py` | Deposit/Unwrap totals for a subnet with optional user filter |
 | `get_vault_state.py` | Returns on-chain data about an ERC-1155 token for a subnet |
-| `chain_ops.py` | Chain-operation subcommands (H160<->SS58, `transfer_stake`, `set_validators`, `toggle_transfer`) |
-| `common.py` | Shared web3/ABI/CSV helpers imported by the scripts above |
+| `common.py` | Shared web3/ABI/CSV helpers imported by the scripts above and by `../e2e/chain_ops.py` |
 
 Run `forge build` first -- the Python scripts load ABIs from `out/`.
 

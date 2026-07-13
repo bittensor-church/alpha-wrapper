@@ -26,7 +26,7 @@ source "$SCRIPT_DIR/e2e_common.sh"
 UNLOCKED_MARGIN_RAW=30000000000 # 30 alpha
 
 lock_stake_py() {
-    python3 scripts/chain_ops.py lock_stake \
+    python3 e2e/chain_ops.py lock_stake \
         --chain-endpoint "$CHAIN_ENDPOINT" \
         --hotkey-ss58 "$1" \
         --netuid "$2" \
@@ -34,7 +34,7 @@ lock_stake_py() {
 }
 
 alice_locked_alpha() {
-    python3 scripts/chain_ops.py get_lock \
+    python3 e2e/chain_ops.py get_lock \
         --chain-endpoint "$CHAIN_ENDPOINT" \
         --coldkey-ss58 "$ALICE_COLDKEY_SS58" \
         --netuid "$1" \

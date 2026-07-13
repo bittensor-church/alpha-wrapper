@@ -22,7 +22,7 @@ source "$SCRIPT_DIR/e2e_common.sh"
 
 # Flip a subnet's alpha TransferToggle via Sudo (//Alice). Specific to this test.
 toggle_transfer_py() {
-    python3 scripts/chain_ops.py toggle_transfer \
+    python3 e2e/chain_ops.py toggle_transfer \
         --chain-endpoint "$CHAIN_ENDPOINT" \
         --netuid "$1" \
         --enabled "$2"
@@ -76,7 +76,7 @@ for NET in "${NETUIDS[@]}"; do
 done
 
 info "Confirming raw transferStake now reverts with TransferDisallowed on netuid $POS_NET..."
-PROBE=$(python3 scripts/chain_ops.py transfer_stake \
+PROBE=$(python3 e2e/chain_ops.py transfer_stake \
     --chain-endpoint "$CHAIN_ENDPOINT" \
     --dest-ss58 "$SEED_MAILBOX_SS58" --hotkey-ss58 "$POS_HK_SS58" \
     --netuid "$POS_NET" --alpha-amount "$PER_HOTKEY_RAW" 2>&1) \

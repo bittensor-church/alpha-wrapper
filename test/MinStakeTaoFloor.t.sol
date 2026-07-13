@@ -99,7 +99,7 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
+        vm.expectRevert(AlphaVault.GatherBelowFloor.selector);
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
     }
 
@@ -247,7 +247,8 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
         } else {
             bytes4 selector = bytes4(ret);
             assertTrue(
-                selector == AlphaVault.WithdrawTooSmall.selector || selector == bytes4(0x08c379a0),
+                selector == AlphaVault.WithdrawTooSmall.selector || selector == AlphaVault.GatherBelowFloor.selector
+                    || selector == bytes4(0x08c379a0),
                 "only floor-classed reverts are legitimate"
             );
             assertEq(vault.balanceOf(alice, TOKEN1), supply, "shares intact after rollback");

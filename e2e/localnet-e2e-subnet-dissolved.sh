@@ -25,7 +25,7 @@ source "$SCRIPT_DIR/e2e_common.sh"
 
 # Dissolve (deregister) a subnet via Sudo (//Alice). Specific to this test.
 dissolve_network_py() { # <netuid>
-    python3 scripts/chain_ops.py dissolve_network \
+    python3 e2e/chain_ops.py dissolve_network \
         --chain-endpoint "$CHAIN_ENDPOINT" \
         --netuid "$1"
 }

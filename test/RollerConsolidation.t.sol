@@ -69,8 +69,10 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
 
         // Rotate BOTH validators out; the 70%-weighted hotkey2 is the richest orphan at index 1.
         _setValidators(NETUID1, _hotkeys(hotkey4), _weights(10_000));
+        vm.recordLogs();
         vault.rebalance(NETUID1);
 
+        assertEq(_countRebalancedLogs(vm.getRecordedLogs()), 0, "pure consolidation emits nothing");
         assertEq(_getVaultStake(hotkey1, NETUID1), 0, "earlier orphan consolidated");
         assertEq(_getVaultStake(hotkey2, NETUID1), 0, "seed orphan consolidated");
         assertEq(_getVaultStake(hotkey4, NETUID1), totalBefore, "whole pile landed on the current set");
@@ -79,22 +81,16 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
 
     /// @dev A funded orphan is consolidated by rolling the union-richest pile through it: the pile
     ///      hops onto the orphan, returns carrying its balance, and the re-split restores targets.
-    ///      The hop amounts are pinned so a seed choice smaller than the union's richest balance
-    ///      (which could not prove chain acceptance) fails this test.
+    ///      Only the alignment move logs; the roll hops are silent.
     function test_Rebalance_RollsPileThroughFundedOrphan() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(5000, 5000));
-        uint256 pileSeed = _weighted(30 ether, NETUID1_BPS_HK1);
-        uint256 orphanBalance = _weighted(30 ether, NETUID1_BPS_HK3);
         uint256 target = _weighted(30 ether, 5000);
 
-        vm.expectEmit(true, true, true, true, address(vault));
-        emit Rebalanced(TOKEN1, hotkey1, hotkey3, pileSeed);
-        vm.expectEmit(true, true, true, true, address(vault));
-        emit Rebalanced(TOKEN1, hotkey3, hotkey1, pileSeed + orphanBalance);
-        vm.expectEmit(true, true, true, true, address(vault));
-        emit Rebalanced(TOKEN1, hotkey1, hotkey2, pileSeed + orphanBalance - target);
+        vm.recordLogs();
         vault.rebalance(NETUID1);
+
+        assertEq(_countRebalancedLogs(vm.getRecordedLogs()), 1, "roll hops are silent; only the alignment logs");
 
         assertEq(_getVaultStake(hotkey3, NETUID1), 0, "orphan consolidated by the roll");
         assertEq(_getVaultStake(hotkey1, NETUID1), target);
@@ -169,14 +165,13 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         (uint256 previewAssets,) = vault.previewUnwrap(TOKEN1, burnShares);
         assertGt(previewAssets, 10 ether, "request must exceed any single slot to force a gather");
 
-        // The gather's one deterministic hop: the whole first slot rolls onto the second.
-        vm.expectEmit(true, true, true, true, address(vault));
-        emit Rebalanced(TOKEN1, hotkey1, hotkey2, 10 ether);
         vm.prank(alice);
         vault.unwrap(TOKEN1, burnShares, _toSubstrate(alice));
 
         uint256 received = _userStakeAcrossHotkeys(alice, NETUID1);
         assertEq(received, previewAssets, "delivery is exact and matches the preview");
+        uint256 receivedOnGatherTarget = MockStaking(STAKING_PRECOMPILE).getStake(hotkey2, _toSubstrate(alice), NETUID1);
+        assertEq(receivedOnGatherTarget, previewAssets, "the whole delivery arrives in one transfer");
         assertEq(vault.totalStake(TOKEN1), 30 ether - previewAssets, "only the delivered alpha left the vault");
     }
 
