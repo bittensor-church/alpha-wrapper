@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Print a one-row CSV summary of deposit + unwrap volumes for an AlphaVault token."""
+"""Print a one-row CSV summary of deposit, unwrap, and TAO-rail exit volumes for an AlphaVault token."""
 
 import argparse
 import sys
@@ -44,6 +44,13 @@ def main() -> None:
         to_block=args.block_end,
         argument_filters=arg_filters,
     )
+    # UnwrappedForTao is the TAO-rail exit (burns shares for native TAO); Unwrapped covers only the
+    # alpha rail and the dissolved-subnet payout, so both are needed for total redemption volume.
+    tao_unwrap_logs = vault.events.UnwrappedForTao.get_logs(
+        from_block=args.block_start,
+        to_block=args.block_end,
+        argument_filters=arg_filters,
+    )
 
     row = {
         "token_id": token_id,
@@ -54,6 +61,10 @@ def main() -> None:
         "unwrap_count": len(unwrap_logs),
         "total_shares_burned": sum(log["args"]["shares"] for log in unwrap_logs),
         "total_assets_out": sum(log["args"]["assets"] for log in unwrap_logs),
+        "tao_unwrap_count": len(tao_unwrap_logs),
+        "tao_shares_burned": sum(log["args"]["shares"] for log in tao_unwrap_logs),
+        "tao_assets_burned": sum(log["args"]["assetsBurned"] for log in tao_unwrap_logs),
+        "tao_out": sum(log["args"]["taoOut"] for log in tao_unwrap_logs),
     }
 
     writer = make_csv_writer(sys.stdout, list(row))
