@@ -69,7 +69,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     // ──────────────────── Events ────────────────────────────────────────────────
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
     event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 amountOut);
-    /// @notice Emitted only for weight-alignment moves; consolidation and gather hops are silent.
+    /// @notice Emitted only for weight-alignment moves; consolidation and gather hops are silent, so
+    ///         off-chain volume comes from the Deposited and Unwrapped / UnwrappedForTao /
+    ///         MailboxAlphaSoldForTao exit events, never from internal stake moves.
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
     event UnwrappedForTao(
@@ -253,7 +255,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///         rounding, and provided the floor tracks the chain's minimum; what cannot be sold
     ///         cleanly stays staked, so realized TAO may fall short of the burned assets by bounded
     ///         dust. `minTaoOut` guards the caller against every shortfall; `WithdrawTooSmall`
-    ///         fires when nothing sells.
+    ///         fires when nothing sells. It is also the exit to use when the subnet's alpha price
+    ///         reads zero on EVM: there the alpha rail can revert at full gas while consolidating
+    ///         rotated-out dust, and only a full burn here still exits - while the pool can sell it.
     /// @param  tokenId    Vault token id.
     /// @param  shares     Shares to burn.
     /// @param  minTaoOut  Slippage floor; revert if realized TAO is less.
@@ -318,18 +322,31 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
 
         _burn(msg.sender, tokenId, shares);
         _deliverAndAlign(
-            tokenId, clone, hotkeys, weights, balances, validatorCount, userSubstrateColdkey, assets, alphaPriceE18
+            tokenId,
+            clone,
+            hotkeys,
+            weights,
+            balances,
+            validatorCount,
+            coldkey,
+            userSubstrateColdkey,
+            assets,
+            alphaPriceE18
         );
 
         emit Unwrapped(msg.sender, tokenId, shares, assets);
     }
 
-    /// @dev Deliver exactly `assets` to `userColdkey`, then re-split the remainder toward `weights`.
-    ///      When one hotkey already covers the request it is transferred directly; otherwise the
-    ///      current-set pile is gathered onto a single hotkey first and delivered in one transfer.
-    ///      All moves and the transfer are bare: any rejection reverts the redemption. A gather
-    ///      whose seed (the largest slot) provably cannot clear the chain's floor on its first hop
-    ///      is rejected up front as `GatherBelowFloor`.
+    /// @dev Deliver `assets` to `userColdkey`, then re-split the remainder toward `weights`. When one
+    ///      hotkey already covers the request it is transferred directly; otherwise the current-set
+    ///      pile is gathered onto a single hotkey first and delivered in one transfer. Every hop and
+    ///      the delivery move the balance read live off the chain: a same-subnet move can credit its
+    ///      destination up to one RAO short, so carrying the arithmetic sum would over-ask the next
+    ///      hop. The delivery is capped at what the gathered slot actually holds: a multi-hop gather
+    ///      can land a few RAO under `assets`, and that shortfall is bounded dust. All moves and the
+    ///      transfer are bare: any rejection reverts the redemption. A gather whose seed (the largest
+    ///      slot) provably cannot clear the chain's floor on its first hop is rejected up front as
+    ///      `GatherBelowFloor`.
     function _deliverAndAlign(
         uint256 tokenId,
         address clone,
@@ -337,6 +354,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         uint16[3] memory weights,
         uint256[3] memory balances,
         uint256 validatorCount,
+        bytes32 coldkey,
         bytes32 userColdkey,
         uint256 assets,
         uint256 alphaPriceE18
@@ -349,16 +367,22 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
                 ++i;
             }
         }
+        // No gather needed when the largest slot already covers the request; its fetched balance is
+        // still live. A gather instead moves live piles a chain credit can round below the computed
+        // sum, so the delivery slot is re-read only after one runs.
+        uint256 deliverable = balances[gatherIndex];
         if (balances[gatherIndex] < assets) {
             // Hops are pile-sized and non-decreasing, so the seed (largest slot) is the binding
             // floor check: if it is provably sub-floor, reject up front instead of rolling into a
             // chain rejection that would burn the forwarded gas.
             if (_isBelowFloorAtAnyPrice(balances[gatherIndex], alphaPriceE18)) revert GatherBelowFloor();
-            // Rolling from the largest slot keeps every hop's amount maximal.
+            // Move the live pile each hop; `balances` still tracks which slots are drained and when
+            // the gather has enough. Reading the pile off the chain moves exactly what sits on the
+            // slot, never the one RAO the previous hop's credit rounded away.
             for (uint256 i; i < validatorCount && balances[gatherIndex] < assets;) {
                 if (i != gatherIndex && balances[i] != 0) {
-                    SubnetClone(payable(clone))
-                        .moveStake(hotkeys[gatherIndex], hotkeys[i], netuid, balances[gatherIndex]);
+                    uint256 pile = IStaking(STAKING_PRECOMPILE).getStake(hotkeys[gatherIndex], coldkey, netuid);
+                    SubnetClone(payable(clone)).moveStake(hotkeys[gatherIndex], hotkeys[i], netuid, pile);
                     balances[i] += balances[gatherIndex];
                     balances[gatherIndex] = 0;
                     gatherIndex = i;
@@ -367,10 +391,14 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
                     ++i;
                 }
             }
+            deliverable = IStaking(STAKING_PRECOMPILE).getStake(hotkeys[gatherIndex], coldkey, netuid);
         }
-        SubnetClone(payable(clone)).flush(userColdkey, hotkeys[gatherIndex], netuid, assets);
-        balances[gatherIndex] -= assets;
-        _alignToWeights(tokenId, clone, hotkeys, weights, balances, alphaPriceE18);
+        // Deliver the entitlement, capped at what the gathered slot holds after the gather's rounding.
+        uint256 payout = assets < deliverable ? assets : deliverable;
+        SubnetClone(payable(clone)).flush(userColdkey, hotkeys[gatherIndex], netuid, payout);
+        // Re-read live balances so the weight re-split never moves more than a slot holds.
+        uint256[3] memory postBalances = _fetchBalances(hotkeys, validatorCount, coldkey, netuid);
+        _alignToWeights(tokenId, clone, hotkeys, weights, postBalances, alphaPriceE18);
     }
 
     function _redeemFromDissolvedSubnet(uint256 tokenId, uint256 shares, address clone, uint16 netuid) private {
@@ -553,7 +581,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     /// @notice Preview the redemption of `shares` for a position.
     /// @dev    Live-path delivery is exact to within a few RAO of chain-side share rounding: unwrap
     ///         delivers this amount or reverts, so a sub-floor total is not deliverable here and
-    ///         must be exited via unwrapForTao.
+    ///         must be exited via unwrapForTao. That voluntary alpha-for-TAO sell is a market order
+    ///         with no preview of its own: its payout is bounded by the caller's minTaoOut, not
+    ///         quoted here. `tao` is non-zero only for the dissolved-subnet payout.
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, regBlock) position.
     /// @param  shares  Shares being previewed.
     /// @return alpha   Alpha redeemable on the live path.
@@ -827,11 +857,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         bytes32[3] storage lastSeen = _lastSeenHotkeys[tokenId];
         if (clone != address(0) && _anyRotatedOut(lastSeen, currentSet)) {
             uint16 netuid = _netuid(tokenId);
-            (bytes32 rollerHotkey, uint256 rollerBalance, uint256[3] memory lastSeenBalances, bool rollPending) =
+            (bytes32 rollerHotkey, uint256 seedBalance, uint256[3] memory lastSeenBalances, bool rollPending) =
                 _chooseRollSeed(lastSeen, currentSet, coldkey, netuid);
             // Every hop moves the whole pile and the pile only grows, so the seed is the binding
             // floor check for the entire roll.
-            if (rollPending && _isBelowFloorAtAnyPrice(rollerBalance, alphaPriceE18)) {
+            if (rollPending && _isBelowFloorAtAnyPrice(seedBalance, alphaPriceE18)) {
                 revert ConsolidationBelowFloor();
             }
             // The seed's balance is already in the pile; its cached slot is stale once the pile
@@ -841,16 +871,20 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
             for (uint256 i; i < 3;) {
                 bytes32 rotatedOut = lastSeen[i];
                 if (rotatedOut != seedHotkey && _isRotatedOut(rotatedOut, currentSet) && lastSeenBalances[i] > 0) {
-                    SubnetClone(payable(clone)).moveStake(rollerHotkey, rotatedOut, netuid, rollerBalance);
+                    // Move the live pile: a same-subnet move can credit the roller one RAO short, so a
+                    // carried arithmetic sum would over-ask the next hop. Reading the balance off the
+                    // chain moves exactly what sits on the roller.
+                    uint256 pile = IStaking(STAKING_PRECOMPILE).getStake(rollerHotkey, coldkey, netuid);
+                    SubnetClone(payable(clone)).moveStake(rollerHotkey, rotatedOut, netuid, pile);
                     rollerHotkey = rotatedOut;
-                    rollerBalance += lastSeenBalances[i];
                 }
                 unchecked {
                     ++i;
                 }
             }
             if (_isRotatedOut(rollerHotkey, currentSet)) {
-                SubnetClone(payable(clone)).moveStake(rollerHotkey, currentSet[0], netuid, rollerBalance);
+                uint256 pile = IStaking(STAKING_PRECOMPILE).getStake(rollerHotkey, coldkey, netuid);
+                SubnetClone(payable(clone)).moveStake(rollerHotkey, currentSet[0], netuid, pile);
             }
         }
         if (lastSeen[0] != currentSet[0]) lastSeen[0] = currentSet[0];
