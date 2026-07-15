@@ -1,12 +1,61 @@
 #!/usr/bin/env python3
 
-"""Print a one-row CSV summary of deposit and unwrap volumes (alpha and TAO cash-out paths) for an AlphaVault token."""
+"""Print unit-safe deposit and redemption metrics for an AlphaVault token as one CSV row."""
 
 import argparse
 import sys
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from common import get_web3_connection, load_abi, lookup_token_id, make_csv_writer
+
+
+EventLog = Mapping[str, Any]
+
+
+def _sum(logs: Sequence[EventLog], field: str) -> int:
+    return sum(log["args"][field] for log in logs)
+
+
+def build_volume_row(
+    token_id: int,
+    user: str,
+    deposit_logs: Sequence[EventLog],
+    alpha_unwrap_logs: Sequence[EventLog],
+    tao_unwrap_logs: Sequence[EventLog],
+    dissolved_unwrap_logs: Sequence[EventLog],
+) -> dict[str, int | str]:
+    """Aggregate events without combining alpha RAO, TAO wei, or nominal and actual exits."""
+    alpha_requested = _sum(tao_unwrap_logs, "alphaRequested")
+    tao_from_alpha_sales = _sum(tao_unwrap_logs, "taoOut")
+    tao_from_dissolutions = _sum(dissolved_unwrap_logs, "taoOut")
+    redemption_count = len(alpha_unwrap_logs) + len(tao_unwrap_logs) + len(dissolved_unwrap_logs)
+    shares_burned = (
+        _sum(alpha_unwrap_logs, "shares")
+        + _sum(tao_unwrap_logs, "shares")
+        + _sum(dissolved_unwrap_logs, "shares")
+    )
+
+    return {
+        "token_id": token_id,
+        "user": user,
+        "deposit_count": len(deposit_logs),
+        "alpha_deposited_rao": _sum(deposit_logs, "assets"),
+        "shares_minted": _sum(deposit_logs, "shares"),
+        "alpha_unwrap_count": len(alpha_unwrap_logs),
+        "alpha_unwrap_shares_burned": _sum(alpha_unwrap_logs, "shares"),
+        "alpha_unwrapped_rao": _sum(alpha_unwrap_logs, "alphaOut"),
+        "tao_unwrap_count": len(tao_unwrap_logs),
+        "tao_unwrap_shares_burned": _sum(tao_unwrap_logs, "shares"),
+        "alpha_requested_for_tao_rao": alpha_requested,
+        "tao_from_alpha_sales_wei": tao_from_alpha_sales,
+        "dissolved_unwrap_count": len(dissolved_unwrap_logs),
+        "dissolved_unwrap_shares_burned": _sum(dissolved_unwrap_logs, "shares"),
+        "tao_from_dissolutions_wei": tao_from_dissolutions,
+        "redemption_count": redemption_count,
+        "shares_burned": shares_burned,
+        "tao_received_wei": tao_from_alpha_sales + tao_from_dissolutions,
+    }
 
 
 def main() -> None:
@@ -49,25 +98,20 @@ def main() -> None:
         to_block=args.block_end,
         argument_filters=arg_filters,
     )
+    dissolved_unwrap_logs = vault.events.DissolvedSubnetUnwrapped.get_logs(
+        from_block=args.block_start,
+        to_block=args.block_end,
+        argument_filters=arg_filters,
+    )
 
-    # Both rails are redemptions: the alpha rail hands alpha back (amountOut), the TAO rail sells it
-    # for native TAO (assetsBurned). Both burn shares and shrink the wrapped alpha, so both fold into
-    # the redemption totals. taoOut is TAO proceeds, not alpha volume, so it is excluded.
-    redemption_logs = unwrap_logs + tao_unwrap_logs
-
-    row = {
-        "token_id": token_id,
-        "user": user_filter if user_filter is not None else "",
-        "deposit_count": len(deposit_logs),
-        "total_assets_in": sum(log["args"]["assets"] for log in deposit_logs),
-        "total_shares_minted": sum(log["args"]["shares"] for log in deposit_logs),
-        "unwrap_count": len(redemption_logs),
-        "total_shares_burned": sum(log["args"]["shares"] for log in redemption_logs),
-        "total_assets_out": (
-            sum(log["args"]["amountOut"] for log in unwrap_logs)
-            + sum(log["args"]["assetsBurned"] for log in tao_unwrap_logs)
-        ),
-    }
+    row = build_volume_row(
+        token_id,
+        user_filter if user_filter is not None else "",
+        deposit_logs,
+        unwrap_logs,
+        tao_unwrap_logs,
+        dissolved_unwrap_logs,
+    )
 
     writer = make_csv_writer(sys.stdout, list(row))
     writer.writerow(row)

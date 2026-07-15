@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Fetch AlphaVault `Unwrapped` events within a block range and print as CSV."""
+"""Fetch live-subnet AlphaVault `Unwrapped` events within a block range and print as CSV."""
 
 import argparse
 import sys
@@ -15,7 +15,7 @@ class UnwrappedEvent:
     user: str
     token_id: int
     shares: int
-    amount_out: int
+    alpha_out_rao: int
 
 
 def main() -> None:
@@ -33,7 +33,7 @@ def main() -> None:
             user=ev_args["user"],
             token_id=ev_args["tokenId"],
             shares=ev_args["shares"],
-            amount_out=ev_args["amountOut"],
+            alpha_out_rao=ev_args["alphaOut"],
         )
         for log, ev_args in fetch_event_logs(
             w3, args.vault_address, "AlphaVault", "Unwrapped",

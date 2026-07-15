@@ -68,14 +68,21 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
 
     // ──────────────────── Events ────────────────────────────────────────────────
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
-    event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 amountOut);
+    /// @notice A live-subnet alpha redemption. `alphaOut` is the alpha RAO sent by the successful
+    ///         transfer, capped at the backing available after gather rounding.
+    event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaOut);
+    /// @notice A dissolved-subnet redemption. `taoOut` is native TAO paid in EVM wei.
+    event DissolvedSubnetUnwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 taoOut);
     /// @notice Emitted only for weight-alignment moves; consolidation and gather hops are silent, so
-    ///         off-chain volume comes from the Deposited and Unwrapped / UnwrappedForTao /
-    ///         MailboxAlphaSoldForTao exit events, never from internal stake moves.
+    ///         off-chain volume comes from Deposited and the Unwrapped / UnwrappedForTao /
+    ///         DissolvedSubnetUnwrapped / MailboxAlphaSoldForTao exit events, never from internal
+    ///         stake moves.
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
+    /// @notice A live-subnet sale redemption. `alphaRequested` is the nominal alpha entitlement in
+    ///         RAO; `taoOut` is the actual native TAO payout in EVM wei.
     event UnwrappedForTao(
-        address indexed user, uint256 indexed tokenId, uint256 shares, uint256 assetsBurned, uint256 taoOut
+        address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaRequested, uint256 taoOut
     );
     event MailboxAlphaSoldForTao(
         address indexed user, uint256 indexed netuid, bytes32 indexed hotkey, uint256 alpha, uint256 taoOut
@@ -288,7 +295,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         // later slot's exact fit; the second round adds the pre-checked partials on what remains,
         // at prices the earlier sells have moved.
         uint256 remaining = _sellRound(clone, netuid, hotkeys, balances, assets, dustThresholdTao, false);
-        remaining = _sellRound(clone, netuid, hotkeys, balances, remaining, dustThresholdTao, true);
+        _sellRound(clone, netuid, hotkeys, balances, remaining, dustThresholdTao, true);
 
         uint256 taoOut = clone.balance - balanceBefore;
         if (taoOut == 0) revert WithdrawTooSmall();
@@ -321,7 +328,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         if (alphaPriceE18 != 0 && _isBelowFloorAtReadPrice(assets, alphaPriceE18)) revert WithdrawTooSmall();
 
         _burn(msg.sender, tokenId, shares);
-        _deliverAndAlign(
+        uint256 alphaOut = _deliverAndAlign(
             tokenId,
             clone,
             hotkeys,
@@ -334,7 +341,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
             alphaPriceE18
         );
 
-        emit Unwrapped(msg.sender, tokenId, shares, assets);
+        emit Unwrapped(msg.sender, tokenId, shares, alphaOut);
     }
 
     /// @dev Deliver `assets` to `userColdkey`, then re-split the remainder toward `weights`. When one
@@ -358,7 +365,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         bytes32 userColdkey,
         uint256 assets,
         uint256 alphaPriceE18
-    ) private {
+    ) private returns (uint256 alphaOut) {
         uint16 netuid = _netuid(tokenId);
         uint256 gatherIndex;
         for (uint256 i = 1; i < validatorCount;) {
@@ -394,8 +401,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
             deliverable = IStaking(STAKING_PRECOMPILE).getStake(hotkeys[gatherIndex], coldkey, netuid);
         }
         // Deliver the entitlement, capped at what the gathered slot holds after the gather's rounding.
-        uint256 payout = assets < deliverable ? assets : deliverable;
-        SubnetClone(payable(clone)).flush(userColdkey, hotkeys[gatherIndex], netuid, payout);
+        alphaOut = assets < deliverable ? assets : deliverable;
+        SubnetClone(payable(clone)).flush(userColdkey, hotkeys[gatherIndex], netuid, alphaOut);
         // Re-read live balances so the weight re-split never moves more than a slot holds.
         uint256[3] memory postBalances = _fetchBalances(hotkeys, validatorCount, coldkey, netuid);
         _alignToWeights(tokenId, clone, hotkeys, weights, postBalances, alphaPriceE18);
@@ -410,7 +417,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         uint256 userTao = (cloneBalance * shares) / supplyBefore;
         _burn(msg.sender, tokenId, shares);
         if (userTao > 0) SubnetClone(payable(clone)).unwrapTao(payable(msg.sender), userTao);
-        emit Unwrapped(msg.sender, tokenId, shares, userTao);
+        emit DissolvedSubnetUnwrapped(msg.sender, tokenId, shares, userTao);
     }
 
     // ──────────────────── Rebalance ───────────────────────────────────────────

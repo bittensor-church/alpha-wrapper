@@ -11,6 +11,8 @@ import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 ///      binding floor check), any failure reverts atomically, redemption gathers for a single exact
 ///      delivery, and the spot oracle gates no value (a zero read falls through to the chain).
 contract RollerConsolidationTest is AlphaVaultTestBase {
+    event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaOut);
+
     /// @dev Registers subnet 99, wraps a deposit for alice on hotkey4, shaves the position to
     ///      sub-floor dust, and rotates hotkey4 out so the dust is a rotated-out orphan.
     function _seedDustOnlyVault() private returns (uint256 tokenId) {
@@ -173,6 +175,24 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         uint256 receivedOnGatherTarget = MockStaking(STAKING_PRECOMPILE).getStake(hotkey2, _toSubstrate(alice), NETUID1);
         assertEq(receivedOnGatherTarget, previewAssets, "the whole delivery arrives in one transfer");
         assertEq(vault.totalStake(TOKEN1), 30 ether - previewAssets, "only the delivered alpha left the vault");
+    }
+
+    /// @dev The event reports the capped alpha payout when gather hops round the backing below the
+    ///      nominal full-burn entitlement.
+    function test_UnwrapEventReportsCappedAlphaPayoutAfterGatherRounding() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _setVaultStakes(NETUID1, 10 ether, 10 ether, 10 ether);
+        MockStaking(STAKING_PRECOMPILE).setMoveStakeRoundingLoss(1);
+
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        uint256 expectedAlphaOut = 30 ether - 2;
+        vm.expectEmit(true, true, false, true, address(vault));
+        emit Unwrapped(alice, TOKEN1, shares, expectedAlphaOut);
+
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+
+        assertEq(_userStakeAcrossHotkeys(_toSubstrate(alice), NETUID1), expectedAlphaOut);
     }
 
     /// @dev A consolidation move the chain rejects reverts the whole call: nothing moves, the

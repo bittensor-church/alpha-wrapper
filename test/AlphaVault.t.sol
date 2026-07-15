@@ -16,6 +16,8 @@ import { AlphaVaultTestBase, STORAGE_QUERY } from "./AlphaVaultTestBase.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 contract AlphaVaultTest is AlphaVaultTestBase {
+    event DissolvedSubnetUnwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 taoOut);
+
     // ────────────────── Constructor ──────────────────────────────────────────
 
     function test_RevertWhen_ConstructorZeroMailboxLogic() public {
@@ -978,6 +980,9 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateDissolutionCompleted(NETUID1);
 
         uint256 aliceBefore = alice.balance;
+        vm.expectEmit(true, true, false, true, address(vault));
+        emit DissolvedSubnetUnwrapped(alice, tokenId, shares, 50 ether);
+
         vm.prank(alice);
         vault.unwrap(tokenId, shares, _toSubstrate(alice));
         assertEq(alice.balance - aliceBefore, 50 ether);

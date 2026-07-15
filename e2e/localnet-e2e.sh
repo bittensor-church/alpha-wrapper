@@ -152,7 +152,7 @@ verify_script "get_unwraps" \
     --rows "$SUBNET_COUNT" \
     --column-set "token_id=$VAULT_IDS_CSV" \
     --column-eq "user=$WRAPPER_ADDR" \
-    --column-positive amount_out \
+    --column-positive alpha_out_rao \
     --column-positive shares \
     -- python3 scripts/get_unwraps.py \
         --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
@@ -185,11 +185,15 @@ for i in 0 1 2; do
         --column-eq "token_id=$TID" \
         --column-eq "user=" \
         --column-eq "deposit_count=3" \
-        --column-eq "unwrap_count=1" \
-        --column-positive total_assets_in \
-        --column-positive total_shares_minted \
-        --column-positive total_assets_out \
-        --column-positive total_shares_burned \
+        --column-eq "alpha_unwrap_count=1" \
+        --column-eq "tao_unwrap_count=0" \
+        --column-eq "dissolved_unwrap_count=0" \
+        --column-eq "redemption_count=1" \
+        --column-eq "tao_received_wei=0" \
+        --column-positive alpha_deposited_rao \
+        --column-positive shares_minted \
+        --column-positive alpha_unwrapped_rao \
+        --column-positive shares_burned \
         -- python3 scripts/get_volumes.py \
             --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
             --block-start "$BLOCK_START" --block-end "$BLOCK_END" --netuid "$NET"
@@ -199,7 +203,10 @@ for i in 0 1 2; do
         --column-eq "token_id=$TID" \
         --column-eq "user=$WRAPPER_ADDR" \
         --column-eq "deposit_count=3" \
-        --column-eq "unwrap_count=1" \
+        --column-eq "alpha_unwrap_count=1" \
+        --column-eq "tao_unwrap_count=0" \
+        --column-eq "dissolved_unwrap_count=0" \
+        --column-eq "redemption_count=1" \
         -- python3 scripts/get_volumes.py \
             --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
             --block-start "$BLOCK_START" --block-end "$BLOCK_END" \
@@ -261,6 +268,7 @@ WFT_HK_SS58="${ALL_HK_SS58S[$WFT_HK_IDX]}"
 
 WFT_MAILBOX=$(mailbox_addr "$WFT_NET")
 info "User mailbox on netuid $WFT_NET: $WFT_MAILBOX"
+WFT_BLOCK_START=$(cast block-number --rpc-url "$RPC_URL")
 
 deposit_and_wrap "$WFT_NET" "$WFT_HK_B32" "$WFT_HK_SS58" "$PER_HOTKEY_RAW" 1500000 \
     "wrap for unwrapForTao setup failed"
@@ -283,6 +291,25 @@ USER_TAO_POST=$(user_tao_wei)
 info "User EVM balance after:  $USER_TAO_POST wei"
 GAINED=$(assert_gain "$USER_TAO_PRE" "$USER_TAO_POST" "user did not gain TAO from unwrapForTao")
 ok "User gained $GAINED wei (net of gas)"
+
+WFT_BLOCK_END=$(cast block-number --rpc-url "$RPC_URL")
+verify_script "get_volumes (unwrapForTao on netuid $WFT_NET)" \
+    --rows 1 \
+    --column-eq "token_id=$WFT_TID" \
+    --column-eq "user=$WRAPPER_ADDR" \
+    --column-eq "deposit_count=1" \
+    --column-eq "alpha_unwrap_count=0" \
+    --column-eq "tao_unwrap_count=1" \
+    --column-eq "dissolved_unwrap_count=0" \
+    --column-eq "redemption_count=1" \
+    --column-eq "tao_from_dissolutions_wei=0" \
+    --column-positive alpha_requested_for_tao_rao \
+    --column-positive tao_from_alpha_sales_wei \
+    --column-positive tao_received_wei \
+    -- python3 scripts/get_volumes.py \
+        --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
+        --block-start "$WFT_BLOCK_START" --block-end "$WFT_BLOCK_END" \
+        --token-id "$WFT_TID" --user "$WRAPPER_ADDR"
 
 log "Phase 13: Emission accrual → share-price appreciation (alpha rail)"
 

@@ -38,6 +38,7 @@ DEAD_NET="${NETUIDS[0]}"
 DEAD_TID="${VAULT_IDS[0]}"
 DEAD_HK_B32="${ALL_HK_B32S[0]}"
 DEAD_HK_SS58="${ALL_HK_SS58S[0]}"
+DEAD_VOLUME_BLOCK_START=$(cast block-number --rpc-url "$RPC_URL")
 
 # The deployer key doubles as a second share-holder so the dissolved payout splits pro-rata.
 USER2_ADDR="$DEPLOYER_ADDR"
@@ -141,6 +142,29 @@ GAINED2=$(assert_gain "$USER2_TAO_PRE" "$(evm_balance "$USER2_ADDR")" "user2 gai
 
 [[ "$(evm_balance "$DEAD_CLONE")" == "0" ]] || fail "clone not fully drained after both users unwrapped"
 ok "Pro-rata recovery: user1 +$GAINED1 wei (preview $EXP_USER1), user2 +$GAINED2 wei; clone drained to 0"
+
+DEAD_VOLUME_BLOCK_END=$(cast block-number --rpc-url "$RPC_URL")
+python3 scripts/get_volumes.py \
+    --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
+    --block-start "$DEAD_VOLUME_BLOCK_START" --block-end "$DEAD_VOLUME_BLOCK_END" \
+    --token-id "$DEAD_TID" \
+    | python3 e2e/verify_csv.py \
+        --rows 1 \
+        --column-eq "token_id=$DEAD_TID" \
+        --column-eq "user=" \
+        --column-eq "deposit_count=2" \
+        --column-eq "alpha_unwrap_count=0" \
+        --column-eq "tao_unwrap_count=0" \
+        --column-eq "dissolved_unwrap_count=2" \
+        --column-eq "redemption_count=2" \
+        --column-eq "tao_from_alpha_sales_wei=0" \
+        --column-positive alpha_deposited_rao \
+        --column-positive shares_minted \
+        --column-positive dissolved_unwrap_shares_burned \
+        --column-positive tao_from_dissolutions_wei \
+        --column-positive shares_burned \
+        --column-positive tao_received_wei
+ok "get_volumes reports dissolved TAO separately from live alpha volume"
 
 log "Phase 12: Recover the never-wrapped mailbox as native TAO"
 
