@@ -69,25 +69,25 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         _setSigners(initialSigners, initialThreshold);
     }
 
-    /// @param sigs Must be sorted by recovered signer address, ascending.
-    function updateValidators(WeightAttestation calldata att, bytes[] calldata sigs) external {
-        uint256 len = att.hotkeys.length;
-        _validatePayload(att, len);
-        _validateFreshness(att);
-        _verifySignatures(att, sigs);
-        _commit(att, len);
+    /// @param signatures Must be sorted by recovered signer address, ascending.
+    function updateValidators(WeightAttestation calldata attestation, bytes[] calldata signatures) external {
+        uint256 validatorCount = attestation.hotkeys.length;
+        _validatePayload(attestation, validatorCount);
+        _validateFreshness(attestation);
+        _verifySignatures(attestation, signatures);
+        _commit(attestation, validatorCount);
     }
 
-    /// @param sigs Per-attestation signatures; each entry must be sorted ascending by recovered address.
-    function updateValidatorsBatch(WeightAttestation[] calldata atts, bytes[][] calldata sigs) external {
-        uint256 n = atts.length;
-        if (n != sigs.length) revert LengthMismatch();
-        for (uint256 i; i < n;) {
-            uint256 len = atts[i].hotkeys.length;
-            _validatePayload(atts[i], len);
-            _validateFreshness(atts[i]);
-            _verifySignatures(atts[i], sigs[i]);
-            _commit(atts[i], len);
+    /// @param signatures Per-attestation signatures; each entry must be sorted ascending by recovered address.
+    function updateValidatorsBatch(WeightAttestation[] calldata attestations, bytes[][] calldata signatures) external {
+        uint256 attestationCount = attestations.length;
+        if (attestationCount != signatures.length) revert LengthMismatch();
+        for (uint256 i; i < attestationCount;) {
+            uint256 validatorCount = attestations[i].hotkeys.length;
+            _validatePayload(attestations[i], validatorCount);
+            _validateFreshness(attestations[i]);
+            _verifySignatures(attestations[i], signatures[i]);
+            _commit(attestations[i], validatorCount);
             unchecked {
                 ++i;
             }
@@ -101,8 +101,8 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         override
         returns (bytes32[3] memory hotkeys, uint16[3] memory weights)
     {
-        ValidatorSet storage vs = _validators[netuid];
-        return (vs.hotkeys, vs.weights);
+        ValidatorSet storage validatorSet = _validators[netuid];
+        return (validatorSet.hotkeys, validatorSet.weights);
     }
 
     function setSigners(address[] calldata newSigners, uint8 newThreshold) external onlyRole(DEFAULT_ADMIN_ROLE) {
@@ -110,28 +110,28 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     }
 
     function _setSigners(address[] memory newSigners, uint8 newThreshold) private {
-        uint256 newLen = newSigners.length;
-        if (newLen < 2) revert InsufficientSigners();
-        if (newLen > MAX_SIGNERS) revert TooManySigners();
+        uint256 newSignerCount = newSigners.length;
+        if (newSignerCount < 2) revert InsufficientSigners();
+        if (newSignerCount > MAX_SIGNERS) revert TooManySigners();
         if (newThreshold < 2) revert ThresholdTooLow();
-        if (newThreshold > newLen) revert ThresholdExceedsSigners();
+        if (newThreshold > newSignerCount) revert ThresholdExceedsSigners();
 
-        address[] memory cached = signers;
-        uint256 oldLen = cached.length;
-        for (uint256 i; i < oldLen;) {
-            isSigner[cached[i]] = false;
+        address[] memory oldSigners = signers;
+        uint256 oldSignerCount = oldSigners.length;
+        for (uint256 i; i < oldSignerCount;) {
+            isSigner[oldSigners[i]] = false;
             unchecked {
                 ++i;
             }
         }
         delete signers;
 
-        for (uint256 i; i < newLen;) {
-            address s = newSigners[i];
-            if (s == address(0)) revert ZeroValue();
-            if (isSigner[s]) revert DuplicateValue();
-            isSigner[s] = true;
-            signers.push(s);
+        for (uint256 i; i < newSignerCount;) {
+            address signer = newSigners[i];
+            if (signer == address(0)) revert ZeroValue();
+            if (isSigner[signer]) revert DuplicateValue();
+            isSigner[signer] = true;
+            signers.push(signer);
             unchecked {
                 ++i;
             }
@@ -142,22 +142,22 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         emit SignersUpdated(newSigners, newThreshold);
     }
 
-    function _validatePayload(WeightAttestation calldata att, uint256 len) private pure {
-        if (att.netuid > type(uint16).max) revert NetuidOutOfRange();
-        if (len == 0 || len > MAX_VALIDATORS) revert InvalidValidatorCount();
-        if (len != att.weights.length) revert LengthMismatch();
+    function _validatePayload(WeightAttestation calldata attestation, uint256 validatorCount) private pure {
+        if (attestation.netuid > type(uint16).max) revert NetuidOutOfRange();
+        if (validatorCount == 0 || validatorCount > MAX_VALIDATORS) revert InvalidValidatorCount();
+        if (validatorCount != attestation.weights.length) revert LengthMismatch();
 
         uint256 sum;
-        for (uint256 i; i < len;) {
-            if (att.hotkeys[i] == bytes32(0)) revert ZeroValue();
-            if (att.weights[i] == 0) revert ZeroWeight();
-            for (uint256 j = i + 1; j < len;) {
-                if (att.hotkeys[i] == att.hotkeys[j]) revert DuplicateValue();
+        for (uint256 i; i < validatorCount;) {
+            if (attestation.hotkeys[i] == bytes32(0)) revert ZeroValue();
+            if (attestation.weights[i] == 0) revert ZeroWeight();
+            for (uint256 j = i + 1; j < validatorCount;) {
+                if (attestation.hotkeys[i] == attestation.hotkeys[j]) revert DuplicateValue();
                 unchecked {
                     ++j;
                 }
             }
-            sum += att.weights[i];
+            sum += attestation.weights[i];
             unchecked {
                 ++i;
             }
@@ -165,58 +165,58 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         if (sum != BPS_BASE) revert WeightsMustSum10000();
     }
 
-    function _validateFreshness(WeightAttestation calldata att) private view {
-        if (att.nonce != nonces[att.netuid] + 1) revert StaleNonce();
+    function _validateFreshness(WeightAttestation calldata attestation) private view {
+        if (attestation.nonce != nonces[attestation.netuid] + 1) revert StaleNonce();
         // forge-lint: disable-next-line(block-timestamp)
-        if (block.timestamp > att.deadline) revert ExpiredAttestation();
+        if (block.timestamp > attestation.deadline) revert ExpiredAttestation();
     }
 
-    function _verifySignatures(WeightAttestation calldata att, bytes[] calldata sigs) private view {
-        uint256 sigCount = sigs.length;
-        if (sigCount < threshold) revert NotEnoughSignatures();
+    function _verifySignatures(WeightAttestation calldata attestation, bytes[] calldata signatures) private view {
+        uint256 signatureCount = signatures.length;
+        if (signatureCount < threshold) revert NotEnoughSignatures();
 
-        bytes32 digest = _hashAttestation(att);
-        address last;
-        for (uint256 i; i < sigCount;) {
-            address recovered = ECDSA.recover(digest, sigs[i]);
+        bytes32 digest = _hashAttestation(attestation);
+        address previousSigner;
+        for (uint256 i; i < signatureCount;) {
+            address recovered = ECDSA.recover(digest, signatures[i]);
             if (!isSigner[recovered]) revert UnknownSigner(recovered);
-            if (recovered <= last) revert SignersNotSorted();
-            last = recovered;
+            if (recovered <= previousSigner) revert SignersNotSorted();
+            previousSigner = recovered;
             unchecked {
                 ++i;
             }
         }
     }
 
-    function _commit(WeightAttestation calldata att, uint256 len) private {
-        nonces[att.netuid] = att.nonce;
-        ValidatorSet storage vs = _validators[att.netuid];
+    function _commit(WeightAttestation calldata attestation, uint256 validatorCount) private {
+        nonces[attestation.netuid] = attestation.nonce;
+        ValidatorSet storage validatorSet = _validators[attestation.netuid];
         for (uint256 i; i < MAX_VALIDATORS;) {
-            bytes32 newHk;
-            uint16 newWt;
-            if (i < len) {
-                newHk = att.hotkeys[i];
-                newWt = uint16(att.weights[i]);
+            bytes32 newHotkey;
+            uint16 newWeight;
+            if (i < validatorCount) {
+                newHotkey = attestation.hotkeys[i];
+                newWeight = uint16(attestation.weights[i]);
             }
-            if (vs.hotkeys[i] != newHk) vs.hotkeys[i] = newHk;
-            if (vs.weights[i] != newWt) vs.weights[i] = newWt;
+            if (validatorSet.hotkeys[i] != newHotkey) validatorSet.hotkeys[i] = newHotkey;
+            if (validatorSet.weights[i] != newWeight) validatorSet.weights[i] = newWeight;
             unchecked {
                 ++i;
             }
         }
-        emit ValidatorsUpdated(att.netuid, att.nonce, att.hotkeys, att.weights);
+        emit ValidatorsUpdated(attestation.netuid, attestation.nonce, attestation.hotkeys, attestation.weights);
     }
 
-    function _hashAttestation(WeightAttestation calldata att) private view returns (bytes32) {
+    function _hashAttestation(WeightAttestation calldata attestation) private view returns (bytes32) {
         return _hashTypedDataV4(
             keccak256(
                 abi.encode(
                     ATTESTATION_TYPEHASH,
-                    att.netuid,
-                    keccak256(abi.encodePacked(att.hotkeys)),
-                    keccak256(abi.encodePacked(att.weights)),
-                    att.nonce,
-                    att.deadline
+                    attestation.netuid,
+                    keccak256(abi.encodePacked(attestation.hotkeys)),
+                    keccak256(abi.encodePacked(attestation.weights)),
+                    attestation.nonce,
+                    attestation.deadline
                 )
             )
         );

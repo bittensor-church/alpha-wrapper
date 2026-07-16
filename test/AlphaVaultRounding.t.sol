@@ -9,18 +9,18 @@ import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 contract AlphaVaultRoundingTest is AlphaVaultTestBase {
     // Inflate the pool so the share price sits far above 1 asset/share: alice seeds 2e6 (supply 2e15),
     // then 1e22 of emissions accrue. The rounding boundary for a fresh deposit becomes
-    // ~ preStake / supply = 1e22 / 2e15 ≈ 5e6 assets, well above the 2e6 minRebalanceAmt floor.
+    // ~ preStake / supply = 1e22 / 2e15 ~ 5e6 assets, well above the 2e6 minimum-stake floor.
     function _inflatedPool() private {
         _simulateAlphaDeposit(alice, NETUID1, 2e6);
         _wrap(alice, NETUID1);
         _simulateEmissions(NETUID1, 1e22);
     }
 
-    // Deposits that clear the minRebalanceAmt floor but still price to 0 shares against the inflated
-    // pool (≤ 4e6, safely below the ~5e6 boundary) must revert ZeroAmount and mint nothing.
+    // Deposits that clear the 2e6 minimum-stake floor but still price to 0 shares against the inflated
+    // pool (<= 4e6, safely below the ~5e6 boundary) must revert ZeroAmount and mint nothing.
     function testFuzz_WrapRevertsWhenDepositRoundsToZeroShares(uint256 dust) public {
         _inflatedPool();
-        dust = bound(dust, vault.minRebalanceAmt(), 4e6);
+        dust = bound(dust, 2e6, 4e6);
 
         _simulateAlphaDeposit(bob, NETUID1, dust);
         vm.prank(bob);
@@ -30,7 +30,7 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         assertEq(vault.balanceOf(bob, TOKEN1), 0);
     }
 
-    // Deposits past the rounding boundary (≥ 1e7, safely above ~5e6) are accepted and mint real shares.
+    // Deposits past the rounding boundary (>= 1e7, safely above ~5e6) are accepted and mint real shares.
     function testFuzz_WrapAcceptsDepositsAboveRoundingBoundary(uint256 deposit) public {
         _inflatedPool();
         deposit = bound(deposit, 1e7, type(uint64).max);
@@ -53,15 +53,14 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, 1, _toSubstrate(alice));
         assertEq(vault.balanceOf(alice, TOKEN1), shares);
 
-        // A real share amount redeems for its proportional value.
+        // A real share amount pays out its proportional value.
         vm.prank(alice);
         vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));
-        uint256 received = _getStake(hotkey1, alice, NETUID1) + _getStake(hotkey2, alice, NETUID1)
-            + _getStake(hotkey3, alice, NETUID1);
+        uint256 received = _userStakeAcrossHotkeys(alice, NETUID1);
         assertApproxEqAbs(received, 5 ether, 1e9);
     }
 
-    function test_DissolvedUnwrapRevertsOnZeroTaoButRedeemsWhenFunded() public {
+    function test_DissolvedUnwrap_RevertsOnZeroTaoThenPaysOnceFunded() public {
         _simulateAlphaDeposit(alice, NETUID1, 10 ether);
         _wrap(alice, NETUID1);
         uint256 tokenId = vault.currentTokenId(NETUID1);
@@ -78,7 +77,7 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         vm.expectRevert(AlphaVault.NothingToUnwrap.selector);
         vault.unwrap(tokenId, shares, _toSubstrate(alice));
 
-        // Shares survived: once the dissolution TAO lands, the same position redeems for it.
+        // Shares survived: once the dissolution TAO lands, the same position pays out.
         vm.deal(clone, 7 ether);
         uint256 before = alice.balance;
         vm.prank(alice);

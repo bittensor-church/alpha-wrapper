@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# alpha-wrapper — Local Chain E2E shared library
+# alpha-wrapper - Local Chain E2E shared library
 # ============================================================================
 #
 # Sourced by the localnet e2e test scripts. Holds everything the tests share:
@@ -15,13 +15,13 @@
 #   MAILBOX_ADDR, SUBNET_CLONE_ADDR, VAULT_ADDR, VAL_REGISTRY_ADDR,
 #   WRAPPER_SUB_B32, BLOCK_START, REG_BLOCK_START, REG_BLOCK_END.
 #
-# All relative paths (scripts/..., src/...) assume the repo root is the CWD,
+# All relative paths (e2e/..., src/..., out/...) assume the repo root is the CWD,
 # i.e. the test is invoked as `./e2e/<test>.sh` from the project root.
 # ============================================================================
 
 set -euo pipefail
 
-# ─── Configuration ───────────────────────────────────────────────────────────
+# --- Configuration -----------------------------------------------------------
 
 CHAIN_ENDPOINT="ws://127.0.0.1:9944"
 RPC_URL="http://127.0.0.1:9944"
@@ -43,7 +43,7 @@ WRAPPER_PK="0xf784bf897e423437b1d2a1584a7fc5c99b0ec3f34d70ff74a0643094ccfd4bbe"
 WRAPPER_SS58="5H9xN1Y6KqdhcK9wPqFSPHC7yeaRC5y4CL3nNF2GX6hJrmpT"
 
 STAKING="0x0000000000000000000000000000000000000805"
-# Alpha precompile (index 2056): exposes the chain's own alpha→TAO swap simulation.
+# Alpha precompile (index 2056): exposes the chain's own alpha->TAO swap simulation.
 ALPHA_PRECOMPILE="0x0000000000000000000000000000000000000808"
 
 STAKE_RATIOS=(600 400 200)
@@ -62,20 +62,20 @@ CAST_FLAGS="$EVM_FLAGS --gas-limit 500000"
 # Silence that module; keep error-level logging otherwise.
 export RUST_LOG="${RUST_LOG:-error,alloy_provider::blocks=off}"
 
-# ─── Helpers ─────────────────────────────────────────────────────────────────
+# --- Helpers -----------------------------------------------------------------
 
 log()  { echo -e "\n\033[1;34m=== $1 ===\033[0m"; }
-ok()   { echo -e "  \033[1;32m✓\033[0m $1"; }
-info() { echo -e "  \033[0;33m→\033[0m $1"; }
-fail() { echo -e "  \033[1;31m✗ $1\033[0m" >&2; exit 1; }
+ok()   { echo -e "  \033[1;32mOK\033[0m $1"; }
+info() { echo -e "  \033[0;33m->\033[0m $1"; }
+fail() { echo -e "  \033[1;31mFAIL $1\033[0m" >&2; exit 1; }
 
-h160_to_substrate_b32() { python3 scripts/chain_ops.py h160_to_substrate_b32 "$1"; }
-h160_to_ss58()          { python3 scripts/chain_ops.py h160_to_ss58 "$1"; }
+h160_to_substrate_b32() { python3 e2e/chain_ops.py h160_to_substrate_b32 "$1"; }
+h160_to_ss58()          { python3 e2e/chain_ops.py h160_to_ss58 "$1"; }
 
 btcli_cmd() { btcli "$@" --network "$CHAIN_ENDPOINT"; }
 
 transfer_stake_py() {
-    python3 scripts/chain_ops.py transfer_stake \
+    python3 e2e/chain_ops.py transfer_stake \
         --chain-endpoint "$CHAIN_ENDPOINT" \
         --dest-ss58 "$1" \
         --hotkey-ss58 "$2" \
@@ -84,7 +84,15 @@ transfer_stake_py() {
 }
 
 add_stake_py() {
-    python3 scripts/chain_ops.py add_stake \
+    python3 e2e/chain_ops.py add_stake \
+        --chain-endpoint "$CHAIN_ENDPOINT" \
+        --hotkey-ss58 "$1" \
+        --netuid "$2" \
+        --amount "$3"
+}
+
+remove_stake_py() {
+    python3 e2e/chain_ops.py remove_stake \
         --chain-endpoint "$CHAIN_ENDPOINT" \
         --hotkey-ss58 "$1" \
         --netuid "$2" \
@@ -92,7 +100,7 @@ add_stake_py() {
 }
 
 set_validators_py() {
-    python3 scripts/chain_ops.py set_validators \
+    python3 e2e/chain_ops.py set_validators \
         --rpc-url "$RPC_URL" \
         --registry "$VAL_REGISTRY_ADDR" \
         --signer-pk "$DEPLOYER_PK" \
@@ -117,7 +125,27 @@ read_hotkey_ss58() {
     python3 -c "import json; print(json.load(open('$HOME/.bittensor/wallets/$1/hotkeys/$2')).get('ss58Address',''))"
 }
 
-# ─── Chain read/write wrappers (DRY helpers over cast) ────────────────────────
+# Create the hotkey if missing and register it on a subnet, retrying across blocks (registration
+# is rate-limited even at max_regs_per_block=8). Sets REGISTERED_HK_B32 / REGISTERED_HK_SS58.
+register_hotkey() { # <netuid> <hotkey_name>
+    local netuid="$1" hk="$2" attempt output=""
+    [[ -f "$HOME/.bittensor/wallets/$ALICE_WALLET/hotkeys/$hk" ]] || \
+        btcli wallet new-hotkey --wallet-name "$ALICE_WALLET" --hotkey "$hk" \
+            --n-words 12 --no-use-password 2>&1 | tail -1
+    for attempt in 1 2 3; do
+        output=$(btcli_cmd subnets register --netuid "$netuid" --wallet-name "$ALICE_WALLET" --hotkey "$hk" --no-prompt 2>&1)
+        if echo "$output" | grep -q "Registered\|Already"; then
+            break
+        fi
+        echo "  Retry $attempt for $hk (waiting for next block)..."
+        sleep 6
+    done
+    echo "$output" | grep -q "Registered\|Already" || { echo "$output"; fail "register failed for $hk on netuid $netuid after 3 attempts"; }
+    REGISTERED_HK_B32=$(read_hotkey_pubkey "$ALICE_WALLET" "$hk")
+    REGISTERED_HK_SS58=$(read_hotkey_ss58 "$ALICE_WALLET" "$hk")
+}
+
+# --- Chain read/write wrappers (DRY helpers over cast) ------------------------
 
 # Alpha stake for a single (hotkey, coldkey, netuid) from the staking precompile.
 get_stake() { # <hotkey_b32> <coldkey_b32> <netuid>
@@ -158,6 +186,65 @@ clone_addr() { # <tokenId>
     cast call "$VAULT_ADDR" "subnetClone(uint256)(address)" "$1" --rpc-url "$RPC_URL"
 }
 
+# Substrate coldkey a token's subnet clone stakes under, needed to read its on-chain stake.
+clone_coldkey() { # <tokenId>
+    h160_to_substrate_b32 "$(clone_addr "$1")"
+}
+
+# Current alpha price for a subnet (TAO per alpha, e18 scale).
+alpha_price() { # <netuid>
+    cast call "$ALPHA_PRECOMPILE" "getAlphaPrice(uint16)(uint256)" "$1" --rpc-url "$RPC_URL" | awk '{print $1}'
+}
+
+# Alpha sitting in a subnet's pool (RAO), the chain's liquidity bound for swaps.
+alpha_in_pool() { # <netuid>
+    cast call "$ALPHA_PRECOMPILE" "getAlphaInPool(uint16)(uint64)" "$1" --rpc-url "$RPC_URL" | awk '{print $1}'
+}
+
+# Smallest alpha-RAO deposit whose TAO value clears the min-stake floor, from the current price.
+# Sets FLOOR_PRICE and FLOOR_BOUNDARY; requires FLOOR to be set first.
+floor_boundary() { # <netuid> <phase_label>
+    local netuid="$1" phase="$2"
+    FLOOR_PRICE=$(alpha_price "$netuid")
+    [[ "$FLOOR_PRICE" != "0" ]] || fail "$phase: alpha price reads 0 (oracle unavailable)"
+    FLOOR_BOUNDARY=$(python3 -c "print(($FLOOR * 10**18 + $FLOOR_PRICE - 1) // $FLOOR_PRICE)")
+}
+
+# Spot TAO value (RAO) of an alpha amount at the current oracle price.
+alpha_value_tao() { # <netuid> <alpha_rao>
+    python3 -c "print($2 * $(alpha_price "$1") // 10**18)"
+}
+
+# A holder's pro-rata alpha backing (RAO).
+holder_assets() { # <tokenId> <holder>
+    local shares supply total
+    shares=$(vault_shares "$1" "$2")
+    supply=$(cast call "$VAULT_ADDR" "totalSupply(uint256)(uint256)" "$1" --rpc-url "$RPC_URL" | awk '{print $1}')
+    total=$(vault_total_stake "$1")
+    python3 -c "print(0 if $supply == 0 else $shares * $total // $supply)"
+}
+
+# Alice sells her stake under <hotkey> in pool-bounded chunks until <alpha_rao> is worth less
+# than <target_tao> RAO. Chunks are capped at a quarter of the pool's alpha so a single sell
+# cannot overshoot the target band. Alice's stake under one hotkey can move the price by about
+# half; deeper targets need a different lever (e.g. raising the vault floor).
+crash_price_until_below() { # <netuid> <hotkey_b32> <hotkey_ss58> <alpha_rao> <target_tao> <phase>
+    local netuid="$1" hotkey_b32="$2" hotkey_ss58="$3" alpha="$4" target="$5" phase="$6"
+    local alice_stake pool_alpha chunk
+    for _ in $(seq 1 18); do
+        if [[ $(python3 -c "print(1 if $(alpha_value_tao "$netuid" "$alpha") < $target else 0)") == "1" ]]; then
+            return 0
+        fi
+        alice_stake=$(get_stake "$hotkey_b32" "$ALICE_COLDKEY_B32" "$netuid")
+        pool_alpha=$(alpha_in_pool "$netuid")
+        chunk=$(python3 -c "print(min($alice_stake // 3, max($pool_alpha // 4, 1)))")
+        [[ "$chunk" == "0" ]] && break
+        remove_stake_py "$hotkey_ss58" "$netuid" "$chunk" | tail -1 || fail "$phase: alpha sell rejected"
+    done
+    [[ $(python3 -c "print(1 if $(alpha_value_tao "$netuid" "$alpha") < $target else 0)") == "1" ]] \
+        || fail "$phase: could not crash the price ($alpha alpha RAO still worth >= $target RAO)"
+}
+
 # Native TAO balance of any EVM address, in wei.
 evm_balance() { # <address>
     cast balance "$1" --rpc-url "$RPC_URL" | awk '{print $1}'
@@ -183,6 +270,39 @@ vault_broadcast() { # <gas_limit> <sig> [args...]
     vault_broadcast_as "$WRAPPER_PK" "$@"
 }
 
+# gasUsed of the most recent vault send; empty on parse failure (call sites validate, so a bad
+# receipt cannot pass a gas assertion vacuously).
+last_gas_used() {
+    echo "$LAST_TX_RECEIPT" | python3 -c "
+import json, sys
+value = json.load(sys.stdin)['gasUsed']
+print(value if isinstance(value, int) else int(str(value), 0))
+" 2>/dev/null || true
+}
+
+# Assert the most recent vault send consumed at most <bound> gas. A rejected precompile dispatch
+# consumes all forwarded gas, so staying far under the limit separates a designed pre-check
+# revert (or a healthy call) from an attempted-and-burned dispatch.
+assert_gas_within() { # <bound> <fail_msg>
+    local gas_used
+    gas_used=$(last_gas_used)
+    [[ "$gas_used" =~ ^[0-9]+$ ]] || fail "$2: could not parse gasUsed"
+    python3 -c "import sys; sys.exit(0 if $gas_used <= $1 else 1)" \
+        || fail "$2 (consumed $gas_used gas, bound $1)"
+}
+
+# Reconstruct the last exit's payout from the caller's balance delta plus the gas it paid (fixed
+# 10 gwei localnet price): dust-scale payouts are smaller than gas, so the raw delta alone proves
+# nothing. Requires the payout within a factor of two of the pre-captured chain quote.
+assert_payout_near_quote() { # <pre_wei> <post_wei> <quote_rao> <fail_msg>
+    local gas_used payout
+    gas_used=$(last_gas_used)
+    [[ "$gas_used" =~ ^[0-9]+$ ]] || fail "$4: could not parse gasUsed for payout reconstruction"
+    payout=$(python3 -c "print($2 - $1 + $gas_used * 10**10)")
+    python3 -c "import sys; q = $3 * 10**9; sys.exit(0 if q // 2 <= $payout <= 2 * q else 1)" \
+        || fail "$4 (payout $payout wei vs quote $3 RAO)"
+}
+
 # Send a tx to the vault signed by <pk> and assert it succeeded (status 0x1).
 vault_send_as() { # <pk> <gas_limit> <fail_msg> <sig> [args...]
     local pk="$1" gas="$2" msg="$3"
@@ -203,6 +323,26 @@ vault_send_expect_revert() { # <gas_limit> <fail_msg> <sig> [args...]
     [[ "$LAST_TX_STATUS" != "0x1" ]] || fail "$msg"
 }
 
+# Assert a vault call from <pk>/<from> reverts with a SPECIFIC custom error: an eth_call must
+# surface the error (decoded name, or its selector at the start of the revert data), then the
+# broadcast must also fail on-chain. A bare status check would also pass on gas exhaustion or the
+# wrong revert.
+assert_vault_reverts_with_as() { # <pk> <from> <error_sig> <gas_limit> <fail_msg> <sig> [args...]
+    local pk="$1" from="$2" error_sig="$3" gas="$4" msg="$5"
+    shift 5
+    local error_name selector output
+    error_name="${error_sig%%(*}"
+    selector=$(cast sig "$error_sig")
+    output=$(cast call "$VAULT_ADDR" "$@" --from "$from" --rpc-url "$RPC_URL" 2>&1 || true)
+    echo "$output" | grep -qiE "${error_name}|${selector}" || fail "$msg (missing $error_sig in: $output)"
+    vault_broadcast_as "$pk" "$gas" "$@"
+    [[ "$LAST_TX_STATUS" != "0x1" ]] || fail "$msg"
+}
+
+assert_vault_reverts_with() { # <error_sig> <gas_limit> <fail_msg> <sig> [args...]
+    assert_vault_reverts_with_as "$WRAPPER_PK" "$WRAPPER_ADDR" "$@"
+}
+
 # Assert a strictly positive wei delta and echo it. Wei deltas routinely exceed bash's
 # signed-64-bit range, so the comparison is done in Python.
 assert_gain() { # <pre_wei> <post_wei> <fail_msg>
@@ -218,18 +358,39 @@ assert_ge() { # <actual> <min_expected> <fail_msg>
     python3 -c "import sys; sys.exit(0 if $1 >= $2 else 1)" || fail "$3 ($1 < $2)"
 }
 
-# Chain's own alpha→TAO quote (RAO out) for selling <alpha_rao> on <netuid>. Capture it *before*
+assert_le() { # <actual> <max_expected> <fail_msg>
+    python3 -c "import sys; sys.exit(0 if $1 <= $2 else 1)" || fail "$3 ($1 > $2)"
+}
+
+# The chain's share arithmetic can leave about one RAO behind on every entry a move or drain
+# passes through, so a slot the vault emptied legitimately reads a few RAO, not always zero.
+ROUNDING_DUST_SLOT_RAO=2
+# A position drains across up to six slots, so totals accumulate the per-slot rounding.
+ROUNDING_DUST_TOTAL_RAO=$((ROUNDING_DUST_SLOT_RAO * 6))
+
+# A rejected precompile dispatch consumes all forwarded gas, so a call staying far under its limit
+# separates a designed pre-check revert (or a healthy call) from an attempted-and-burned dispatch.
+WRAP_GAS_BOUND=1000000
+UNWRAP_GAS_BOUND=1700000
+REVERT_GAS_BOUND=500000
+
+# Set the vault's min-stake floor as the owner (deployer), asserting the tx lands.
+set_vault_floor() { # <value> <fail_msg>
+    vault_send_as "$DEPLOYER_PK" 200000 "$2" "setMinStakeTaoFloor(uint256)" "$1"
+}
+
+# Chain's own alpha->TAO quote (RAO out) for selling <alpha_rao> on <netuid>. Capture it *before*
 # the swap that pays out: simSwapAlphaForTao re-prices against live reserves and the curve is
 # concave, so a quote taken after the swap understates the payout by its own price impact
-# (a ~33 alpha exit re-quotes ~13% low — past assert_tao_gain's ±10%).
+# (a ~33 alpha exit re-quotes ~13% low - past assert_tao_gain's +/-10%).
 alpha_to_tao_quote() { # <netuid> <alpha_rao>
     cast call "$ALPHA_PRECOMPILE" "simSwapAlphaForTao(uint16,uint64)(uint256)" "$1" "$2" \
         --rpc-url "$RPC_URL" | awk '{print $1}'
 }
 
-# Assert the caller's native-TAO gain ≈ a pre-captured alpha→TAO <quote_rao> (within ±10%, which
-# absorbs gas and a block or two of emission drift) — a real value check, not just a positive
-# delta. The precompile quotes in RAO, so ×1e9 → wei. Echoes the wei gain.
+# Assert the caller's native-TAO gain ~ a pre-captured alpha->TAO <quote_rao> (within +/-10%, which
+# absorbs gas and a block or two of emission drift) - a real value check, not just a positive
+# delta. The precompile quotes in RAO, so x1e9 -> wei. Echoes the wei gain.
 assert_tao_gain() { # <pre_wei> <post_wei> <quote_rao> <fail_msg>
     local gain
     gain=$(python3 -c "print($2 - $1)")
@@ -244,19 +405,19 @@ deposit_and_wrap() {
     local netuid="$1" hk_b32="$2" hk_ss58="$3" amount="$4" gas="$5" msg="$6"
     local user="${7:-$WRAPPER_ADDR}" pk="${8:-$WRAPPER_PK}" mailbox
     mailbox=$(mailbox_addr "$netuid" "$user")
-    info "Transferring $amount RAO from Alice → mailbox under ${hk_b32:0:18}..."
+    info "Transferring $amount RAO from Alice -> mailbox under ${hk_b32:0:18}..."
     transfer_stake_py "$(h160_to_ss58 "$mailbox")" "$hk_ss58" "$netuid" "$amount" | tail -1
     vault_send_as "$pk" "$gas" "$msg" "wrap(address,uint256,bytes32)" "$user" "$netuid" "$hk_b32"
 }
 
-# ─── Bootstrap: pre-flight + phases 0-5 ──────────────────────────────────────
+# --- Bootstrap: pre-flight + phases 0-5 --------------------------------------
 #
 # Brings a fresh localnet to the point where a position can be deposited: funded
 # deployer, 3 emitting subnets with 3 registered+staked validators each, deployed
 # contracts wired to a 2-of-2 ValidatorRegistry, and a funded user account.
 e2e_bootstrap() {
     # All bootstrap/helper paths are repo-root-relative; fail fast if invoked elsewhere.
-    [[ -f scripts/chain_ops.py && -d src ]] || fail "Run from the repo root (CWD must contain scripts/ and src/)."
+    [[ -f e2e/chain_ops.py && -d src ]] || fail "Run from the repo root (CWD must contain e2e/ and src/)."
 
     log "Pre-flight checks"
     cast chain-id --rpc-url "$RPC_URL" > /dev/null 2>&1 || fail "Cannot connect to $RPC_URL"
@@ -271,7 +432,7 @@ e2e_bootstrap() {
         NEED_REGEN=true
     elif [[ -f "$ALICE_COLDKEY_FILE" ]]; then
         if ! grep -q "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY" "$ALICE_COLDKEY_FILE" 2>/dev/null; then
-            echo "  ⚠ Existing alice wallet is NOT the dev Alice — regenerating from dev seed..."
+            echo "  WARNING: Existing alice wallet is NOT the dev Alice - regenerating from dev seed..."
             rm -rf "$HOME/.bittensor/wallets/$ALICE_WALLET"
             NEED_REGEN=true
         fi
@@ -312,7 +473,7 @@ e2e_bootstrap() {
             --amount "$FUND_AMOUNT" \
             --allow-death \
             --no-prompt 2>&1 | tail -2
-        ok "Transferred ${FUND_AMOUNT} TAO → $DEPLOYER_ADDR ($DEPLOYER_SS58)"
+        ok "Transferred ${FUND_AMOUNT} TAO -> $DEPLOYER_ADDR ($DEPLOYER_SS58)"
         ok "New balance: $(cast balance "$DEPLOYER_ADDR" --rpc-url "$RPC_URL" --ether) TAO"
     else
         log "Phase 0: Deployer already funded"
@@ -334,9 +495,9 @@ e2e_bootstrap() {
     # below, TransferToggle in the transfers-off test) land only near each subnet's epoch boundary
     # and otherwise silently miss (see set_admin_freeze_window). Disable it so they apply first try.
     log "Disable admin freeze window (deterministic sudo hyperparameter writes)"
-    python3 scripts/chain_ops.py set_admin_freeze_window \
+    python3 e2e/chain_ops.py set_admin_freeze_window \
         --chain-endpoint "$CHAIN_ENDPOINT" --window 0 | tail -1
-    ok "AdminFreezeWindow → 0"
+    ok "AdminFreezeWindow -> 0"
 
     log "Start emissions + increase max_regs_per_block"
     for NETUID in "${NETUIDS[@]}"; do
@@ -346,7 +507,7 @@ e2e_bootstrap() {
 
         btcli_cmd sudo set --netuid "$NETUID" \
             --wallet-name "$ALICE_WALLET" --param max_regs_per_block --value 8 --no-prompt 2>&1 | tail -1
-        ok "netuid $NETUID max_regs_per_block → 8"
+        ok "netuid $NETUID max_regs_per_block -> 8"
     done
 
     log "Phase 2: Hotkeys & validators (3 per subnet)"
@@ -363,30 +524,12 @@ e2e_bootstrap() {
         for j in 0 1 2; do
             SUFFIX="${HK_SUFFIXES[$j]}"
             HK="hk_e2e_${SUBNET_NUM}${SUFFIX}"
-            IDX=$((i * 3 + j))
 
-            [[ ! -f "$HOME/.bittensor/wallets/$ALICE_WALLET/hotkeys/$HK" ]] && \
-                btcli wallet new-hotkey --wallet-name "$ALICE_WALLET" --hotkey "$HK" \
-                    --n-words 12 --no-use-password 2>&1 | tail -1
-
-            # Retry register with 6s block delay — rate-limited even at max_regs_per_block=8.
-            for attempt in 1 2 3; do
-                REG_OUT=$(btcli_cmd subnets register --netuid "$NET" --wallet-name "$ALICE_WALLET" --hotkey "$HK" --no-prompt 2>&1)
-                if echo "$REG_OUT" | grep -q "Registered\|Already"; then
-                    break
-                fi
-                echo "  Retry $attempt for $HK (waiting for next block)..."
-                sleep 6
-            done
-            if ! echo "$REG_OUT" | grep -q "Registered\|Already"; then
-                echo "$REG_OUT"
-                fail "register failed for $HK on netuid $NET after 3 attempts"
-            fi
-
+            register_hotkey "$NET" "$HK"
             ALL_HK_NAMES+=("$HK")
-            ALL_HK_B32S+=("$(read_hotkey_pubkey "$ALICE_WALLET" "$HK")")
-            ALL_HK_SS58S+=("$(read_hotkey_ss58 "$ALICE_WALLET" "$HK")")
-            ok "$HK registered on netuid $NET: ${ALL_HK_B32S[$IDX]:0:18}..."
+            ALL_HK_B32S+=("$REGISTERED_HK_B32")
+            ALL_HK_SS58S+=("$REGISTERED_HK_SS58")
+            ok "$HK registered on netuid $NET: ${REGISTERED_HK_B32:0:18}..."
         done
     done
 
@@ -403,7 +546,7 @@ e2e_bootstrap() {
             add_stake_py "${ALL_HK_SS58S[$IDX]}" "$NET" "$((AMOUNT * 1000000000))" | tail -1
             STAKE=$(get_stake "${ALL_HK_B32S[$IDX]}" "$ALICE_COLDKEY_B32" "$NET")
             [[ "$STAKE" -gt 0 ]] || fail "stake add landed but $HK reads 0 RAO on netuid $NET"
-            ok "netuid $NET $HK: ${AMOUNT} TAO → $STAKE RAO"
+            ok "netuid $NET $HK: ${AMOUNT} TAO -> $STAKE RAO"
         done
     done
 
@@ -426,7 +569,7 @@ e2e_bootstrap() {
         | python3 -c "import json,sys; print(json.load(sys.stdin)['deployedTo'])")
     ok "SubnetClone: $SUBNET_CLONE_ADDR"
 
-    # DEPLOYER (0x7bD3...) < WRAPPER (0xd103...) hex-ascending — required by ValidatorRegistry's sorted-signers check.
+    # DEPLOYER (0x7bD3...) < WRAPPER (0xd103...) hex-ascending - required by ValidatorRegistry's sorted-signers check.
     VAL_REGISTRY_ADDR=$(forge create src/ValidatorRegistry.sol:ValidatorRegistry \
         --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" $FORGE_FLAGS --json \
         --constructor-args "$DEPLOYER_ADDR" "[$DEPLOYER_ADDR,$WRAPPER_ADDR]" 2 \
@@ -481,7 +624,7 @@ e2e_bootstrap() {
             --amount 100 \
             --allow-death \
             --no-prompt 2>&1 | tail -2
-        ok "Transferred 100 TAO → $WRAPPER_ADDR ($WRAPPER_SS58)"
+        ok "Transferred 100 TAO -> $WRAPPER_ADDR ($WRAPPER_SS58)"
     else
         ok "Already funded: ${WRAPPER_BAL} TAO"
     fi

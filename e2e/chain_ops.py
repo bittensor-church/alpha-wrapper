@@ -22,6 +22,10 @@ Subcommands:
     add_stake --chain-endpoint URL --hotkey-ss58 ... --netuid N --amount RAW
         Submit `SubtensorModule.add_stake` signed by //Alice.
 
+    remove_stake --chain-endpoint URL --hotkey-ss58 ... --netuid N --amount RAW
+        Submit `SubtensorModule.remove_stake` signed by //Alice: sell RAW alpha
+        back to the pool for TAO.
+
     lock_stake --chain-endpoint URL --hotkey-ss58 ... --netuid N --amount RAW
         Submit `SubtensorModule.lock_stake` signed by //Alice: lock RAW alpha
         to the given conviction hotkey.
@@ -65,6 +69,7 @@ Subcommands:
 
 import argparse
 import hashlib
+import pathlib
 import sys
 import time
 
@@ -129,7 +134,7 @@ def transfer_stake(
     receipt = sub.submit_extrinsic(extrinsic, wait_for_inclusion=True)
     if not receipt.is_success:
         # `error_message` is the metadata-decoded module error, e.g.
-        # {'type': 'Module', 'name': 'TransferDisallowed', ...} — callers grep the name.
+        # {'type': 'Module', 'name': 'TransferDisallowed', ...} - callers grep the name.
         print(f"FAIL: {receipt.error_message}", file=sys.stderr)
         sys.exit(1)
     print(f"ok block={receipt.block_hash}")
@@ -152,6 +157,33 @@ def add_stake(
             "hotkey": hotkey_ss58,
             "netuid": netuid,
             "amount_staked": amount,
+        },
+    )
+    extrinsic = sub.create_signed_extrinsic(call=call, keypair=alice)
+    receipt = sub.submit_extrinsic(extrinsic, wait_for_inclusion=True)
+    if not receipt.is_success:
+        print(f"FAIL: {receipt.error_message}", file=sys.stderr)
+        sys.exit(1)
+    print(f"ok block={receipt.block_hash}")
+
+
+def remove_stake(
+    chain_endpoint: str,
+    hotkey_ss58: str,
+    netuid: int,
+    amount: int,
+) -> None:
+    from substrateinterface import Keypair, SubstrateInterface
+
+    sub = SubstrateInterface(url=chain_endpoint)
+    alice = Keypair.create_from_uri("//Alice")
+    call = sub.compose_call(
+        call_module="SubtensorModule",
+        call_function="remove_stake",
+        call_params={
+            "hotkey": hotkey_ss58,
+            "netuid": netuid,
+            "amount_unstaked": amount,
         },
     )
     extrinsic = sub.create_signed_extrinsic(call=call, keypair=alice)
@@ -314,6 +346,8 @@ def set_validators(
     from eth_account import Account
     from web3 import Web3
 
+    # The shared ABI loader lives with the observability tools in scripts/.
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
     from common import load_abi
 
     if len(hotkeys) != len(weights):
@@ -428,6 +462,13 @@ def main() -> None:
     p.add_argument("--amount", required=True, type=int,
                    help="TAO amount to stake, in RAW (rao)")
 
+    p = sub.add_parser("remove_stake")
+    p.add_argument("--chain-endpoint", required=True)
+    p.add_argument("--hotkey-ss58", required=True)
+    p.add_argument("--netuid", required=True, type=int)
+    p.add_argument("--amount", required=True, type=int,
+                   help="alpha amount to unstake, in RAW (rao)")
+
     p = sub.add_parser("lock_stake")
     p.add_argument("--chain-endpoint", required=True)
     p.add_argument("--hotkey-ss58", required=True,
@@ -484,6 +525,13 @@ def main() -> None:
         )
     elif args.cmd == "add_stake":
         add_stake(
+            chain_endpoint=args.chain_endpoint,
+            hotkey_ss58=args.hotkey_ss58,
+            netuid=args.netuid,
+            amount=args.amount,
+        )
+    elif args.cmd == "remove_stake":
+        remove_stake(
             chain_endpoint=args.chain_endpoint,
             hotkey_ss58=args.hotkey_ss58,
             netuid=args.netuid,
