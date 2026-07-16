@@ -67,7 +67,7 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         uint256 shares = vault.balanceOf(alice, tokenId);
         address clone = vault.subnetClone(tokenId);
 
-        _simulateDissolutionStarted(tokenId, 0);
+        _simulateDissolutionStarted(NETUID1);
         _simulateTaoAwardedOnDissolution(tokenId, 0);
         _simulateDissolutionCompleted(NETUID1);
 

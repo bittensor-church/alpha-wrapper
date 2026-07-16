@@ -10,9 +10,8 @@ import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
 import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
-import { MockStorageQuery } from "./mocks/MockStorageQuery.sol";
 import { MockValidatorRegistry } from "./mocks/MockValidatorRegistry.sol";
-import { AlphaVaultTestBase, STORAGE_QUERY } from "./AlphaVaultTestBase.sol";
+import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 contract AlphaVaultTest is AlphaVaultTestBase {
@@ -975,7 +974,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 tokenId = vault.currentTokenId(NETUID1);
         uint256 shares = vault.balanceOf(alice, tokenId);
 
-        _simulateDissolutionStarted(tokenId, 0);
+        _simulateDissolutionStarted(NETUID1);
         _simulateTaoAwardedOnDissolution(tokenId, 50 ether);
         _simulateDissolutionCompleted(NETUID1);
 
@@ -1001,7 +1000,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 bobShares = vault.balanceOf(bob, tokenId);
         uint256 supply = aliceShares + bobShares;
 
-        _simulateDissolutionStarted(tokenId, 0);
+        _simulateDissolutionStarted(NETUID1);
         _simulateTaoAwardedOnDissolution(tokenId, 80 ether);
         _simulateDissolutionCompleted(NETUID1);
 
@@ -1038,7 +1037,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 tokenId = vault.currentTokenId(NETUID1);
         uint256 shares = vault.balanceOf(alice, tokenId);
 
-        _simulateDissolutionStarted(tokenId, 500);
+        _setRegBlock(NETUID1, 500);
+        _simulateDissolutionStarted(NETUID1);
         vm.deal(vault.subnetClone(tokenId), 1);
 
         vm.prank(alice);
@@ -1052,7 +1052,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 tokenId = vault.currentTokenId(NETUID1);
         uint256 shares = vault.balanceOf(alice, tokenId);
 
-        _simulateDissolutionStarted(tokenId, 500);
+        _setRegBlock(NETUID1, 500);
+        _simulateDissolutionStarted(NETUID1);
         vm.deal(vault.subnetClone(tokenId), 1);
 
         _simulateTaoAwardedOnDissolution(tokenId, 5 ether);
@@ -1072,11 +1073,97 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 tokenId = vault.currentTokenId(NETUID1);
         uint256 shares = vault.balanceOf(alice, tokenId);
 
-        _simulateDissolutionStarted(tokenId, 500);
+        _setRegBlock(NETUID1, 500);
+        _simulateDissolutionStarted(NETUID1);
 
         vm.prank(alice);
         vm.expectRevert(AlphaVault.SubnetInDissolutionBlackoutPeriod.selector);
         vault.unwrap(tokenId, shares, _toSubstrate(alice));
+    }
+
+    function test_RevertWhen_WrapDuringBlackout() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _simulateDissolutionStarted(NETUID1);
+
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.SubnetInDissolutionBlackoutPeriod.selector);
+        vault.wrap(alice, NETUID1, hotkey1);
+    }
+
+    function test_RevertWhen_UnwrapDuringEarlyBlackout() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 tokenId = vault.currentTokenId(NETUID1);
+        uint256 shares = vault.balanceOf(alice, tokenId);
+
+        _simulateDissolutionStarted(NETUID1);
+
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.SubnetInDissolutionBlackoutPeriod.selector);
+        vault.unwrap(tokenId, shares, _toSubstrate(alice));
+    }
+
+    /// @dev Pins the late window: cleanup has already removed the registration block but the
+    ///      TAO refund is still landing, so the position must stay frozen rather than read as
+    ///      permanently dissolved and pay out against an incomplete refund.
+    function test_RevertWhen_UnwrapDuringLateBlackout() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 tokenId = vault.currentTokenId(NETUID1);
+        uint256 shares = vault.balanceOf(alice, tokenId);
+
+        _simulateDissolutionStarted(NETUID1);
+        _simulateTaoAwardedOnDissolution(tokenId, 5 ether);
+        _setRegBlock(NETUID1, 0);
+
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.SubnetInDissolutionBlackoutPeriod.selector);
+        vault.unwrap(tokenId, shares, _toSubstrate(alice));
+    }
+
+    function test_RevertWhen_UnwrapForTaoDuringBlackout() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 tokenId = vault.currentTokenId(NETUID1);
+        uint256 shares = vault.balanceOf(alice, tokenId);
+
+        _simulateDissolutionStarted(NETUID1);
+
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.SubnetInDissolutionBlackoutPeriod.selector);
+        vault.unwrapForTao(tokenId, shares, 0);
+    }
+
+    function test_RevertWhen_RebalanceDuringBlackout() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+
+        _simulateDissolutionStarted(NETUID1);
+
+        vm.expectRevert(AlphaVault.SubnetInDissolutionBlackoutPeriod.selector);
+        vault.rebalance(NETUID1);
+    }
+
+    function test_RevertWhen_WrapDuringLateBlackout() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+
+        _simulateDissolutionStarted(NETUID1);
+        _setRegBlock(NETUID1, 0);
+
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.SubnetNotRegistered.selector);
+        vault.wrap(alice, NETUID1, hotkey1);
+    }
+
+    function test_RevertWhen_RebalanceDuringLateBlackout() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+
+        _simulateDissolutionStarted(NETUID1);
+        _setRegBlock(NETUID1, 0);
+
+        vm.expectRevert(AlphaVault.SubnetNotRegistered.selector);
+        vault.rebalance(NETUID1);
     }
 
     // --------- previewUnwrap -----------------------------------------------
@@ -1087,7 +1174,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 tokenId = vault.currentTokenId(NETUID1);
         uint256 shares = vault.balanceOf(alice, tokenId);
 
-        _simulateDissolutionStarted(tokenId, 0);
+        _simulateDissolutionStarted(NETUID1);
         _simulateTaoAwardedOnDissolution(tokenId, 40 ether);
         _simulateDissolutionCompleted(NETUID1);
 
@@ -1102,7 +1189,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 tokenId = vault.currentTokenId(NETUID1);
         uint256 shares = vault.balanceOf(alice, tokenId);
 
-        _simulateDissolutionStarted(tokenId, 500);
+        _setRegBlock(NETUID1, 500);
+        _simulateDissolutionStarted(NETUID1);
         _simulateTaoAwardedOnDissolution(tokenId, 40 ether);
 
         vm.expectRevert(AlphaVault.SubnetInDissolutionBlackoutPeriod.selector);
@@ -1115,7 +1203,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 tokenId = vault.currentTokenId(NETUID1);
         uint256 shares = vault.balanceOf(alice, tokenId);
 
-        _simulateDissolutionStarted(tokenId, 500);
+        _setRegBlock(NETUID1, 500);
+        _simulateDissolutionStarted(NETUID1);
         vm.deal(vault.subnetClone(tokenId), 1);
 
         vm.expectRevert(AlphaVault.SubnetInDissolutionBlackoutPeriod.selector);
@@ -1245,7 +1334,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
         uint256 tokenId = vault.currentTokenId(NETUID1);
 
-        _simulateDissolutionStarted(tokenId, 0);
+        _simulateDissolutionStarted(NETUID1);
         _simulateTaoAwardedOnDissolution(tokenId, 40 ether);
         _simulateDissolutionCompleted(NETUID1);
 
@@ -1270,7 +1359,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 tokenId = vault.currentTokenId(NETUID1);
         address clone = vault.subnetClone(tokenId);
 
-        _simulateDissolutionStarted(tokenId, 0);
+        _simulateDissolutionStarted(NETUID1);
         _simulateTaoAwardedOnDissolution(tokenId, 40 ether);
         _simulateDissolutionCompleted(NETUID1);
 
@@ -1287,7 +1376,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
         uint256 tokenId = vault.currentTokenId(NETUID1);
 
-        _simulateDissolutionStarted(tokenId, 0);
+        _simulateDissolutionStarted(NETUID1);
         _simulateTaoAwardedOnDissolution(tokenId, 40 ether);
         _simulateDissolutionCompleted(NETUID1);
 
@@ -1314,7 +1403,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 shares = vault.balanceOf(alice, tokenId);
         address clone = vault.subnetClone(tokenId);
 
-        _simulateDissolutionStarted(tokenId, 0);
+        _simulateDissolutionStarted(NETUID1);
         _simulateTaoAwardedOnDissolution(tokenId, 10 ether);
         _simulateDissolutionCompleted(NETUID1);
 
@@ -1336,7 +1425,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 tokenId = vault.currentTokenId(NETUID1);
         address clone = vault.subnetClone(tokenId);
 
-        _simulateDissolutionStarted(tokenId, 0);
+        _simulateDissolutionStarted(NETUID1);
         _simulateTaoAwardedOnDissolution(tokenId, 10 ether);
         _simulateDissolutionCompleted(NETUID1);
 
@@ -1369,9 +1458,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 tokenId = vault.currentTokenId(NETUID1);
         uint256 shares = vault.balanceOf(alice, tokenId);
 
-        uint16[] memory queue = new uint16[](1);
-        queue[0] = uint16(NETUID1);
-        MockStorageQuery(STORAGE_QUERY).setDissolvedNetworks(queue);
+        _simulateDissolutionStarted(NETUID1);
 
         vm.expectRevert(AlphaVault.SubnetInDissolutionBlackoutPeriod.selector);
         vault.previewUnwrap(tokenId, shares);
@@ -1382,9 +1469,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
         uint256 tokenId = vault.currentTokenId(NETUID1);
 
-        uint16[] memory queue = new uint16[](1);
-        queue[0] = uint16(NETUID1);
-        MockStorageQuery(STORAGE_QUERY).setDissolvedNetworks(queue);
+        _simulateDissolutionStarted(NETUID1);
 
         vm.expectRevert(AlphaVault.SubnetInDissolutionBlackoutPeriod.selector);
         vault.sharePrice(tokenId);
@@ -1395,9 +1480,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
         uint256 tokenId = vault.currentTokenId(NETUID1);
 
-        uint16[] memory queue = new uint16[](1);
-        queue[0] = uint16(NETUID1);
-        MockStorageQuery(STORAGE_QUERY).setDissolvedNetworks(queue);
+        _simulateDissolutionStarted(NETUID1);
 
         vm.expectRevert(AlphaVault.SubnetInDissolutionBlackoutPeriod.selector);
         vault.previewWrap(tokenId, 10 ether);
@@ -1409,7 +1492,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 tokenId = vault.currentTokenId(NETUID1);
         uint256 shares = vault.balanceOf(alice, tokenId);
 
-        _simulateDissolutionStarted(tokenId, 0);
+        _simulateDissolutionStarted(NETUID1);
         _simulateTaoAwardedOnDissolution(tokenId, 0);
         _simulateDissolutionCompleted(NETUID1);
 
