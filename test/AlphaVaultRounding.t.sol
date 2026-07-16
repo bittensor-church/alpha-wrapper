@@ -60,6 +60,66 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         assertApproxEqAbs(received, 5 ether, 1e9);
     }
 
+    // The dissolved payout floors each holder's pro-rata cut, so earlier exits can round down;
+    // whatever they leave behind must land with the last holder and never exceed the pot. A
+    // one-wei pot also pins that a cut rounding to 0 still burns the shares and pays nothing.
+    function testFuzz_DissolvedUnwrapConservesRefundPot(uint256 aliceDeposit, uint256 bobDeposit, uint256 pot) public {
+        aliceDeposit = bound(aliceDeposit, 1e7, 1e20);
+        bobDeposit = bound(bobDeposit, 1e7, 1e20);
+        pot = bound(pot, 1, 1e24);
+
+        _simulateAlphaDeposit(alice, NETUID1, aliceDeposit);
+        _wrap(alice, NETUID1);
+        _simulateAlphaDeposit(bob, NETUID1, bobDeposit);
+        _wrap(bob, NETUID1);
+
+        uint256 tokenId = vault.currentTokenId(NETUID1);
+        address clone = vault.subnetClone(tokenId);
+        uint256 aliceShares = vault.balanceOf(alice, tokenId);
+        uint256 bobShares = vault.balanceOf(bob, tokenId);
+
+        _simulateDissolutionStarted(NETUID1);
+        _simulateTaoAwardedOnDissolution(tokenId, pot);
+        _simulateDissolutionCompleted(NETUID1);
+
+        uint256 aliceExpected = (pot * aliceShares) / (aliceShares + bobShares);
+        uint256 aliceBefore = alice.balance;
+        vm.prank(alice);
+        vault.unwrap(tokenId, aliceShares, _toSubstrate(alice));
+        assertEq(alice.balance - aliceBefore, aliceExpected);
+
+        uint256 bobBefore = bob.balance;
+        vm.prank(bob);
+        vault.unwrap(tokenId, bobShares, _toSubstrate(bob));
+        assertEq(bob.balance - bobBefore, pot - aliceExpected);
+
+        assertEq(clone.balance, 0);
+        assertEq(vault.totalSupply(tokenId), 0);
+    }
+
+    // A quoted dissolved payout is a commitment: unwrapping the same shares must pay exactly it.
+    function testFuzz_PreviewUnwrapMatchesDissolvedPayout(uint256 deposit, uint256 pot, uint256 shares) public {
+        deposit = bound(deposit, 1e7, 1e20);
+        pot = bound(pot, 1, 1e24);
+
+        _simulateAlphaDeposit(alice, NETUID1, deposit);
+        _wrap(alice, NETUID1);
+        uint256 tokenId = vault.currentTokenId(NETUID1);
+        shares = bound(shares, 1, vault.balanceOf(alice, tokenId));
+
+        _simulateDissolutionStarted(NETUID1);
+        _simulateTaoAwardedOnDissolution(tokenId, pot);
+        _simulateDissolutionCompleted(NETUID1);
+
+        (uint256 alphaQuote, uint256 taoQuote) = vault.previewUnwrap(tokenId, shares);
+        assertEq(alphaQuote, 0);
+
+        uint256 before = alice.balance;
+        vm.prank(alice);
+        vault.unwrap(tokenId, shares, _toSubstrate(alice));
+        assertEq(alice.balance - before, taoQuote);
+    }
+
     function test_DissolvedUnwrap_RevertsOnZeroTaoThenPaysOnceFunded() public {
         _simulateAlphaDeposit(alice, NETUID1, 10 ether);
         _wrap(alice, NETUID1);

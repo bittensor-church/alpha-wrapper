@@ -843,6 +843,21 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.currentTokenId(42);
     }
 
+    function testFuzz_CurrentTokenIdRoundTripsNetuidAndRegistrationBlock(uint16 netuid, uint64 regBlock) public {
+        netuid = uint16(bound(netuid, 1, type(uint16).max));
+        regBlock = uint64(bound(regBlock, 1, type(uint64).max));
+        _setRegBlock(netuid, regBlock);
+
+        assertEq(vault.currentTokenId(netuid), uint256(netuid) | (uint256(regBlock) << 16));
+    }
+
+    function testFuzz_RevertWhen_CurrentTokenIdNetuidOutOfRange(uint256 netuid) public {
+        netuid = bound(netuid, uint256(type(uint16).max) + 1, type(uint256).max);
+
+        vm.expectRevert(AlphaVault.NetuidOutOfRange.selector);
+        vault.currentTokenId(netuid);
+    }
+
     function test_RevertWhen_NetuidOutOfRangeAllEntrypoints() public {
         uint256 oob = uint256(type(uint16).max) + 1;
 
@@ -1029,6 +1044,42 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vm.prank(alice);
         vault.unwrap(tokenId, shares, _toSubstrate(alice));
         assertEq(alice.balance - aliceBefore, 5 ether);
+    }
+
+    // Two generations on the same netuid dissolve one after the other; each tokenId must pay
+    // exactly its own clone's refund, in either claim order.
+    function test_TwoDissolvedGenerationsPayFromTheirOwnClones() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 gen1 = vault.currentTokenId(NETUID1);
+        uint256 gen1Shares = vault.balanceOf(alice, gen1);
+        address clone1 = vault.subnetClone(gen1);
+
+        _simulateDissolutionStarted(NETUID1);
+        _simulateTaoAwardedOnDissolution(gen1, 50 ether);
+        _simulateDissolutionCompleted(NETUID1);
+
+        _setRegBlock(NETUID1, 500);
+        _simulateAlphaDeposit(alice, NETUID1, 4 ether);
+        _wrap(alice, NETUID1);
+        uint256 gen2 = vault.currentTokenId(NETUID1);
+        uint256 gen2Shares = vault.balanceOf(alice, gen2);
+
+        _simulateDissolutionStarted(NETUID1);
+        _simulateTaoAwardedOnDissolution(gen2, 20 ether);
+        _simulateDissolutionCompleted(NETUID1);
+
+        assertEq(clone1.balance, 50 ether);
+
+        uint256 before = alice.balance;
+        vm.prank(alice);
+        vault.unwrap(gen2, gen2Shares, _toSubstrate(alice));
+        assertEq(alice.balance - before, 20 ether);
+
+        before = alice.balance;
+        vm.prank(alice);
+        vault.unwrap(gen1, gen1Shares, _toSubstrate(alice));
+        assertEq(alice.balance - before, 50 ether);
     }
 
     /// @dev The freeze is per netuid: an old tokenId stays frozen while a newer subnet on the
