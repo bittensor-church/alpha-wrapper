@@ -32,8 +32,8 @@ dissolve_network_py() { # <netuid>
 
 SUBNET_PRECOMPILE=0x0000000000000000000000000000000000000803
 
-# Cleanup drains asynchronously via on_idle; the wrapper freezes wrap/unwrap/previews
-# until the netuid leaves the dissolve queue, so assertions must wait it out.
+# Dissolution keeps draining for a while after the dissolve call; the wrapper freezes
+# wrap/unwrap/previews until it finishes, so assertions must wait it out.
 wait_dissolution_cleanup() { # <netuid>
     for _ in $(seq 1 60); do
         # A transient RPC failure counts as still dissolving so the poll retries instead of aborting.

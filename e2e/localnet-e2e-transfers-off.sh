@@ -133,13 +133,11 @@ info "User EVM balance before: $USER_TAO_PRE wei"
 vault_send 1500000 "reclaimMailboxAlphaAsTao failed with transfers off" \
     "reclaimMailboxAlphaAsTao(uint256,bytes32,uint256)" "$SEED_NET" "$SEED_HK_B32" 0
 
-# The reclaim sells the alpha amount getStake reports; the chain converts that back to
-# shares and rounds down, so a mailbox whose share price has drifted off 1:1 (this one has
-# accrued emissions since Phase 7) keeps a RAO or two. A failure to drain leaves orders of
-# magnitude more than this bound.
+# The chain rounds the sold amount down to whole shares, so a mailbox that has been
+# accruing emissions keeps a RAO or two of dust after the reclaim.
 SEED_ALPHA_POST=$(get_stake "$SEED_HK_B32" "$SEED_MAILBOX_SUB" "$SEED_NET")
-[[ "$SEED_ALPHA_POST" -le 2 ]] || fail "mailbox still holds $SEED_ALPHA_POST RAO after reclaim"
-ok "Mailbox alpha drained to $SEED_ALPHA_POST RAO (<= 2 RAO share-rounding dust)"
+assert_le "$SEED_ALPHA_POST" "$ROUNDING_DUST_SLOT_RAO" "mailbox still holds $SEED_ALPHA_POST RAO after reclaim"
+ok "Mailbox alpha drained to $SEED_ALPHA_POST RAO (share-rounding dust)"
 
 USER_TAO_POST=$(user_tao_wei)
 info "User EVM balance after:  $USER_TAO_POST wei"
