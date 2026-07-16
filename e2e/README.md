@@ -11,7 +11,7 @@ drive the chain through `chain_ops.py`.
 | `localnet-e2e-convicted-alpha.sh` | E2E with conviction-locked alpha: over-movable deposits refused on-chain, movable portion wraps, vault flows and unwraps unaffected |
 | `localnet-e2e-subnet-dissolved.sh` | E2E with a dissolved subnet: dissolved unwrap and mailbox reclaim recover native TAO, alpha rails revert, untouched subnet unaffected |
 | `localnet-e2e-min-stake-floor.sh` | E2E for min-stake floor handling: the wrap gate binds between the chain floor and a raised vault floor, rotated-out dust is consolidated by the next wrap, sub-floor rebalance moves are skipped in-budget |
-| `localnet-e2e-dust-dos.sh` | E2E for dust lockout: orphaned dust, a price crash, and a sub-floor co-holder all refuse cheaply with designed errors while the TAO exit, top-ups, and fresh deposits clear them |
+| `localnet-e2e-dust-dos.sh` | E2E for dust lockout: rotated-out dust, a price crash, and a sub-floor co-holder all refuse cheaply with designed errors while the TAO exit, top-ups, and fresh deposits clear them |
 | `localnet-e2e-hostile-dust.sh` | E2E for third-party dust: stake planted in a user's mailbox and on the vault is ignored or absorbed as a donation, never a way to stop wraps or unwraps |
 | `localnet-e2e-min-stake-liveness.sh` | E2E for sequence liveness: two churn cycles of deposits, withdrawals, and rotations plus a market drop leave every kind of small leftover, with every call staying live and nothing forfeited |
 | `e2e_common.sh` | Shared config + helpers + bootstrap (phases 0-5) sourced by the tests |

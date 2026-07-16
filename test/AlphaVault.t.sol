@@ -37,11 +37,11 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     // ------------------ Best Validator Selection -----------------------------
 
-    function test_GetBestValidatorsReturnsThree() public view {
-        bytes32[3] memory hks = vault.getBestValidators(NETUID1);
-        assertEq(hks[0], hotkey1);
-        assertEq(hks[1], hotkey2);
-        assertEq(hks[2], hotkey3);
+    function test_GetCurrentValidatorsReturnsThree() public view {
+        bytes32[3] memory hotkeys = vault.getCurrentValidators(NETUID1);
+        assertEq(hotkeys[0], hotkey1);
+        assertEq(hotkeys[1], hotkey2);
+        assertEq(hotkeys[2], hotkey3);
     }
 
     function test_SingleValidatorNoSplit() public {
@@ -577,7 +577,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         AlphaVault freshVault = _deployVault(address(new ValidatorRegistry(address(this), s, 2)));
 
         vm.expectRevert(AlphaVault.NoValidatorFound.selector);
-        freshVault.getBestValidators(NETUID1);
+        freshVault.getCurrentValidators(NETUID1);
     }
 
     // ------------------ Validator count boundaries ---------------------------
@@ -613,7 +613,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         _setRegBlock(91, 91);
         vm.expectRevert(AlphaVault.NoValidatorFound.selector);
-        mockVault.getBestValidators(91);
+        mockVault.getCurrentValidators(91);
 
         bytes32[3] memory corruptHks;
         uint16[3] memory corruptWts;
@@ -624,26 +624,26 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         mock.setRaw(92, corruptHks, corruptWts);
         _setRegBlock(92, 92);
         vm.expectRevert(AlphaVault.NoValidatorFound.selector);
-        mockVault.getBestValidators(92);
+        mockVault.getCurrentValidators(92);
     }
 
-    // ------------------ getBestValidators raw registry resolution -------------
+    // ------------------ getCurrentValidators raw registry resolution -------------
 
-    function test_GetBestValidatorsSurfacesCorruptRegistryRawState() public {
+    function test_GetCurrentValidatorsSurfacesCorruptRegistryRawState() public {
         MockValidatorRegistry mock = new MockValidatorRegistry();
         AlphaVault mockVault = _deployVault(address(mock));
 
-        bytes32[3] memory hks;
-        uint16[3] memory wts;
-        hks[0] = hotkey4;
-        wts[0] = 5_000;
-        wts[1] = 5_000;
-        mock.setRaw(91, hks, wts);
+        bytes32[3] memory hotkeys;
+        uint16[3] memory weights;
+        hotkeys[0] = hotkey4;
+        weights[0] = 5_000;
+        weights[1] = 5_000;
+        mock.setRaw(91, hotkeys, weights);
         _setRegBlock(91, 91);
 
         // _resolveValidators tolerates the corrupt mid-array entry (slot 0 is non-zero,
-        // so the "configured" sentinel passes); getBestValidators surfaces the raw state.
-        bytes32[3] memory result = mockVault.getBestValidators(91);
+        // so the "configured" sentinel passes); getCurrentValidators surfaces the raw state.
+        bytes32[3] memory result = mockVault.getCurrentValidators(91);
         assertEq(result[0], hotkey4);
         assertEq(result[1], bytes32(0));
         assertEq(result[2], bytes32(0));
@@ -854,7 +854,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.getDepositAddress(alice, oob);
 
         vm.expectRevert(AlphaVault.NetuidOutOfRange.selector);
-        vault.getBestValidators(oob);
+        vault.getCurrentValidators(oob);
     }
 
     function test_CurrentTokenIdChangesAfterRecycle() public {
@@ -1134,7 +1134,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(tao, 0);
     }
 
-    function test_PreviewUnwrap_AccountsForRotatedOrphan() public {
+    function test_PreviewUnwrap_AccountsForRotatedOutStake() public {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
 
@@ -1155,17 +1155,17 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         uint256 actualAlpha = _userStakeAcrossHotkeys(alice, NETUID1);
 
-        assertEq(actualAlpha, 30 ether, "unwrap reclaims orphan and pays the full deposit");
+        assertEq(actualAlpha, 30 ether, "unwrap reclaims rotated-out stake and pays the full deposit");
         assertEq(previewAlpha, actualAlpha, "preview must match what unwrap actually pays");
     }
 
-    // The roller carries the whole pile through a rotated-out hotkey, so even a sub-floor orphan is
+    // The roller carries the whole pile through a rotated-out hotkey, so even sub-floor rotated-out stake is
     // consolidated and delivered; previewUnwrap prices the full union, so preview matches delivery.
-    function test_PreviewUnwrap_MatchesDeliveryWithSubFloorOrphan() public {
+    function test_PreviewUnwrap_MatchesDeliveryWithSubFloorRotatedOutStake() public {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
 
-        // Drop hotkey3 one RAO below the floor, then rotate it out: an untransferable orphan.
+        // Drop hotkey3 one RAO below the floor, then rotate it out: untransferable rotated-out stake.
         bytes32 cloneColdkey = _subnetColdkey(NETUID1);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneColdkey, NETUID1, MIN_STAKE_FLOOR - 1);
 
@@ -1180,7 +1180,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         uint256 actualAlpha = _userStakeAcrossHotkeys(alice, NETUID1);
 
-        assertEq(actualAlpha, previewAlpha, "preview must match delivery when only a sub-floor orphan differs");
+        assertEq(actualAlpha, previewAlpha, "preview must match delivery when only sub-floor rotated-out stake differs");
     }
 
     function test_PreviewUnwrapSurvivesFullRegistryRotationWithoutRebalance() public {
@@ -1230,7 +1230,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
 
-        // Drain every hotkey the vault currently tracks (current set + rotated-out orphans).
+        // Drain every hotkey the vault currently tracks (current set + rotated-out slots).
         _setVaultStakes(NETUID1, 0, 0, 0);
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
@@ -1616,7 +1616,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     // ======================================================================
-    //   Validator-set rotation: orphan consolidation
+    //   Validator-set rotation: rotated-out stake consolidation
     // ======================================================================
 
     /// @dev Replace registry's NETUID1 set with [a, b, c] / equal weights.
@@ -1645,11 +1645,11 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
         Vm.Log[] memory logs = vm.getRecordedLogs();
 
-        assertEq(_getVaultStake(hotkey3, NETUID1), 0, "orphan must be drained");
+        assertEq(_getVaultStake(hotkey3, NETUID1), 0, "rotated-out slot must be drained");
         assertEq(_countRebalancedLogs(logs), 1, "silent consolidation; only the post-consolidation alignment logs");
 
         bytes32[3] memory lastSeen = vault.lastSeenHotkeys(TOKEN1);
-        assertEq(lastSeen[2], hotkey4, "cleared orphan slot follows the current set");
+        assertEq(lastSeen[2], hotkey4, "cleared rotated-out slot follows the current set");
     }
 
     function test_RotationSweptOnNextWrap() public {
@@ -1661,7 +1661,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(bob, NETUID1, 30 ether, hotkey1);
         _wrapHotkey(bob, NETUID1, hotkey1);
 
-        assertEq(_getVaultStake(hotkey3, NETUID1), 0, "orphan swept before second deposit");
+        assertEq(_getVaultStake(hotkey3, NETUID1), 0, "rotated-out stake consolidated before second deposit");
         assertApproxEqAbs(vault.totalStake(TOKEN1), 60 ether, 10);
     }
 
@@ -1677,11 +1677,11 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, shares, aliceSub);
 
         uint256 received = _userStakeAcrossHotkeys(alice, NETUID1);
-        assertApproxEqAbs(received, 30 ether, 10, "user must receive full deposit incl. orphan");
-        assertEq(_getVaultStake(hotkey3, NETUID1), 0, "orphan drained as part of unwrap");
+        assertApproxEqAbs(received, 30 ether, 10, "user must receive full deposit including rotated-out stake");
+        assertEq(_getVaultStake(hotkey3, NETUID1), 0, "rotated-out stake drained as part of unwrap");
     }
 
-    function test_RotationMultipleBacklogAllOrphansSwept() public {
+    function test_RotationMultipleBacklog_ConsolidatesAllRotatedOutStake() public {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
         uint256 hk2Before = _getVaultStake(hotkey2, NETUID1);
@@ -1692,12 +1692,12 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         // Two rotations in a row, no rebalance in between: drop hk3 then drop hk2.
         _setNetuid1Set(hotkey1, hotkey2, hotkey4);
         _setNetuid1Set(hotkey1, hotkey4, hotkey3); // hk3 is back, hk2 dropped
-        // Now the snapshot still holds the original [hk1, hk2, hk3]; current = [hk1, hk4, hk3].
-        // hk2 should be orphaned. hk3 is back in set so its prior balance should NOT be swept.
+        // Now the remembered set still holds the original [hotkey1, hotkey2, hotkey3]; current = [hotkey1, hotkey4, hotkey3].
+        // hotkey2 is rotated out. hotkey3 is back in the set so its prior balance must NOT be consolidated.
 
         vault.rebalance(NETUID1);
 
-        assertEq(_getVaultStake(hotkey2, NETUID1), 0, "hk2 orphan swept");
+        assertEq(_getVaultStake(hotkey2, NETUID1), 0, "hotkey2 rotated-out stake consolidated");
         assertApproxEqAbs(_getVaultStake(hotkey3, NETUID1), hk3Before, 1, "hk3 stays - back in current set");
     }
 
@@ -1922,7 +1922,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 vaultAfter = _totalVaultStakeAcrossHotkeys(NETUID1);
 
         // Delivery is exact: the position is gathered onto one hotkey and the full pro-rata is
-        // transferred in a single move (b1 >= floor seeds an above-floor gather on every hop).
+        // transferred in a single move (b1 >= floor keeps every gather hop above the floor).
         assertEq(userReceived, expectedAssets, "delivers exactly the pro-rata assets");
         assertEq(vaultAfter + userReceived, b1 + b2 + b3, "unwrap conserves total alpha");
     }
@@ -1948,11 +1948,11 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(vault.totalStake(TOKEN1), d, "totalStake synced to deposit amount");
     }
 
-    function testFuzz_OrphanReclaimedAcrossRotation(uint256 b1, uint256 b2, uint256 b3) public {
+    function testFuzz_RotatedOutStakeReclaimedAcrossRotation(uint256 b1, uint256 b2, uint256 b3) public {
         // Per-component cap u64max/3 keeps the consolidated total within the u64 ceiling of a single
-        // on-chain stake entry. hk1 stays a current hotkey and must clear the floor so it can seed
-        // the roll; the roller then carries the whole pile over the floor on every hop. b3 ranges
-        // down to 0, covering sub-floor and emptied rotated-out orphans.
+        // on-chain stake entry. hotkey1 stays a current hotkey and must clear the floor so the roll
+        // can start from it; the roller then carries the whole pile over the floor on every hop. b3 ranges
+        // down to 0, covering sub-floor and emptied rotated-out slots.
         uint256 perCap = type(uint64).max / 3;
         b1 = bound(b1, MIN_STAKE_FLOOR, perCap);
         b2 = bound(b2, 0, perCap);
@@ -1978,16 +1978,16 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 a2 = _getVaultStake(hotkey2, NETUID1);
         uint256 a4 = _getVaultStake(hotkey4, NETUID1);
 
-        // The roller consolidates any orphan, sub-floor or not: hk3 is emptied and the whole backing
-        // rests on the current set, snapshot refreshed.
-        assertEq(_getVaultStake(hotkey3, NETUID1), 0, "orphan fully consolidated by the roller");
+        // The roller consolidates any rotated-out stake, sub-floor or not: hk3 is emptied and the whole backing
+        // rests on the current set, remembered set refreshed.
+        assertEq(_getVaultStake(hotkey3, NETUID1), 0, "rotated-out stake fully consolidated by the roller");
         assertEq(a1 + a2 + a4, b1 + b2 + b3, "active set holds the whole post-roll total");
         assertEq(vault.totalStake(TOKEN1), b1 + b2 + b3, "totalStake counts the consolidated union");
 
         bytes32[3] memory seen = vault.lastSeenHotkeys(TOKEN1);
         assertEq(seen[0], hotkey1);
         assertEq(seen[1], hotkey2);
-        assertEq(seen[2], hotkey4, "snapshot refreshed to the current set");
+        assertEq(seen[2], hotkey4, "remembered set refreshed to the current set");
     }
 
     function testFuzz_RebalanceConvergesWithinBoundToFloorFixpoint(uint256 b1, uint256 b2, uint256 b3) public {

@@ -350,10 +350,10 @@ CAPTURED=$(python3 -c "print('yes' if $EMIT_RECEIVED > $EMIT_DEPOSITED else 'no'
 [[ "$CAPTURED" == "yes" ]] || fail "Phase 13: emissions not captured (received $EMIT_RECEIVED <= deposit $EMIT_DEPOSITED)"
 ok "User unwrapped $EMIT_RECEIVED RAO > deposited $EMIT_DEPOSITED - appreciation captured on the alpha rail"
 
-log "Phase 14: Validator rotation orphans stake -> unwrap consolidates it (no funds stranded)"
+log "Phase 14: Validator rotation leaves rotated-out stake -> unwrap consolidates it (no funds stranded)"
 
 # Rotating a validator out of the registry strands the clone's stake under it. The next unwrap
-# must consolidate that orphan (real moveStake) and still pay the holder full value - a live-chain-only
+# must consolidate that rotated-out stake (real moveStake) and still pay the holder full value - a live-chain-only
 # check of the rotation/consolidation path against real staking mechanics and the minStakeTaoFloor gate.
 ROT_NET="${NETUIDS[1]}"
 ROT_TID="${VAULT_IDS[1]}"
@@ -367,14 +367,14 @@ ROT_SHARES=$(vault_shares "$ROT_TID")
 ROT_DEPOSITED=$(vault_total_stake "$ROT_TID")
 ROT_CLONE=$(clone_addr "$ROT_TID")
 ROT_CLONE_SUB=$(h160_to_substrate_b32 "$ROT_CLONE")
-ROT_ORPHAN=$(get_stake "$ROT_HK2" "$ROT_CLONE_SUB" "$ROT_NET")
-[[ "$ROT_ORPHAN" != "0" ]] || fail "Phase 14: no stake under the 3rd validator to orphan"
-ok "Deposited 60 alpha -> shares=$ROT_SHARES; clone holds $ROT_ORPHAN RAO under the soon-orphaned 3rd validator"
+ROTATED_OUT_STAKE=$(get_stake "$ROT_HK2" "$ROT_CLONE_SUB" "$ROT_NET")
+[[ "$ROTATED_OUT_STAKE" != "0" ]] || fail "Phase 14: no stake under the 3rd validator to rotate out"
+ok "Deposited 60 alpha -> shares=$ROT_SHARES; clone holds $ROTATED_OUT_STAKE RAO under the soon-rotated-out 3rd validator"
 
 # Drop the 3rd validator from the registry via a real EIP-712 attestation; no vault call runs,
-# so the vault's last-seen snapshot still references it and its stake becomes an orphan.
+# so the vault's remembered set still references it and its stake is left rotated out.
 set_validators_py "$ROT_NET" "$ROT_HK0,$ROT_HK1" "6000,4000" > /dev/null
-ok "Rotated registry -> [v0, v1]; 3rd validator dropped with $ROT_ORPHAN RAO orphaned"
+ok "Rotated registry -> [v0, v1]; 3rd validator dropped with $ROTATED_OUT_STAKE RAO left on it"
 
 ROT_BEFORE=$(sum_stake "$WRAPPER_SUB_B32" "$ROT_NET" "$ROT_HK0" "$ROT_HK1" "$ROT_HK2")
 
@@ -383,14 +383,14 @@ vault_send 2000000 "Phase 14 unwrap failed" \
 
 ROT_AFTER=$(sum_stake "$WRAPPER_SUB_B32" "$ROT_NET" "$ROT_HK0" "$ROT_HK1" "$ROT_HK2")
 ROT_RECEIVED=$((ROT_AFTER - ROT_BEFORE))
-ROT_ORPHAN_POST=$(get_stake "$ROT_HK2" "$ROT_CLONE_SUB" "$ROT_NET")
+ROTATED_OUT_STAKE_POST=$(get_stake "$ROT_HK2" "$ROT_CLONE_SUB" "$ROT_NET")
 
 # The consolidation adds extra moveStake/drain ops, each losing <=1 RAO to integer rounding
 # (Phase 9's simpler single unwrap uses TOLERANCE_RAO=10).
-SWEPT=$(python3 -c "print('yes' if $ROT_RECEIVED >= $ROT_DEPOSITED - 100 else 'no')")
-[[ "$SWEPT" == "yes" ]] || fail "Phase 14: orphan not swept (received $ROT_RECEIVED << deposit $ROT_DEPOSITED)"
-[[ "$ROT_ORPHAN_POST" == "0" ]] || fail "Phase 14: orphan NOT swept (3rd validator still holds $ROT_ORPHAN_POST RAO)"
-ok "Orphan swept; user received $ROT_RECEIVED RAO (~ deposit $ROT_DEPOSITED), orphaned validator drained to 0"
+CONSOLIDATED=$(python3 -c "print('yes' if $ROT_RECEIVED >= $ROT_DEPOSITED - 100 else 'no')")
+[[ "$CONSOLIDATED" == "yes" ]] || fail "Phase 14: rotated-out stake not consolidated (received $ROT_RECEIVED << deposit $ROT_DEPOSITED)"
+[[ "$ROTATED_OUT_STAKE_POST" == "0" ]] || fail "Phase 14: rotated-out stake NOT consolidated (3rd validator still holds $ROTATED_OUT_STAKE_POST RAO)"
+ok "Rotated-out stake consolidated; user received $ROT_RECEIVED RAO (~ deposit $ROT_DEPOSITED), rotated-out validator drained to 0"
 
 log "Phase 15: unwrapForTao slippage guard against the real alpha->TAO price"
 

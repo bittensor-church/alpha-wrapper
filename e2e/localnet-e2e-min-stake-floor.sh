@@ -72,7 +72,7 @@ set_vault_floor "$FLOOR" "Floor gate: restoring the vault floor failed"
 
 log "Rotated-out dust is consolidated by the next wrap"
 
-# Park sub-floor dust under a soon-rotated hotkey; the next wrap's fresh deposit seeds the roller,
+# Park sub-floor dust under a soon-rotated hotkey; the next wrap's fresh deposit starts the roller,
 # so deposit + dust roll over the chain floor in one transaction - no keeper, no forfeiture.
 DUST_NETUID="${NETUIDS[2]}"
 DUST_TOKEN_ID="${VAULT_IDS[2]}"
@@ -119,7 +119,7 @@ DUST_RESIDUE_POST=$(get_stake "$DUST_HOTKEY" "$DUST_CLONE_COLDKEY" "$DUST_NETUID
 assert_le "$DUST_RESIDUE_POST" "$ROUNDING_DUST_SLOT_RAO" "Dust consolidation: rotated dust NOT consolidated"
 ok "Next wrap consolidated the rotated dust: rotated-out hotkey left with $DUST_RESIDUE_POST RAO"
 
-# The snapshot must drop the drained hotkey and the backing must fold in deposit + reclaimed dust.
+# The remembered set must drop the drained hotkey and the backing must fold in deposit + reclaimed dust.
 DUST_LAST_SEEN=$(cast call "$VAULT_ADDR" "lastSeenHotkeys(uint256)(bytes32[3])" "$DUST_TOKEN_ID" --rpc-url "$RPC_URL")
 if echo "$DUST_LAST_SEEN" | grep -qi "${DUST_HOTKEY#0x}"; then
     fail "Dust consolidation: consolidated hotkey still present in lastSeenHotkeys"
@@ -127,7 +127,7 @@ fi
 DUST_TOTAL_AFTER=$(vault_total_stake "$DUST_TOKEN_ID")
 CONSERVED=$(python3 -c "print('yes' if $DUST_TOTAL_AFTER >= $DUST_TOTAL_BEFORE + $CONSOLIDATING_DEPOSIT - 100 else 'no')")
 [[ "$CONSERVED" == "yes" ]] || fail "Dust consolidation: backing did not fold in deposit + reclaimed dust ($DUST_TOTAL_AFTER)"
-ok "Backing folded in the fresh deposit and the reclaimed dust; snapshot refreshed to the current set"
+ok "Backing folded in the fresh deposit and the reclaimed dust; remembered set refreshed to the current set"
 
 log "A sub-floor rebalance move is skipped, not attempted"
 

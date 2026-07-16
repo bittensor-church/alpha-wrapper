@@ -162,7 +162,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         address cloneAddr = vault.getDepositAddress(user, netuid);
         bytes32 cloneColdkey = _toSubstrate(cloneAddr);
         // Use the best validator hotkey for this subnet (matches what wrap will resolve)
-        bytes32 hotkey = vault.getBestValidators(netuid)[0];
+        bytes32 hotkey = vault.getCurrentValidators(netuid)[0];
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey, cloneColdkey, netuid, amount);
     }
 
@@ -178,7 +178,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     }
 
     function _wrap(address user, uint256 netuid) internal {
-        _wrapHotkey(user, netuid, vault.getBestValidators(netuid)[0]);
+        _wrapHotkey(user, netuid, vault.getCurrentValidators(netuid)[0]);
     }
 
     function _wrapHotkey(address user, uint256 netuid, bytes32 chosenHotkey) internal {

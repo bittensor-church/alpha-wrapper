@@ -5,8 +5,8 @@
 # Tests that no sequence of deposits, withdrawals, and validator changes can
 # leave the vault stuck because of leftovers too small for the chain to move:
 #   - Two full churn cycles, each leaving every kind of small leftover behind
-#     (withdrawal remainders, skipped rebalances, sale leftovers, leftovers
-#     orphaned by a validator change): every deposit and withdrawal along the
+#     (withdrawal remainders, skipped rebalances, sale leftovers, balances
+#     left on rotated-out validators): every deposit and withdrawal along the
 #     way keeps working at normal gas cost.
 #   - The owner then raises the vault's minimum (as it would to track a chain
 #     increase) above every validator slot while the position as a whole stays
@@ -84,7 +84,7 @@ unwrap_for_tao_step() { # <label> <percent>
 }
 
 # One churn cycle: deposit, withdraw most of it (leaving a remainder), deposit again, rotate the
-# primary validator out for a fresh one, withdraw across the orphaned leftovers, deposit, and
+# primary validator out for a fresh one, withdraw across the rotated-out balances, deposit, and
 # sell a slice for TAO. Leaves the union sprinkled with every kind of small leftover.
 churn_cycle() { # <round> <primary_b32> <primary_ss58> <secondary_b32> <secondary_ss58> <kept_b32> <replacement_name>
     local round="$1" primary_b32="$2" primary_ss58="$3" secondary_b32="$4" secondary_ss58="$5"
@@ -104,14 +104,14 @@ churn_cycle() { # <round> <primary_b32> <primary_ss58> <secondary_b32> <secondar
     set_validators_py "$NETUID" "$REGISTERED_HK_B32,$secondary_b32,$kept_b32" "5000,3000,2000" > /dev/null
     ok "Cycle $round: rotated ${primary_b32:0:18}... out for ${REGISTERED_HK_B32:0:18}..."
 
-    unwrap_step "Cycle $round (over the orphaned leftovers)" 50
+    unwrap_step "Cycle $round (over the rotated-out balances)" 50
     assert_le "$(get_stake "$primary_b32" "$CLONE_COLDKEY" "$NETUID")" "$ROUNDING_DUST_SLOT_RAO" \
         "Cycle $round: rotated-out validator still holds stake"
     if cast call "$VAULT_ADDR" "lastSeenHotkeys(uint256)(bytes32[3])" "$TOKEN_ID" --rpc-url "$RPC_URL" \
         | grep -qi "${primary_b32#0x}"; then
         fail "Cycle $round: rotated-out validator still present in lastSeenHotkeys"
     fi
-    ok "Cycle $round: withdrawal consolidated the orphaned leftovers"
+    ok "Cycle $round: withdrawal consolidated the rotated-out balances"
 
     deposit_step "Cycle $round" "$secondary_b32" "$secondary_ss58" \
         "$(python3 -c "print($FLOOR_BOUNDARY * 3)")"

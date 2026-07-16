@@ -202,7 +202,7 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
         (bool ok, bytes memory ret) = address(vault).call(abi.encodeCall(vault.rebalance, (99)));
 
         if (ok) {
-            assertEq(_getVaultStake(hotkey4, 99), 0, "orphan consolidated");
+            assertEq(_getVaultStake(hotkey4, 99), 0, "rotated-out stake consolidated");
             assertEq(vault.totalStake(tokenId), dust, "pile conserved onto the current set");
             assertGe(trueValue, MIN_STAKE_FLOOR, "chain accepted because truly at or above the floor");
         } else if (bytes4(ret) == AlphaVault.ConsolidationBelowFloor.selector) {
@@ -271,10 +271,10 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
         assertGt(vault.balanceOf(alice, vault.currentTokenId(99)), 0);
     }
 
-    // The seed sits inside the oracle's one-quantum band: the label cannot prove a pass, the bound
+    // The richest balance sits inside the oracle's one-quantum band: the label cannot prove a pass, the bound
     // cannot prove a reject, so the roll falls through bare and the chain's full-precision floor
     // accepts it.
-    function test_Rebalance_ConsolidatesSeedInsideOracleQuantumBand() public {
+    function test_Rebalance_ConsolidatesRichestSlotInsideOracleQuantumBand() public {
         _registerSubnet(99, hotkey4);
         _setAlphaPrice(99, 1.5e9);
         _simulateAlphaDepositHotkey(alice, 99, 4e15, hotkey4);
@@ -287,7 +287,7 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
 
         vault.rebalance(99);
 
-        assertEq(_getVaultStake(hotkey4, 99), 0, "band seed consolidated by the chain's own check");
+        assertEq(_getVaultStake(hotkey4, 99), 0, "in-band richest slot consolidated by the chain's own check");
         assertEq(_getVaultStake(hotkey1, 99), 1.5e15, "pile landed on the current set");
     }
 
@@ -313,8 +313,8 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
     function testFuzz_Unwrap_DeliversExactlyPreview(uint256 priceE18, uint256 deposit) public {
         priceE18 = bound(priceE18, 0.1e18, 100e18);
         uint256 floorAlpha = (2e6 * 1e18) / priceE18 + 1;
-        // 4x the floor so every per-validator slot after the weight split clears the floor and seeds
-        // an above-floor gather; delivery is then exact. Upper bound stays in u64-ish range.
+        // 4x the floor so every per-validator slot after the weight split clears the floor and any
+        // gather starts above it; delivery is then exact. Upper bound stays in u64-ish range.
         deposit = bound(deposit, 4 * floorAlpha, 1e15);
 
         _setAlphaPrice(NETUID1, priceE18);
@@ -363,7 +363,7 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
 
     // Within one price quantum of the floor the label cannot prove the chain will reject, so the
     // gather falls through bare and the chain's full-precision floor decides.
-    function test_RevertWhen_GatherSeedWithinOneQuantumOfFloor() public {
+    function test_RevertWhen_GatherLargestSlotWithinOneQuantumOfFloor() public {
         _setAlphaPrice(NETUID1, 1e9);
         _depositAndWrap(alice, NETUID1, 6e15);
         _setVaultStakes(NETUID1, 1_500_000_000_000_000, 1_500_000_000_000_000, 1_500_000_000_000_000);

@@ -74,32 +74,32 @@ transfer_stake_py "$(h160_to_ss58 "$VICTIM_MAILBOX")" "$HOTKEY_B_SS58" "$NETUID"
 transfer_stake_py "$(h160_to_ss58 "$(clone_addr "$TOKEN_ID")")" "$HOTKEY_C_SS58" "$NETUID" "$PLANT" | tail -1
 ok "Planted $PLANT alpha RAO in the victim's mailbox (under B) and on the clone (under C)"
 
-# Rotate C out, then push the price down: the clone plant becomes a sub-floor foreign orphan the
+# Rotate C out, then push the price down: the clone plant becomes sub-floor foreign rotated-out stake the
 # vault must consolidate, and the mailbox plant becomes too small to wrap on its own.
 set_validators_py "$NETUID" "$HOTKEY_A,$HOTKEY_B,$ROTATED_IN_HOTKEY" "5000,3000,2000" > /dev/null
 crash_price_until_below "$NETUID" "$HOTKEY_A" "$HOTKEY_A_SS58" "$PLANT" $((FLOOR * 8 / 10)) "Hostile dust"
-ORPHAN_VALUE=$(alpha_value_tao "$NETUID" "$(get_stake "$HOTKEY_C" "$CLONE_COLDKEY" "$NETUID")")
-SEED_VALUE=$(alpha_value_tao "$NETUID" "$(get_stake "$HOTKEY_A" "$CLONE_COLDKEY" "$NETUID")")
-python3 -c "import sys; sys.exit(0 if $ORPHAN_VALUE < $FLOOR and $SEED_VALUE > $FLOOR else 1)" \
-    || fail "Hostile dust: bad crash split (orphan $ORPHAN_VALUE, richest slot $SEED_VALUE, floor $FLOOR)"
-ok "Rotated-out C now holds a sub-floor foreign orphan ($ORPHAN_VALUE RAO); victim's slot stays healthy"
+PLANT_VALUE=$(alpha_value_tao "$NETUID" "$(get_stake "$HOTKEY_C" "$CLONE_COLDKEY" "$NETUID")")
+RICHEST_SLOT_VALUE=$(alpha_value_tao "$NETUID" "$(get_stake "$HOTKEY_A" "$CLONE_COLDKEY" "$NETUID")")
+python3 -c "import sys; sys.exit(0 if $PLANT_VALUE < $FLOOR and $RICHEST_SLOT_VALUE > $FLOOR else 1)" \
+    || fail "Hostile dust: bad crash split (plant $PLANT_VALUE, richest slot $RICHEST_SLOT_VALUE, floor $FLOOR)"
+ok "Rotated-out C now holds sub-floor foreign stake ($PLANT_VALUE RAO); victim's slot stays healthy"
 
-log "Victim withdrawal consolidates the hostile orphan and delivers in full"
+log "Victim withdrawal consolidates the hostile plant and delivers in full"
 
-# One transaction must seed the roll from the richest slot (not the orphan), absorb the plant,
-# refresh the snapshot, gather across slots, and deliver. A seed chosen from the orphan would be
+# One transaction must start the roll from the richest slot (not the plant), absorb it,
+# refresh the remembered set, gather across slots, and deliver. A roll started from the plant would be
 # rejected by the chain at full forwarded-gas cost - the exact regression this leg pins.
 TOTAL_PRE=$(vault_total_stake "$TOKEN_ID")
 ASSETS_PRE=$(holder_assets "$TOKEN_ID" "$WRAPPER_ADDR")
 UNWRAP_BURN=$(python3 -c "print($(vault_shares "$TOKEN_ID") * 9 // 10)")
-vault_send 2500000 "Hostile dust: withdrawal over the hostile orphan failed" \
+vault_send 2500000 "Hostile dust: withdrawal over the hostile plant failed" \
     "unwrap(uint256,uint256,bytes32)" "$TOKEN_ID" "$UNWRAP_BURN" "$WRAPPER_SUB_B32"
-assert_gas_within "$UNWRAP_GAS_BOUND" "Hostile dust: withdrawal over the hostile orphan"
+assert_gas_within "$UNWRAP_GAS_BOUND" "Hostile dust: withdrawal over the hostile plant"
 DELIVERED_FIRST=$(sum_stake "$WRAPPER_SUB_B32" "$NETUID" "$HOTKEY_A" "$HOTKEY_B" "$HOTKEY_C" "$ROTATED_IN_HOTKEY")
 assert_ge "$DELIVERED_FIRST" "$(python3 -c "print($ASSETS_PRE * 9 // 10 * 98 // 100)")" \
     "Hostile dust: withdrawal under-delivered"
 assert_le "$(get_stake "$HOTKEY_C" "$CLONE_COLDKEY" "$NETUID")" "$ROUNDING_DUST_SLOT_RAO" \
-    "Hostile dust: hostile orphan not consolidated"
+    "Hostile dust: hostile plant not consolidated"
 if cast call "$VAULT_ADDR" "lastSeenHotkeys(uint256)(bytes32[3])" "$TOKEN_ID" --rpc-url "$RPC_URL" \
     | grep -qi "${HOTKEY_C#0x}"; then
     fail "Hostile dust: consolidated hotkey still present in lastSeenHotkeys"

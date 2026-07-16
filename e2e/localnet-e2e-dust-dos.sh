@@ -40,70 +40,70 @@ FLOOR=$(cast call "$VAULT_ADDR" "minStakeTaoFloor()(uint256)" --rpc-url "$RPC_UR
 info "minStakeTaoFloor = $FLOOR RAO"
 [[ "$(cast wallet address "$HOLDER2_PK")" == "$HOLDER2_ADDR" ]] || fail "holder-2 key/address mismatch"
 
-log "Scenario 1: orphaned dust cannot lock the vault"
+log "Scenario 1: rotated-out dust cannot lock the vault"
 
-ORPHAN_NETUID="${NETUIDS[0]}"
-ORPHAN_TOKEN_ID="${VAULT_IDS[0]}"
-ORPHAN_HOTKEY="${ALL_HK_B32S[0]}"
-ORPHAN_HOTKEY_SS58="${ALL_HK_SS58S[0]}"
-ORPHAN_KEPT_B="${ALL_HK_B32S[1]}"
-ORPHAN_KEPT_B_SS58="${ALL_HK_SS58S[1]}"
-ORPHAN_KEPT_C="${ALL_HK_B32S[2]}"
+ROTATED_OUT_NETUID="${NETUIDS[0]}"
+ROTATED_OUT_TOKEN_ID="${VAULT_IDS[0]}"
+ROTATED_OUT_HOTKEY="${ALL_HK_B32S[0]}"
+ROTATED_OUT_HOTKEY_SS58="${ALL_HK_SS58S[0]}"
+KEPT_HOTKEY_B="${ALL_HK_B32S[1]}"
+KEPT_HOTKEY_B_SS58="${ALL_HK_SS58S[1]}"
+KEPT_HOTKEY_C="${ALL_HK_B32S[2]}"
 
 # A fresh validator to take the dust hotkey's slot after the rotation.
-register_hotkey "$ORPHAN_NETUID" "hk_e2e_1d"
-ORPHAN_ROTATED_IN="$REGISTERED_HK_B32"
-ok "Registered replacement validator ${ORPHAN_ROTATED_IN:0:18}... on netuid $ORPHAN_NETUID"
+register_hotkey "$ROTATED_OUT_NETUID" "hk_e2e_1d"
+REPLACEMENT_HOTKEY="$REGISTERED_HK_B32"
+ok "Registered replacement validator ${REPLACEMENT_HOTKEY:0:18}... on netuid $ROTATED_OUT_NETUID"
 
-floor_boundary "$ORPHAN_NETUID" "Orphaned dust"
+floor_boundary "$ROTATED_OUT_NETUID" "Rotated-out dust"
 # 1.5x the boundary clears the deposit floor while every corrective move toward the 50/30/20
 # split stays below it, keeping the whole deposit on the soon-rotated hotkey.
-ORPHAN_DEPOSIT=$(python3 -c "print($FLOOR_BOUNDARY * 3 // 2)")
-deposit_and_wrap "$ORPHAN_NETUID" "$ORPHAN_HOTKEY" "$ORPHAN_HOTKEY_SS58" "$ORPHAN_DEPOSIT" 1500000 \
-    "Orphaned dust: wrap failed"
+ROTATED_OUT_DEPOSIT=$(python3 -c "print($FLOOR_BOUNDARY * 3 // 2)")
+deposit_and_wrap "$ROTATED_OUT_NETUID" "$ROTATED_OUT_HOTKEY" "$ROTATED_OUT_HOTKEY_SS58" "$ROTATED_OUT_DEPOSIT" 1500000 \
+    "Rotated-out dust: wrap failed"
 
 # Burn 5/6 of the shares, then rotate: the leftover is sub-floor dust on a rotated-out hotkey and
 # there is no fresh deposit to consolidate it - the worst stranded state the vault can reach.
-ORPHAN_CLONE_COLDKEY=$(clone_coldkey "$ORPHAN_TOKEN_ID")
-ORPHAN_BURN=$(python3 -c "print($(vault_shares "$ORPHAN_TOKEN_ID") * 5 // 6)")
-vault_send 2500000 "Orphaned dust: partial unwrap failed" \
-    "unwrap(uint256,uint256,bytes32)" "$ORPHAN_TOKEN_ID" "$ORPHAN_BURN" "$WRAPPER_SUB_B32"
-ORPHAN_RESIDUE=$(get_stake "$ORPHAN_HOTKEY" "$ORPHAN_CLONE_COLDKEY" "$ORPHAN_NETUID")
-[[ $(python3 -c "print(1 if $(alpha_value_tao "$ORPHAN_NETUID" "$ORPHAN_RESIDUE") < $FLOOR else 0)") == "1" ]] \
-    || fail "Orphaned dust: residual $ORPHAN_RESIDUE alpha RAO is not sub-floor"
-set_validators_py "$ORPHAN_NETUID" "$ORPHAN_ROTATED_IN,$ORPHAN_KEPT_B,$ORPHAN_KEPT_C" "5000,3000,2000" > /dev/null
-ok "Position is now $ORPHAN_RESIDUE alpha RAO of dust under a rotated-out hotkey"
+ROTATED_OUT_CLONE_COLDKEY=$(clone_coldkey "$ROTATED_OUT_TOKEN_ID")
+ROTATED_OUT_BURN=$(python3 -c "print($(vault_shares "$ROTATED_OUT_TOKEN_ID") * 5 // 6)")
+vault_send 2500000 "Rotated-out dust: partial unwrap failed" \
+    "unwrap(uint256,uint256,bytes32)" "$ROTATED_OUT_TOKEN_ID" "$ROTATED_OUT_BURN" "$WRAPPER_SUB_B32"
+ROTATED_OUT_RESIDUE=$(get_stake "$ROTATED_OUT_HOTKEY" "$ROTATED_OUT_CLONE_COLDKEY" "$ROTATED_OUT_NETUID")
+[[ $(python3 -c "print(1 if $(alpha_value_tao "$ROTATED_OUT_NETUID" "$ROTATED_OUT_RESIDUE") < $FLOOR else 0)") == "1" ]] \
+    || fail "Rotated-out dust: residual $ROTATED_OUT_RESIDUE alpha RAO is not sub-floor"
+set_validators_py "$ROTATED_OUT_NETUID" "$REPLACEMENT_HOTKEY,$KEPT_HOTKEY_B,$KEPT_HOTKEY_C" "5000,3000,2000" > /dev/null
+ok "Position is now $ROTATED_OUT_RESIDUE alpha RAO of dust under a rotated-out hotkey"
 
-ORPHAN_SHARES=$(vault_shares "$ORPHAN_TOKEN_ID")
+ROTATED_OUT_SHARES=$(vault_shares "$ROTATED_OUT_TOKEN_ID")
 assert_vault_reverts_with "ConsolidationBelowFloor()" 1500000 \
-    "Orphaned dust: alpha exit did NOT revert as ConsolidationBelowFloor" \
-    "unwrap(uint256,uint256,bytes32)" "$ORPHAN_TOKEN_ID" "$ORPHAN_SHARES" "$WRAPPER_SUB_B32"
-assert_gas_within "$REVERT_GAS_BOUND" "Orphaned dust: alpha-exit refusal"
+    "Rotated-out dust: alpha exit did NOT revert as ConsolidationBelowFloor" \
+    "unwrap(uint256,uint256,bytes32)" "$ROTATED_OUT_TOKEN_ID" "$ROTATED_OUT_SHARES" "$WRAPPER_SUB_B32"
+assert_gas_within "$REVERT_GAS_BOUND" "Rotated-out dust: alpha-exit refusal"
 ok "Alpha exit refused up front as ConsolidationBelowFloor, without burning the gas budget"
 
 # The TAO exit needs no consolidation and full drains are floor-exempt on the chain: it must pay
 # out even from this state.
-ORPHAN_QUOTE=$(alpha_to_tao_quote "$ORPHAN_NETUID" "$(vault_total_stake "$ORPHAN_TOKEN_ID")")
-ORPHAN_MIN_OUT=$(python3 -c "print($ORPHAN_QUOTE * 10**9 // 2)")
-ORPHAN_PRE_WEI=$(user_tao_wei)
-vault_send 2500000 "Orphaned dust: TAO exit failed from the dust state" \
-    "unwrapForTao(uint256,uint256,uint256)" "$ORPHAN_TOKEN_ID" "$ORPHAN_SHARES" "$ORPHAN_MIN_OUT"
-assert_payout_near_quote "$ORPHAN_PRE_WEI" "$(user_tao_wei)" "$ORPHAN_QUOTE" \
-    "Orphaned dust: TAO exit payout off quote"
-[[ "$(vault_shares "$ORPHAN_TOKEN_ID")" == "0" ]] || fail "Orphaned dust: shares not fully burned"
-assert_le "$(get_stake "$ORPHAN_HOTKEY" "$ORPHAN_CLONE_COLDKEY" "$ORPHAN_NETUID")" "$ROUNDING_DUST_SLOT_RAO" \
-    "Orphaned dust: rotated-out hotkey still holds stake after the TAO exit"
-assert_le "$(vault_total_stake "$ORPHAN_TOKEN_ID")" "$ROUNDING_DUST_TOTAL_RAO" \
-    "Orphaned dust: stake left behind after the TAO exit"
+ROTATED_OUT_QUOTE=$(alpha_to_tao_quote "$ROTATED_OUT_NETUID" "$(vault_total_stake "$ROTATED_OUT_TOKEN_ID")")
+ROTATED_OUT_MIN_OUT=$(python3 -c "print($ROTATED_OUT_QUOTE * 10**9 // 2)")
+ROTATED_OUT_PRE_WEI=$(user_tao_wei)
+vault_send 2500000 "Rotated-out dust: TAO exit failed from the dust state" \
+    "unwrapForTao(uint256,uint256,uint256)" "$ROTATED_OUT_TOKEN_ID" "$ROTATED_OUT_SHARES" "$ROTATED_OUT_MIN_OUT"
+assert_payout_near_quote "$ROTATED_OUT_PRE_WEI" "$(user_tao_wei)" "$ROTATED_OUT_QUOTE" \
+    "Rotated-out dust: TAO exit payout off quote"
+[[ "$(vault_shares "$ROTATED_OUT_TOKEN_ID")" == "0" ]] || fail "Rotated-out dust: shares not fully burned"
+assert_le "$(get_stake "$ROTATED_OUT_HOTKEY" "$ROTATED_OUT_CLONE_COLDKEY" "$ROTATED_OUT_NETUID")" "$ROUNDING_DUST_SLOT_RAO" \
+    "Rotated-out dust: rotated-out hotkey still holds stake after the TAO exit"
+assert_le "$(vault_total_stake "$ROTATED_OUT_TOKEN_ID")" "$ROUNDING_DUST_TOTAL_RAO" \
+    "Rotated-out dust: stake left behind after the TAO exit"
 ok "TAO exit drained the dust in full and paid out per the chain quote"
 
 # The token stays fully usable after the episode.
-floor_boundary "$ORPHAN_NETUID" "Orphaned dust"
-ORPHAN_RETRY=$(python3 -c "print($FLOOR_BOUNDARY * 3 // 2)")
-deposit_and_wrap "$ORPHAN_NETUID" "$ORPHAN_KEPT_B" "$ORPHAN_KEPT_B_SS58" "$ORPHAN_RETRY" 1500000 \
-    "Orphaned dust: follow-up wrap failed"
-vault_send 2500000 "Orphaned dust: follow-up unwrap failed" \
-    "unwrap(uint256,uint256,bytes32)" "$ORPHAN_TOKEN_ID" "$(vault_shares "$ORPHAN_TOKEN_ID")" "$WRAPPER_SUB_B32"
+floor_boundary "$ROTATED_OUT_NETUID" "Rotated-out dust"
+ROTATED_OUT_RETRY=$(python3 -c "print($FLOOR_BOUNDARY * 3 // 2)")
+deposit_and_wrap "$ROTATED_OUT_NETUID" "$KEPT_HOTKEY_B" "$KEPT_HOTKEY_B_SS58" "$ROTATED_OUT_RETRY" 1500000 \
+    "Rotated-out dust: follow-up wrap failed"
+vault_send 2500000 "Rotated-out dust: follow-up unwrap failed" \
+    "unwrap(uint256,uint256,bytes32)" "$ROTATED_OUT_TOKEN_ID" "$(vault_shares "$ROTATED_OUT_TOKEN_ID")" "$WRAPPER_SUB_B32"
 ok "Round-trip after the dust episode: wrap and unwrap both clean"
 
 log "Scenario 2: a price crash cannot lock exits"

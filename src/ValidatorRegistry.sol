@@ -116,10 +116,10 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         if (newThreshold < 2) revert ThresholdTooLow();
         if (newThreshold > newSignerCount) revert ThresholdExceedsSigners();
 
-        address[] memory cached = signers;
-        uint256 oldSignerCount = cached.length;
+        address[] memory oldSigners = signers;
+        uint256 oldSignerCount = oldSigners.length;
         for (uint256 i; i < oldSignerCount;) {
-            isSigner[cached[i]] = false;
+            isSigner[oldSigners[i]] = false;
             unchecked {
                 ++i;
             }
@@ -176,12 +176,12 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         if (signatureCount < threshold) revert NotEnoughSignatures();
 
         bytes32 digest = _hashAttestation(attestation);
-        address last;
+        address previousSigner;
         for (uint256 i; i < signatureCount;) {
             address recovered = ECDSA.recover(digest, signatures[i]);
             if (!isSigner[recovered]) revert UnknownSigner(recovered);
-            if (recovered <= last) revert SignersNotSorted();
-            last = recovered;
+            if (recovered <= previousSigner) revert SignersNotSorted();
+            previousSigner = recovered;
             unchecked {
                 ++i;
             }

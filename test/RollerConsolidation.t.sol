@@ -7,14 +7,14 @@ import { MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 /// @dev Exercises the whole-balance consolidation "roller": rotated-out stake (including sub-floor
-///      dust) is rolled onto the current set with pile-sized, non-decreasing hops (the seed is the
+///      dust) is rolled onto the current set with pile-sized, non-decreasing hops (the richest slot is the
 ///      binding floor check), any failure reverts atomically, an unwrap gathers for a single exact
 ///      delivery, and the spot oracle gates no value (a zero read falls through to the chain).
 contract RollerConsolidationTest is AlphaVaultTestBase {
     event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaOut);
 
     /// @dev Registers subnet 99, wraps a deposit for alice on hotkey4, shaves the position to
-    ///      sub-floor dust, and rotates hotkey4 out so the dust is a rotated-out orphan.
+    ///      sub-floor dust, and rotates hotkey4 out so the dust sits on a rotated-out validator.
     function _seedDustOnlyVault() private returns (uint256 tokenId) {
         _registerSubnet(99, hotkey4);
         _simulateAlphaDepositHotkey(alice, 99, 10 ether, hotkey4);
@@ -25,28 +25,28 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
     }
 
     /// @dev Headline: two hotkeys rotate out at once and the roller chains the whole pile through
-    ///      both, emptying each orphan and refreshing the snapshot - no tracking, no forfeiture.
-    function test_Rebalance_ConsolidatesMultipleRotatedOrphans() public {
+    ///      both, emptying each rotated-out slot and refreshing the remembered set - no tracking, no forfeiture.
+    function test_Rebalance_ConsolidatesMultipleRotatedOutSlots() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 totalBefore = vault.totalStake(TOKEN1);
 
-        // Drop hotkey2 and hotkey3 in one rotation; the roll carries the pile through both orphans.
+        // Drop hotkey2 and hotkey3 in one rotation; the roll carries the pile through both rotated-out slots.
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey4), _weights(5000, 5000));
         vault.rebalance(NETUID1);
 
-        assertEq(_getVaultStake(hotkey2, NETUID1), 0, "first orphan consolidated");
-        assertEq(_getVaultStake(hotkey3, NETUID1), 0, "second orphan consolidated");
+        assertEq(_getVaultStake(hotkey2, NETUID1), 0, "first rotated-out slot consolidated");
+        assertEq(_getVaultStake(hotkey3, NETUID1), 0, "second rotated-out slot consolidated");
         assertEq(vault.totalStake(TOKEN1), totalBefore, "total conserved across the chained roll");
         bytes32[3] memory seen = vault.lastSeenHotkeys(TOKEN1);
         assertEq(seen[0], hotkey1);
         assertEq(seen[1], hotkey4);
-        assertEq(seen[2], bytes32(0), "snapshot refreshed to the 2-validator current set");
+        assertEq(seen[2], bytes32(0), "remembered set refreshed to the 2-validator current set");
     }
 
-    /// @dev A rotated-out sub-floor orphan with no other above-floor backing is still consolidated,
-    ///      because wrap flushes the fresh deposit BEFORE the consolidation so it seeds the roll. A
+    /// @dev Rotated-out sub-floor stake with no other above-floor backing is still consolidated,
+    ///      because wrap flushes the fresh deposit BEFORE the consolidation so the roll can start from it. A
     ///      consolidation-first order would put the sub-floor amount on the wire and revert.
-    function test_Wrap_ConsolidatesOrphanUsingFreshDeposit() public {
+    function test_Wrap_ConsolidatesRotatedOutStakeUsingFreshDeposit() public {
         uint256 tokenId = _seedDustOnlyVault();
         uint256 dust = MIN_STAKE_FLOOR - 1;
 
@@ -56,35 +56,35 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         _wrapHotkey(bob, 99, hotkey1);
 
         assertEq(vault.balanceOf(bob, tokenId), previewedShares, "mint parity with the union-priced preview");
-        assertEq(_getVaultStake(hotkey4, 99), 0, "dust orphan consolidated by the roll");
-        assertEq(vault.totalStake(tokenId), bobDeposit + dust, "orphan folded into the current-set backing");
+        assertEq(_getVaultStake(hotkey4, 99), 0, "rotated-out dust consolidated by the roll");
+        assertEq(vault.totalStake(tokenId), bobDeposit + dust, "rotated-out stake folded into the current-set backing");
         bytes32[3] memory seen = vault.lastSeenHotkeys(tokenId);
-        assertEq(seen[0], hotkey1, "snapshot refreshed to the current set");
+        assertEq(seen[0], hotkey1, "remembered set refreshed to the current set");
     }
 
-    /// @dev Full-set rotation where the RICHER orphan sits at a later snapshot index: the roll
-    ///      seeds from it, and revisiting the seed's slot must not re-add its departed balance.
-    function test_Rebalance_ConsolidatesWhenRicherOrphanSitsAtLaterIndex() public {
+    /// @dev Full-set rotation where the RICHER rotated-out slot sits at a later remembered-set index: the roll
+    ///      starts from it, and revisiting the richest slot must not re-add its departed balance.
+    function test_Rebalance_ConsolidatesWhenRicherRotatedOutSlotSitsAtLaterIndex() public {
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(3000, 7000));
         _depositAndWrap(alice, NETUID1, 10 ether);
         uint256 totalBefore = vault.totalStake(TOKEN1);
 
-        // Rotate BOTH validators out; the 70%-weighted hotkey2 is the richest orphan at index 1.
+        // Rotate BOTH validators out; the 70%-weighted hotkey2 is the richest rotated-out slot at index 1.
         _setValidators(NETUID1, _hotkeys(hotkey4), _weights(10_000));
         vm.recordLogs();
         vault.rebalance(NETUID1);
 
         assertEq(_countRebalancedLogs(vm.getRecordedLogs()), 0, "pure consolidation emits nothing");
-        assertEq(_getVaultStake(hotkey1, NETUID1), 0, "earlier orphan consolidated");
-        assertEq(_getVaultStake(hotkey2, NETUID1), 0, "seed orphan consolidated");
+        assertEq(_getVaultStake(hotkey1, NETUID1), 0, "earlier rotated-out slot consolidated");
+        assertEq(_getVaultStake(hotkey2, NETUID1), 0, "richest rotated-out slot consolidated");
         assertEq(_getVaultStake(hotkey4, NETUID1), totalBefore, "whole pile landed on the current set");
         assertEq(vault.totalStake(TOKEN1), totalBefore, "total conserved");
     }
 
-    /// @dev A funded orphan is consolidated by rolling the union-richest pile through it: the pile
-    ///      hops onto the orphan, returns carrying its balance, and the re-split restores targets.
+    /// @dev A funded rotated-out slot is consolidated by rolling the union-richest pile through it: the pile
+    ///      hops onto the rotated-out slot, returns carrying its balance, and the re-split restores targets.
     ///      Only the alignment move logs; the roll hops are silent.
-    function test_Rebalance_RollsPileThroughFundedOrphan() public {
+    function test_Rebalance_RollsPileThroughFundedRotatedOutSlot() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(5000, 5000));
         uint256 target = _weighted(30 ether, 5000);
@@ -94,7 +94,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
 
         assertEq(_countRebalancedLogs(vm.getRecordedLogs()), 1, "roll hops are silent; only the alignment logs");
 
-        assertEq(_getVaultStake(hotkey3, NETUID1), 0, "orphan consolidated by the roll");
+        assertEq(_getVaultStake(hotkey3, NETUID1), 0, "rotated-out slot consolidated by the roll");
         assertEq(_getVaultStake(hotkey1, NETUID1), target);
         assertEq(_getVaultStake(hotkey2, NETUID1), target);
         assertEq(vault.totalStake(TOKEN1), 30 ether, "total conserved");
@@ -112,7 +112,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(received, previewedAssets, "zero oracle read falls through to the chain floor");
     }
 
-    // All union balances sub-floor with a rotated-out orphan: no pile can clear the floor, so
+    // All union balances sub-floor with rotated-out stake: no pile can clear the floor, so
     // consolidation is rejected up front while the TAO rail stays open.
     function test_RevertWhen_ConsolidatingDustOnlyVault() public {
         _seedDustOnlyVault();
@@ -146,7 +146,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(vault.totalStake(tokenId), 0, "nothing left behind");
     }
 
-    // At a zero price read the consolidation cannot label the seed, so it falls through and the chain's
+    // At a zero price read the consolidation cannot label the richest balance, so it falls through and the chain's
     // own full-precision floor rejects the roll with the raw error.
     function test_RevertWhen_ConsolidatingDustOnlyVaultAtZeroPrice() public {
         _seedDustOnlyVault();
@@ -196,7 +196,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
     }
 
     /// @dev A consolidation move the chain rejects reverts the whole call: nothing moves, the
-    ///      snapshot is not refreshed, and the orphan is never dropped.
+    ///      remembered set is not refreshed, and the rotated-out stake is never dropped.
     function test_RevertWhen_RollerMoveFails() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 totalBefore = vault.totalStake(TOKEN1);
@@ -207,9 +207,9 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
 
         assertEq(vault.totalStake(TOKEN1), totalBefore, "backing unchanged after the reverted roll");
-        assertGt(_getVaultStake(hotkey3, NETUID1), 0, "orphan not dropped");
+        assertGt(_getVaultStake(hotkey3, NETUID1), 0, "rotated-out stake not dropped");
         bytes32[3] memory seen = vault.lastSeenHotkeys(TOKEN1);
-        assertEq(seen[2], hotkey3, "snapshot still references the pre-rotation set");
+        assertEq(seen[2], hotkey3, "remembered set still references the pre-rotation set");
     }
 
     /// @dev Oracle-soft wrap: when the spot price reads 0 the DepositTooSmall precheck is skipped
