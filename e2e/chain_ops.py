@@ -134,7 +134,7 @@ def transfer_stake(
     receipt = sub.submit_extrinsic(extrinsic, wait_for_inclusion=True)
     if not receipt.is_success:
         # `error_message` is the metadata-decoded module error, e.g.
-        # {'type': 'Module', 'name': 'TransferDisallowed', ...} — callers grep the name.
+        # {'type': 'Module', 'name': 'TransferDisallowed', ...} - callers grep the name.
         print(f"FAIL: {receipt.error_message}", file=sys.stderr)
         sys.exit(1)
     print(f"ok block={receipt.block_hash}")

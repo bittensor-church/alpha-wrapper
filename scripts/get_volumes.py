@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Print unit-safe deposit and redemption metrics for an AlphaVault token as one CSV row."""
+"""Print unit-safe deposit and unwrap metrics for an AlphaVault token as one CSV row."""
 
 import argparse
 import sys
@@ -29,7 +29,7 @@ def build_volume_row(
     alpha_requested = _sum(tao_unwrap_logs, "alphaRequested")
     tao_from_alpha_sales = _sum(tao_unwrap_logs, "taoOut")
     tao_from_dissolutions = _sum(dissolved_unwrap_logs, "taoOut")
-    redemption_count = len(alpha_unwrap_logs) + len(tao_unwrap_logs) + len(dissolved_unwrap_logs)
+    unwrap_count = len(alpha_unwrap_logs) + len(tao_unwrap_logs) + len(dissolved_unwrap_logs)
     shares_burned = (
         _sum(alpha_unwrap_logs, "shares")
         + _sum(tao_unwrap_logs, "shares")
@@ -52,7 +52,7 @@ def build_volume_row(
         "dissolved_unwrap_count": len(dissolved_unwrap_logs),
         "dissolved_unwrap_shares_burned": _sum(dissolved_unwrap_logs, "shares"),
         "tao_from_dissolutions_wei": tao_from_dissolutions,
-        "redemption_count": redemption_count,
+        "unwrap_count": unwrap_count,
         "shares_burned": shares_burned,
         "tao_received_wei": tao_from_alpha_sales + tao_from_dissolutions,
     }

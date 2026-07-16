@@ -75,7 +75,7 @@ contract ValidatorRegistryTest is AttestationHelper {
 
     /// @dev Sign with each privkey in the order given. Caller is responsible for ordering
     ///      `pks` so recovered addresses ascend; the contract's `_verifySignatures` enforces
-    ///      that. PK address order is PK2 < PK3 < PK1 < PK_UNKNOWN — the `_pksN` helpers
+    ///      that. PK address order is PK2 < PK3 < PK1 < PK_UNKNOWN - the `_pksN` helpers
     ///      below are written with this in mind.
     function _sign(ValidatorRegistry.WeightAttestation memory att, uint256[] memory pks)
         private

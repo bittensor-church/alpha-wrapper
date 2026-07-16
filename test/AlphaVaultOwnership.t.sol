@@ -35,7 +35,7 @@ contract AlphaVaultOwnershipTest is AlphaVaultTestBase {
         vm.prank(alice);
         vault.acceptOwnership();
 
-        // After acceptance: control flips — old owner is locked out, new owner is in.
+        // After acceptance: control flips - old owner is locked out, new owner is in.
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, owner));
         vault.setMinStakeTaoFloor(456);
         vm.prank(alice);

@@ -9,7 +9,7 @@ library StorageQueryReader {
 
     address constant STORAGE_QUERY = 0x0000000000000000000000000000000000000807;
 
-    // twox_128("SubtensorModule") -- LE integer byte order, verified against subtensor source
+    // twox_128("SubtensorModule") -- little-endian integer byte order, verified against subtensor source
     bytes16 constant PALLET_PREFIX = 0x658faa385070e074c85bf6b568cf0555;
 
     // twox_128("NetworkRegisteredAt")
@@ -24,7 +24,7 @@ library StorageQueryReader {
         bytes memory key = _buildKey(NETWORK_REGISTERED_AT, netuid);
         bytes memory result = _query(key);
         if (result.length < 8) return 0;
-        return _decodeLEu64(result);
+        return _decodeLittleEndianU64(result);
     }
 
     /// @notice Check whether `netuid` is currently in subtensor's DissolvedNetworks cleanup queue.
@@ -40,10 +40,10 @@ library StorageQueryReader {
         // SCALE compact length prefix: single-byte mode has (length << 2) | 0b00 in the low byte.
         uint8 firstByte = uint8(result[0]);
         if ((firstByte & 0x03) != 0) revert DissolvedQueueReadFailed();
-        uint256 len = uint256(firstByte >> 2);
+        uint256 entryCount = uint256(firstByte >> 2);
 
         // Each NetUid is SCALE-encoded as a 2-byte little-endian u16.
-        for (uint256 i = 0; i < len; i++) {
+        for (uint256 i = 0; i < entryCount; i++) {
             uint256 pos = 1 + i * 2;
             if (pos + 1 >= result.length) revert DissolvedQueueReadFailed();
             uint16 entry = uint16(uint8(result[pos])) | (uint16(uint8(result[pos + 1])) << 8);
@@ -72,9 +72,9 @@ library StorageQueryReader {
     }
 
     /// @dev Decode a SCALE-encoded u64 (8 bytes, little-endian) from the start of `data`.
-    function _decodeLEu64(bytes memory data) private pure returns (uint64 val) {
+    function _decodeLittleEndianU64(bytes memory data) private pure returns (uint64 value) {
         for (uint8 i; i < 8;) {
-            val |= uint64(uint8(data[i])) << (i * 8);
+            value |= uint64(uint8(data[i])) << (i * 8);
             unchecked {
                 ++i;
             }

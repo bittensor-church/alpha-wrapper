@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# alpha-wrapper — Local Chain E2E: subnet deregistration (dissolution)
+# alpha-wrapper - Local Chain E2E: subnet deregistration (dissolution)
 # ============================================================================
 #
 # Prerequisites:
@@ -15,7 +15,7 @@
 #   TAO. Two users wrap a shared position on one subnet, and raw alpha is parked in a
 #   never-wrapped mailbox on another; the test dissolves both and checks each user
 #   recovers their pro-rata share of the position, and the parked (unprocessed) mailbox
-#   alpha is recoverable as native TAO too — while the alpha-based exits no longer apply
+#   alpha is recoverable as native TAO too - while the alpha-based exits no longer apply
 #   (they revert without touching shares) and a position on an untouched subnet keeps
 #   exiting normally.
 
@@ -68,7 +68,7 @@ MAIL_MAILBOX_SUB=$(h160_to_substrate_b32 "$MAIL_MAILBOX")
 MAIL_MAILBOX_SS58=$(h160_to_ss58 "$MAIL_MAILBOX")
 info "User mailbox on netuid $MAIL_NET: $MAIL_MAILBOX"
 
-info "Transferring $PER_HOTKEY_RAW RAO from Alice → mailbox under ${MAIL_HK_B32:0:18}..."
+info "Transferring $PER_HOTKEY_RAW RAO from Alice -> mailbox under ${MAIL_HK_B32:0:18}..."
 transfer_stake_py "$MAIL_MAILBOX_SS58" "$MAIL_HK_SS58" "$MAIL_NET" "$PER_HOTKEY_RAW" | tail -1
 
 MAIL_ALPHA=$(get_stake "$MAIL_HK_B32" "$MAIL_MAILBOX_SUB" "$MAIL_NET")
@@ -105,7 +105,7 @@ cast call "$VAULT_ADDR" "sharePrice(uint256)(uint256)" "$DEAD_TID" --rpc-url "$R
     && fail "sharePrice did not revert for the dissolved subnet"
 ok "Dissolved: position clone holds $DEAD_CLONE_TAO wei, mailbox $MAIL_MAILBOX_TAO wei; alpha zeroed, sharePrice reverts"
 
-log "Phase 10: Alpha-selling exits revert — dissolution left no alpha to sell"
+log "Phase 10: Alpha-selling exits revert - dissolution left no alpha to sell"
 
 vault_send_expect_revert 2000000 "unwrapForTao did NOT revert on the dissolved subnet" \
     "unwrapForTao(uint256,uint256,uint256)" "$DEAD_TID" "$USER1_SHARES" 0
@@ -156,7 +156,7 @@ python3 scripts/get_volumes.py \
         --column-eq "alpha_unwrap_count=0" \
         --column-eq "tao_unwrap_count=0" \
         --column-eq "dissolved_unwrap_count=2" \
-        --column-eq "redemption_count=2" \
+        --column-eq "unwrap_count=2" \
         --column-eq "tao_from_alpha_sales_wei=0" \
         --column-positive alpha_deposited_rao \
         --column-positive shares_minted \
@@ -169,7 +169,7 @@ ok "get_volumes reports dissolved TAO separately from live alpha volume"
 log "Phase 12: Recover the never-wrapped mailbox as native TAO"
 
 [[ "$(cast code "$MAIL_MAILBOX" --rpc-url "$RPC_URL")" == "0x" ]] \
-    || fail "mailbox clone was materialized before reclaim — lazy-deploy path not exercised"
+    || fail "mailbox clone was materialized before reclaim - lazy-deploy path not exercised"
 MAIL_MAILBOX_TAO_PRE=$(evm_balance "$MAIL_MAILBOX")
 USER_TAO_PRE=$(user_tao_wei)
 vault_send 2000000 "reclaimTaoFromMailbox failed" \
@@ -195,5 +195,5 @@ vault_send 2500000 "unwrapForTao on the surviving subnet failed" \
 [[ "$(vault_shares "$LIVE_TID")" == "0" ]] || fail "shares still outstanding after unwrapForTao on the live subnet"
 USER_TAO_POST=$(user_tao_wei)
 GAINED=$(assert_tao_gain "$USER_TAO_PRE" "$USER_TAO_POST" "$LIVE_QUOTE" \
-    "surviving-subnet unwrapForTao payout off the alpha→TAO quote")
+    "surviving-subnet unwrapForTao payout off the alpha->TAO quote")
 ok "Surviving subnet paid $GAINED wei (matches quote $LIVE_QUOTE RAO); dissolution was scoped to netuid $DEAD_NET"

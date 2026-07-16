@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# alpha-wrapper — Local Chain E2E: convicted (conviction-locked) alpha
+# alpha-wrapper - Local Chain E2E: convicted (conviction-locked) alpha
 # ============================================================================
 #
 # Prerequisites:
@@ -15,8 +15,8 @@
 #   coldkeys reject locked inflow (the accept-locked flag defaults OFF and no
 #   precompile can flip it). A deposit dipping into locked mass therefore
 #   reverts at the depositor's own transferStake, before the vault is involved;
-#   the free portion wraps normally; and vault flows — rebalance, unwrap
-#   (including to a coldkey that itself holds a lock), unwrapForTao — never
+#   the free portion wraps normally; and vault flows - rebalance, unwrap
+#   (including to a coldkey that itself holds a lock), unwrapForTao - never
 #   touch lock state.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -74,7 +74,7 @@ lock_stake_py "$TEST_HOTKEY_SS58" "$TEST_NETUID" "$LOCK_AMOUNT_RAW" | tail -1
 INITIAL_LOCKED_ALPHA=$(alice_locked_alpha "$TEST_NETUID" "$TEST_HOTKEY_SS58")
 [[ "$INITIAL_LOCKED_ALPHA" == "$LOCK_AMOUNT_RAW" ]] \
     || fail "lock not registered exactly (asked $LOCK_AMOUNT_RAW, stored $INITIAL_LOCKED_ALPHA)"
-ok "Lock live on chain: $INITIAL_LOCKED_ALPHA RAO locked (movable margin ≈ $UNLOCKED_MARGIN_RAW RAO + emissions)"
+ok "Lock live on chain: $INITIAL_LOCKED_ALPHA RAO locked (movable margin ~ $UNLOCKED_MARGIN_RAW RAO + emissions)"
 
 log "Phase 7: Depositing MORE than the movable amount is refused by the chain"
 
@@ -98,7 +98,7 @@ ok "Chain refused with AccountRejectsLockedAlpha (mailbox rejects locked inflow 
 
 MAILBOX_ALPHA_AFTER=$(get_stake "$TEST_HOTKEY_B32" "$USER_MAILBOX_COLDKEY_B32" "$TEST_NETUID")
 [[ "$MAILBOX_ALPHA_AFTER" == "$MAILBOX_ALPHA_BEFORE" ]] \
-    || fail "mailbox balance changed by a refused transfer ($MAILBOX_ALPHA_BEFORE → $MAILBOX_ALPHA_AFTER RAO)"
+    || fail "mailbox balance changed by a refused transfer ($MAILBOX_ALPHA_BEFORE -> $MAILBOX_ALPHA_AFTER RAO)"
 ALICE_TEST_HOTKEY_STAKE_AFTER=$(get_stake "$TEST_HOTKEY_B32" "$ALICE_COLDKEY_B32" "$TEST_NETUID")
 assert_ge "$ALICE_TEST_HOTKEY_STAKE_AFTER" "$OVER_MOVABLE_AMOUNT" "Alice's stake decreased despite the refused transfer"
 ok "Refusal was atomic: mailbox unchanged ($MAILBOX_ALPHA_AFTER RAO), Alice's stake intact"
@@ -108,7 +108,7 @@ vault_send_expect_revert 1500000 "wrap with no arrived deposit did NOT revert" \
     "wrap(address,uint256,bytes32)" "$WRAPPER_ADDR" "$TEST_NETUID" "$TEST_HOTKEY_B32"
 SHARES_AFTER_REVERTED_WRAP=$(vault_shares "$TEST_TOKEN_ID")
 [[ "$SHARES_AFTER_REVERTED_WRAP" == "$SHARES_BEFORE_REVERTED_WRAP" ]] \
-    || fail "shares changed after a reverted wrap ($SHARES_BEFORE_REVERTED_WRAP → $SHARES_AFTER_REVERTED_WRAP)"
+    || fail "shares changed after a reverted wrap ($SHARES_BEFORE_REVERTED_WRAP -> $SHARES_AFTER_REVERTED_WRAP)"
 ok "wrap reverted (ZeroAmount: mailbox is provably empty); shares unchanged ($SHARES_AFTER_REVERTED_WRAP)"
 
 log "Phase 8: The movable portion of the locked wallet wraps normally"
@@ -169,11 +169,11 @@ USER_TAO_WEI_AFTER=$(user_tao_wei)
 FINAL_SHARES=$(vault_shares "$TEST_TOKEN_ID")
 [[ "$FINAL_SHARES" == "0" ]] || fail "shares still $FINAL_SHARES after unwrapForTao"
 TAO_GAINED_WEI=$(assert_tao_gain "$USER_TAO_WEI_BEFORE" "$USER_TAO_WEI_AFTER" "$REMAINING_TAO_QUOTE" \
-    "unwrapForTao payout off the alpha→TAO quote")
+    "unwrapForTao payout off the alpha->TAO quote")
 ok "Remaining shares exited as TAO: gained $TAO_GAINED_WEI wei (quote $REMAINING_TAO_QUOTE RAO)"
 
 log "E2E complete (convicted alpha)"
 echo "  AlphaVault:        $VAULT_ADDR"
 echo "  Subnet under test: netuid $TEST_NETUID / tokenId $TEST_TOKEN_ID"
-echo "  Alice lock:        $LOCKED_ALPHA_AFTER_UNWRAP RAO locked → ${TEST_HOTKEY_SS58:0:12}..."
+echo "  Alice lock:        $LOCKED_ALPHA_AFTER_UNWRAP RAO locked -> ${TEST_HOTKEY_SS58:0:12}..."
 ok "All phases passed"

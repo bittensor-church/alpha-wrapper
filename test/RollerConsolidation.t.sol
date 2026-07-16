@@ -8,7 +8,7 @@ import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 /// @dev Exercises the whole-balance consolidation "roller": rotated-out stake (including sub-floor
 ///      dust) is rolled onto the current set with pile-sized, non-decreasing hops (the seed is the
-///      binding floor check), any failure reverts atomically, redemption gathers for a single exact
+///      binding floor check), any failure reverts atomically, an unwrap gathers for a single exact
 ///      delivery, and the spot oracle gates no value (a zero read falls through to the chain).
 contract RollerConsolidationTest is AlphaVaultTestBase {
     event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaOut);
@@ -44,8 +44,8 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
     }
 
     /// @dev A rotated-out sub-floor orphan with no other above-floor backing is still consolidated,
-    ///      because wrap flushes the fresh deposit BEFORE the sweep so it seeds the roll. A
-    ///      sweep-first order would put the sub-floor amount on the wire and revert.
+    ///      because wrap flushes the fresh deposit BEFORE the consolidation so it seeds the roll. A
+    ///      consolidation-first order would put the sub-floor amount on the wire and revert.
     function test_Wrap_ConsolidatesOrphanUsingFreshDeposit() public {
         uint256 tokenId = _seedDustOnlyVault();
         uint256 dust = MIN_STAKE_FLOOR - 1;
@@ -121,7 +121,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         vault.rebalance(99);
     }
 
-    // A dust-only vault rejects unwrap inside the sweep, before any chain call.
+    // A dust-only vault rejects unwrap inside the consolidation, before any chain call.
     function test_RevertWhen_UnwrappingDustOnlyVault() public {
         uint256 tokenId = _seedDustOnlyVault();
 
@@ -146,7 +146,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(vault.totalStake(tokenId), 0, "nothing left behind");
     }
 
-    // At a zero price read the sweep cannot label the seed, so it falls through and the chain's
+    // At a zero price read the consolidation cannot label the seed, so it falls through and the chain's
     // own full-precision floor rejects the roll with the raw error.
     function test_RevertWhen_ConsolidatingDustOnlyVaultAtZeroPrice() public {
         _seedDustOnlyVault();

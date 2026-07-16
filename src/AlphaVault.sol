@@ -21,7 +21,7 @@ import { StorageQueryReader } from "./libraries/StorageQueryReader.sol";
 ///         Each subnet has its own EIP-1167 clone holding alpha under an isolated coldkey.
 ///
 /// @dev Architecture:
-///   - Token ID = (netuid | subnetregistrationBlock << 16). No registration needed — vaults materialize on first deposit.
+///   - Token ID = (netuid | registrationBlock << 16). No registration needed - vaults materialize on first deposit.
 ///   - Each vault tracks its own sharePrice independently: totalStake(netuid) / totalShares(netuid).
 ///   - EIP-1167 clones serve as deterministic "Mailbox" deposit addresses per (user, netuid).
 ///   - Validators + weights are read exclusively from ValidatorRegistry (no on-chain fallback).
@@ -33,12 +33,12 @@ import { StorageQueryReader } from "./libraries/StorageQueryReader.sol";
 ///     stranded. The last-seen validator set is tracked per token.
 ///   - Per-subnet clones isolate alpha and TAO returned by dissolved subnets.
 contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
-    // ──────────────────── Immutables ────────────────────────────────────────────
+    // -------------------- Immutables --------------------------------------------
     address public immutable mailboxLogic;
     address public immutable subnetLogic;
     IValidatorRegistry public immutable validatorRegistry;
 
-    // ──────────────────── State ─────────────────────────────────────────────────
+    // -------------------- State -------------------------------------------------
     mapping(address => bool) public cloneDeployed;
     mapping(uint256 => address) public subnetClone;
 
@@ -52,7 +52,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///         attempts doomed moves that revert at full gas cost.
     uint256 public minStakeTaoFloor;
 
-    // ──────────────────── Precision ─────────────────────────────────────────────
+    // -------------------- Precision ---------------------------------------------
     /// @dev Virtual shares/assets to prevent inflation attacks (ERC4626 pattern).
     uint256 private constant VIRTUAL_SHARES = 1e9;
     uint256 private constant VIRTUAL_ASSETS = 1;
@@ -66,12 +66,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///      always below the read plus one step.
     uint256 private constant ALPHA_PRICE_QUANTUM_E18 = 1e9;
 
-    // ──────────────────── Events ────────────────────────────────────────────────
+    // -------------------- Events ------------------------------------------------
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
-    /// @notice A live-subnet alpha redemption. `alphaOut` is the alpha RAO sent by the successful
+    /// @notice A live-subnet alpha unwrap. `alphaOut` is the alpha RAO sent by the successful
     ///         transfer, capped at the backing available after gather rounding.
     event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaOut);
-    /// @notice A dissolved-subnet redemption. `taoOut` is native TAO paid in EVM wei.
+    /// @notice A dissolved-subnet unwrap. `taoOut` is native TAO paid in EVM wei.
     event DissolvedSubnetUnwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 taoOut);
     /// @notice Emitted only for weight-alignment moves; consolidation and gather hops are silent, so
     ///         off-chain volume comes from Deposited and the Unwrapped / UnwrappedForTao /
@@ -79,8 +79,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///         stake moves.
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
-    /// @notice A live-subnet sale redemption. `alphaRequested` is the nominal alpha entitlement in
-    ///         RAO; `taoOut` is the actual native TAO payout in EVM wei.
+    /// @notice A live-subnet unwrap paid by selling the alpha. `alphaRequested` is the nominal
+    ///         alpha entitlement in RAO; `taoOut` is the actual native TAO payout in EVM wei.
     event UnwrappedForTao(
         address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaRequested, uint256 taoOut
     );
@@ -89,7 +89,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     );
     event MinStakeTaoFloorUpdated(uint256 oldValue, uint256 newValue);
 
-    // ──────────────────── Errors ────────────────────────────────────────────────
+    // -------------------- Errors ------------------------------------------------
     error ZeroAmount();
     error ZeroAddress();
     error ZeroHotkey();
@@ -111,7 +111,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     error ConsolidationBelowFloor();
     error GatherBelowFloor();
 
-    // ──────────────────── Constructor ───────────────────────────────────────────
+    // -------------------- Constructor -------------------------------------------
     constructor(string memory _uri, address _mailboxLogic, address _subnetLogic, address _validatorRegistry)
         ERC1155(_uri)
         Ownable(msg.sender)
@@ -125,20 +125,20 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         minStakeTaoFloor = INITIAL_STAKE_FLOOR;
     }
 
-    // ──────────────────── Token ID & Subnet Proxy ────────────────────────────────
+    // -------------------- Token ID & Subnet Proxy --------------------------------
 
     /// @notice Compute the current ERC1155 tokenId for a netuid.
     /// @dev    Low 16 bits = netuid, upper bits = subnet registration block.
     ///         Reverts with `SubnetNotRegistered` if no subnet is currently registered at `netuid`.
     /// @param  netuid Subnet id.
-    /// @return tokenId Packed (regBlock << 16) | netuid identifier.
+    /// @return tokenId Packed (registrationBlock << 16) | netuid identifier.
     function currentTokenId(uint256 netuid) public view returns (uint256) {
         if (netuid > type(uint16).max) revert NetuidOutOfRange();
         // forge-lint: disable-next-line(unsafe-typecast)
         uint16 nid = uint16(netuid);
-        uint64 regBlock = StorageQueryReader.readNetworkRegisteredAt(nid);
-        if (regBlock == 0) revert SubnetNotRegistered();
-        return uint256(nid) | (uint256(regBlock) << 16);
+        uint64 registrationBlock = StorageQueryReader.readNetworkRegisteredAt(nid);
+        if (registrationBlock == 0) revert SubnetNotRegistered();
+        return uint256(nid) | (uint256(registrationBlock) << 16);
     }
 
     /// @notice Deploy the per-subnet clone that will hold this subnet's alpha under an isolated coldkey.
@@ -149,7 +149,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         _deploySubnetClone(tokenId);
     }
 
-    // ──────────────────── Deposit Flow ──────────────────────────────────────────
+    // -------------------- Deposit Flow ------------------------------------------
 
     /// @notice Predict the mailbox clone address for a user on a subnet.
     function getDepositAddress(address user, uint256 netuid) public view returns (address) {
@@ -168,7 +168,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///         parked under a non-attested hotkey.
     ///         Reverts `DepositTooSmall` when the deposit's tao value is below the chain's stake
     ///         floor at a readable price; at a zero price read the flush falls through to the chain.
-    ///         The fresh deposit lands before the consolidation sweep so it seeds the roll, letting
+    ///         The fresh deposit lands before the consolidation so it seeds the roll, letting
     ///         a rotated-out dust orphan be consolidated even when it is the only other balance.
     ///         Rebalance moves below the stake floor are skipped pre-call, so small deposits may
     ///         leave the position drifted from target weights until a later deposit or unwrap
@@ -206,9 +206,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
         if (alphaPriceE18 != 0 && _isBelowFloorAtReadPrice(totalDeposit, alphaPriceE18)) revert DepositTooSmall();
 
-        // Flush before the sweep: the fresh deposit seeds the roll.
+        // Flush before the consolidation: the fresh deposit seeds the roll.
         DepositMailbox(payable(userClone)).flush(destColdkey, chosenHotkey, netuid, totalDeposit);
-        _sweepRotatedStake(tokenId, clone, destColdkey, hotkeys, alphaPriceE18);
+        _consolidateRotatedStake(tokenId, clone, destColdkey, hotkeys, alphaPriceE18);
 
         uint256 totalAlpha = _rebalance(tokenId, clone, hotkeys, weights, count, destColdkey, alphaPriceE18);
 
@@ -221,11 +221,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         emit Deposited(user, tokenId, totalDeposit, shares);
     }
 
-    // ──────────────────── Unwrap Flow ─────────────────────────────────────────
+    // -------------------- Unwrap Flow -----------------------------------------
 
-    /// @notice Burn shares and redeem the underlying position.
+    /// @notice Burn shares and pay out the underlying position.
     /// @dev    Dispatches on subnet state:
-    ///           - permanently dissolved (tokenId's regBlock no longer current): pays pro-rata
+    ///           - permanently dissolved (tokenId's registrationBlock no longer current): pays pro-rata
     ///             native TAO from the clone's refund balance. Reverts
     ///             `SubnetInDissolutionBlackoutPeriod` if subtensor cleanup is still in progress.
     ///           - live: consolidates the position onto one hotkey and delivers the full pro-rata
@@ -238,7 +238,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///             chain's floor, `GatherBelowFloor` when the gather seed provably cannot clear it,
     ///             and `ConsolidationBelowFloor` when a pending orphan consolidation cannot clear
     ///             it; such positions exit via `unwrapForTao`.
-    /// @param  tokenId              ERC1155 tokenId identifying the (netuid, regBlock) position.
+    /// @param  tokenId              ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @param  shares               Shares to burn.
     /// @param  userSubstrateColdkey Destination coldkey for alpha on the live path (unused on dissolved path).
     function unwrap(uint256 tokenId, uint256 shares, bytes32 userSubstrateColdkey) external nonReentrant {
@@ -248,15 +248,15 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
 
         uint16 netuid = _netuid(tokenId);
         if (_isIssuedForDissolvedSubnet(tokenId)) {
-            _redeemFromDissolvedSubnet(tokenId, shares, clone, netuid);
+            _unwrapFromDissolvedSubnet(tokenId, shares, clone, netuid);
         } else {
-            _redeem(tokenId, shares, userSubstrateColdkey, clone, netuid);
+            _unwrapFromLiveSubnet(tokenId, shares, userSubstrateColdkey, clone, netuid);
         }
     }
 
     /// @notice Burn vault shares pro-rata and pay the caller native TAO from selling the backing alpha.
     /// @dev    Full-balance sells run bare (floor-exempt on the chain) and their failures bubble.
-    ///         A full burn redeems the exact backing, so every slot drains fully and nothing is
+    ///         A full burn claims the exact backing, so every slot drains fully and nothing is
     ///         withheld - the only exit for a sub-floor position. On a partial burn the remainder
     ///         is sold only when the chain is sure to take it cleanly - to within one RAO of quote
     ///         rounding, and provided the floor tracks the chain's minimum; what cannot be sold
@@ -272,16 +272,15 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         if (shares == 0) revert ZeroAmount();
         if (balanceOf(msg.sender, tokenId) < shares) revert InsufficientShares();
         address clone = subnetClone[tokenId];
-        if (clone == address(0)) revert NothingToUnwrap();
         uint16 netuid = _netuid(tokenId);
 
-        (bytes32[6] memory hotkeys, uint256[6] memory balances, uint256 total) = _totalStake(tokenId, netuid);
+        (bytes32[6] memory hotkeys, uint256[6] memory balances, uint256 total) = _unionStake(tokenId, netuid);
         // Dissolution permanently zeroes the alpha balance, so a non-zero total already implies
         // a live subnet and a zero total cannot be exited via this rail regardless of cause.
         if (total == 0) revert NothingToUnwrap();
 
         uint256 supply = totalSupply(tokenId);
-        // A full burn redeems the whole backing exactly: the rounded-down conversion can price it
+        // A full burn claims the whole backing exactly: the rounded-down conversion can price it
         // a few RAO short, which would degrade the floor-exempt full drains into floored partials
         // the chain rejects - locking the last holder's sub-floor dust out of its only exit.
         uint256 assets = shares == supply ? total : _assetsFor(total, supply, shares);
@@ -305,16 +304,20 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         emit UnwrappedForTao(msg.sender, tokenId, shares, assets, taoOut);
     }
 
-    function _redeem(uint256 tokenId, uint256 shares, bytes32 userSubstrateColdkey, address clone, uint16 netuid)
-        private
-    {
+    function _unwrapFromLiveSubnet(
+        uint256 tokenId,
+        uint256 shares,
+        bytes32 userSubstrateColdkey,
+        address clone,
+        uint16 netuid
+    ) private {
         (bytes32[3] memory hotkeys, uint16[3] memory weights, uint256 validatorCount) = _resolveValidators(netuid);
         bytes32 coldkey = _coldkeyOf(clone);
         // Nothing on this path trades against the pool, so one price read holds for the whole call.
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
-        _sweepRotatedStake(tokenId, clone, coldkey, hotkeys, alphaPriceE18);
+        _consolidateRotatedStake(tokenId, clone, coldkey, hotkeys, alphaPriceE18);
 
-        // Post-sweep the whole backing sits on the current set, so its balances are the full union.
+        // Post-consolidation the whole backing sits on the current set, so its balances are the full union.
         uint256[3] memory balances = _fetchBalances(hotkeys, validatorCount, coldkey, netuid);
         uint256 totalAlpha = _sumBalances(balances);
         if (totalAlpha == 0) revert NothingToUnwrap();
@@ -344,16 +347,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         emit Unwrapped(msg.sender, tokenId, shares, alphaOut);
     }
 
-    /// @dev Deliver `assets` to `userColdkey`, then re-split the remainder toward `weights`. When one
-    ///      hotkey already covers the request it is transferred directly; otherwise the current-set
-    ///      pile is gathered onto a single hotkey first and delivered in one transfer. Every hop and
-    ///      the delivery move the balance read live off the chain: a same-subnet move can credit its
-    ///      destination up to one RAO short, so carrying the arithmetic sum would over-ask the next
-    ///      hop. The delivery is capped at what the gathered slot actually holds: a multi-hop gather
-    ///      can land a few RAO under `assets`, and that shortfall is bounded dust. All moves and the
-    ///      transfer are bare: any rejection reverts the redemption. A gather whose seed (the largest
-    ///      slot) provably cannot clear the chain's floor on its first hop is rejected up front as
-    ///      `GatherBelowFloor`.
+    /// @dev Delivers `assets` to `userColdkey` in one transfer - gathering the position onto a
+    ///      single hotkey first when no slot covers the request - then re-splits what remains toward
+    ///      `weights`. Reverts `GatherBelowFloor` when the gather seed (the largest slot) provably
+    ///      cannot clear the stake floor.
     function _deliverAndAlign(
         uint256 tokenId,
         address clone,
@@ -408,7 +405,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         _alignToWeights(tokenId, clone, hotkeys, weights, postBalances, alphaPriceE18);
     }
 
-    function _redeemFromDissolvedSubnet(uint256 tokenId, uint256 shares, address clone, uint16 netuid) private {
+    function _unwrapFromDissolvedSubnet(uint256 tokenId, uint256 shares, address clone, uint16 netuid) private {
         if (StorageQueryReader.isNetuidInDissolvedQueue(netuid)) revert SubnetInDissolutionBlackoutPeriod();
         uint256 cloneBalance = clone.balance;
         if (cloneBalance == 0) revert NothingToUnwrap();
@@ -420,7 +417,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         emit DissolvedSubnetUnwrapped(msg.sender, tokenId, shares, userTao);
     }
 
-    // ──────────────────── Rebalance ───────────────────────────────────────────
+    // -------------------- Rebalance -------------------------------------------
 
     /// @notice Rebalance vault stake for a subnet toward registry target weights.
     ///         Anyone can call this (e.g. after validator registry update).
@@ -438,7 +435,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         (bytes32[3] memory hotkeys, uint16[3] memory weights, uint256 validatorCount) = _resolveValidators(nid);
         bytes32 coldkey = _coldkeyOf(clone);
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
-        _sweepRotatedStake(tokenId, clone, coldkey, hotkeys, alphaPriceE18);
+        _consolidateRotatedStake(tokenId, clone, coldkey, hotkeys, alphaPriceE18);
         _rebalance(tokenId, clone, hotkeys, weights, validatorCount, coldkey, alphaPriceE18);
     }
 
@@ -500,22 +497,22 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         uint256[3] memory targets,
         uint256 alphaPriceE18
     ) private returns (bool) {
-        uint256 overIdx;
+        uint256 overIndex;
         uint256 maxOver;
-        uint256 underIdx;
+        uint256 underIndex;
         uint256 maxUnder;
         for (uint256 i; i < 3;) {
             if (balances[i] > targets[i]) {
                 uint256 over = balances[i] - targets[i];
                 if (over > maxOver) {
                     maxOver = over;
-                    overIdx = i;
+                    overIndex = i;
                 }
             } else if (balances[i] < targets[i]) {
                 uint256 under = targets[i] - balances[i];
                 if (under > maxUnder) {
                     maxUnder = under;
-                    underIdx = i;
+                    underIndex = i;
                 }
             }
             unchecked {
@@ -525,7 +522,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
 
         if (maxOver == 0 || maxUnder == 0) return false;
 
-        uint256 moveAmt = maxOver < maxUnder ? maxOver : maxUnder;
+        uint256 moveAmount = maxOver < maxUnder ? maxOver : maxUnder;
         // A rejected precompile call consumes all gas forwarded to it, so a doomed move must never
         // be attempted (swallowing the failure instead would burn nearly all of the tx gas). The
         // skip decision is exact, not best-effort: nothing on this path trades against the pool, so
@@ -533,22 +530,22 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         // passes this check cannot be rejected as too small. Skipping (including every move at a
         // zero price read) leaves the split drifted until a later call retries it; harmless, since
         // share value depends on the total stake, not its split.
-        if (alphaPriceE18 == 0 || _isBelowFloorAtReadPrice(moveAmt, alphaPriceE18)) return false;
-        SubnetClone(payable(clone)).moveStake(hotkeys[overIdx], hotkeys[underIdx], _netuid(tokenId), moveAmt);
-        emit Rebalanced(tokenId, hotkeys[overIdx], hotkeys[underIdx], moveAmt);
-        balances[overIdx] -= moveAmt;
-        balances[underIdx] += moveAmt;
+        if (alphaPriceE18 == 0 || _isBelowFloorAtReadPrice(moveAmount, alphaPriceE18)) return false;
+        SubnetClone(payable(clone)).moveStake(hotkeys[overIndex], hotkeys[underIndex], _netuid(tokenId), moveAmount);
+        emit Rebalanced(tokenId, hotkeys[overIndex], hotkeys[underIndex], moveAmount);
+        balances[overIndex] -= moveAmount;
+        balances[underIndex] += moveAmount;
         return true;
     }
 
-    // ──────────────────── View Functions ────────────────────────────────────────
+    // -------------------- View Functions ----------------------------------------
 
     /// @notice Total alpha backing this token's shares. Returns 0 before the clone exists.
-    /// @param  tokenId ERC1155 tokenId identifying the (netuid, regBlock) position.
+    /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @return Alpha staked under the clone for this token.
     function totalStake(uint256 tokenId) public view returns (uint256) {
         if (subnetClone[tokenId] == address(0)) return 0;
-        (,, uint256 total) = _totalStake(tokenId, _netuid(tokenId));
+        (,, uint256 total) = _unionStake(tokenId, _netuid(tokenId));
         return total;
     }
 
@@ -558,7 +555,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///         the tokenId does not correspond to the currently-registered subnet, and
     ///         `NoSharesOutstanding` when no shares have been minted against this tokenId
     ///         (a share price with zero supply has no meaningful value).
-    /// @param  tokenId ERC1155 tokenId identifying the (netuid, regBlock) position.
+    /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @return Price of one share scaled by 1e18.
     function sharePrice(uint256 tokenId) external view returns (uint256) {
         if (StorageQueryReader.isNetuidInDissolvedQueue(_netuid(tokenId))) {
@@ -572,9 +569,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
 
     /// @notice Preview how many shares would be minted for a deposit of `assets` alpha.
     /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` during the blackout and
-    ///         `SubnetDissolved` for a tokenId whose subnet has been dissolved — deposits
+    ///         `SubnetDissolved` for a tokenId whose subnet has been dissolved - deposits
     ///         route through `currentTokenId(netuid)` and cannot land on a stale tokenId.
-    /// @param  tokenId ERC1155 tokenId identifying the (netuid, regBlock) position.
+    /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @param  assets  Amount of alpha being deposited.
     /// @return Number of shares that would be minted.
     function previewWrap(uint256 tokenId, uint256 assets) external view returns (uint256) {
@@ -585,16 +582,16 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         return _convertToShares(tokenId, assets);
     }
 
-    /// @notice Preview the redemption of `shares` for a position.
+    /// @notice Preview the unwrap of `shares` for a position.
     /// @dev    Live-path delivery is exact to within a few RAO of chain-side share rounding: unwrap
     ///         delivers this amount or reverts, so a sub-floor total is not deliverable here and
     ///         must be exited via unwrapForTao. That voluntary alpha-for-TAO sell is a market order
     ///         with no preview of its own: its payout is bounded by the caller's minTaoOut, not
     ///         quoted here. `tao` is non-zero only for the dissolved-subnet payout.
-    /// @param  tokenId ERC1155 tokenId identifying the (netuid, regBlock) position.
+    /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @param  shares  Shares being previewed.
-    /// @return alpha   Alpha redeemable on the live path.
-    /// @return tao     Native TAO redeemable on the dissolved path.
+    /// @return alpha   Alpha delivered on the live path.
+    /// @return tao     Native TAO paid on the dissolved path.
     function previewUnwrap(uint256 tokenId, uint256 shares) external view returns (uint256 alpha, uint256 tao) {
         if (shares == 0) return (0, 0);
         address clone = subnetClone[tokenId];
@@ -614,7 +611,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         // Reverts NoValidatorFound when the registry has no set for this subnet.
         (bytes32[3] memory current,,) = _resolveValidators(netuid);
 
-        (,, uint256 totalAlpha) = _totalStake(tokenId, netuid, current);
+        (,, uint256 totalAlpha) = _unionStake(tokenId, netuid, current);
         return (_assetsFor(totalAlpha, supply, shares), 0);
     }
 
@@ -622,11 +619,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     function getBestValidators(uint256 netuid) external view returns (bytes32[3] memory) {
         if (netuid > type(uint16).max) revert NetuidOutOfRange();
         // forge-lint: disable-next-line(unsafe-typecast)
-        (bytes32[3] memory hks,,) = _resolveValidators(uint16(netuid));
-        return hks;
+        (bytes32[3] memory hotkeys,,) = _resolveValidators(uint16(netuid));
+        return hotkeys;
     }
 
-    // ──────────────────── Admin ─────────────────────────────────────────────────
+    // -------------------- Admin -------------------------------------------------
 
     function setMinStakeTaoFloor(uint256 newValue) external onlyOwner {
         if (newValue > STAKE_FLOOR_CAP) revert MinStakeTaoFloorTooHigh();
@@ -699,7 +696,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         emit MailboxAlphaSoldForTao(msg.sender, netuid, hotkey, amount, taoOut);
     }
 
-    // ──────────────────── Internal Helpers ──────────────────────────────────────
+    // -------------------- Internal Helpers --------------------------------------
 
     /// @dev Reverts `NoValidatorFound` if the registry has no configured set for `netuid`.
     function _resolveValidators(uint16 netuid)
@@ -714,7 +711,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         }
     }
 
-    /// @dev Read live alpha balances per (subnet, coldkey) pair.
     function _fetchBalances(bytes32[3] memory hotkeys, uint256 count, bytes32 coldkey, uint16 netuid)
         private
         view
@@ -746,12 +742,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         return _sharesFor(totalStake(tokenId), totalSupply(tokenId), assets);
     }
 
-    function _coldkeyOf(address evmAddr) private view returns (bytes32) {
-        return IAddressMapping(ADDRESS_MAPPING_PRECOMPILE).addressMapping(evmAddr);
+    function _coldkeyOf(address evmAddress) private view returns (bytes32) {
+        return IAddressMapping(ADDRESS_MAPPING_PRECOMPILE).addressMapping(evmAddress);
     }
 
-    function _isRotatedOut(bytes32 hk, bytes32[3] memory currentSet) private pure returns (bool) {
-        return hk != bytes32(0) && hk != currentSet[0] && hk != currentSet[1] && hk != currentSet[2];
+    function _isRotatedOut(bytes32 hotkey, bytes32[3] memory currentSet) private pure returns (bool) {
+        return hotkey != bytes32(0) && hotkey != currentSet[0] && hotkey != currentSet[1] && hotkey != currentSet[2];
     }
 
     /// @dev Tao value of `alphaAmount` at `alphaPriceE18`, rounded down - the same arithmetic the
@@ -792,7 +788,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
             if (balance <= remaining) {
                 chunk = balance;
             } else if (includePartials) {
-                chunk = _sellablePartial(netuid, remaining, balance, dustThresholdTao);
+                chunk = _sellableChunk(netuid, remaining, balance, dustThresholdTao);
             }
             if (chunk != 0) {
                 SubnetClone(payable(clone)).sellAlphaForTao(hotkeys[i], netuid, chunk);
@@ -807,17 +803,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     }
 
     /// @dev Largest chunk of `remaining` a slot holding `balance` can sell cleanly; 0 skips the
-    ///      slot. Two chain rules bind a partial unstake: the chunk's simulated post-fee output
-    ///      must clear the floor, and the leftover must stay above the nominator dust threshold -
-    ///      the chain force-sells a smaller leftover into this exit's payout, leaking the remaining
-    ///      holders' backing. The chain values the leftover after the sale has moved the price, so
-    ///      the leftover's marginal quote (full-balance quote minus chunk quote, a lower bound on
-    ///      its post-sale spot value) must clear the threshold; certainty holds to within one RAO
-    ///      of quote rounding, which the leftover's one-RAO value headroom absorbs. The spot
-    ///      pre-check keeps the sim swap - whose rejection consumes all forwarded gas - away from
-    ///      dust it cannot price. Stake entries are u64 on the chain: a saturated oversized amount
-    ///      can only under-quote, and the marginal check runs only on a faithful full-balance quote.
-    function _sellablePartial(uint16 netuid, uint256 remaining, uint256 balance, uint256 dustThresholdTao)
+    ///      slot. Two chain rules bind a partial sell: the chunk's post-fee output must clear the
+    ///      stake floor, and the leftover must stay above the dust threshold - the chain force-sells
+    ///      a smaller leftover into this exit's payout, leaking the remaining holders' backing.
+    function _sellableChunk(uint16 netuid, uint256 remaining, uint256 balance, uint256 dustThresholdTao)
         private
         view
         returns (uint256)
@@ -825,16 +814,23 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
         if (alphaPriceE18 == 0) return 0;
 
+        // The extra RAO of leftover value absorbs the one-RAO rounding of the marginal quote below.
         uint256 minLeftover = dustThresholdTao == 0 ? 0 : Math.ceilDiv((dustThresholdTao + 1) * 1e18, alphaPriceE18);
         if (balance <= minLeftover) return 0;
 
         uint256 sellable = balance - minLeftover;
         uint256 chunk = sellable < remaining ? sellable : remaining;
+        // The spot pre-check keeps the sim swap - whose rejection consumes all forwarded gas - away
+        // from dust it cannot price.
         if (_isBelowFloorAtReadPrice(chunk, alphaPriceE18)) return 0;
 
         uint256 chunkQuote = IAlpha(ALPHA_PRECOMPILE).simSwapAlphaForTao(netuid, _saturateU64(chunk));
         if (chunkQuote < minStakeTaoFloor) return 0;
 
+        // The chain values the leftover at the post-sale price, so it must clear the threshold on
+        // its marginal quote - full-balance quote minus chunk quote, a lower bound on that value.
+        // An oversized balance would saturate the sim's u64 input and under-quote, so the check
+        // runs only on a faithful full-balance quote.
         if (dustThresholdTao != 0 && balance <= type(uint64).max) {
             // forge-lint: disable-next-line(unsafe-typecast)
             uint256 leftoverQuote = IAlpha(ALPHA_PRECOMPILE).simSwapAlphaForTao(netuid, uint64(balance)) - chunkQuote;
@@ -848,13 +844,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         return value > type(uint64).max ? type(uint64).max : uint64(value);
     }
 
-    /// @dev Consolidate all stake off rotated-out hotkeys, then refresh the snapshot. Any failure
-    ///      reverts the call - atomicity, not tracking, is what makes the refresh safe. A pending
-    ///      roll whose seed provably cannot clear the chain's floor is rejected up front as
-    ///      `ConsolidationBelowFloor`; a fresh above-floor deposit re-seeds the roll and clears it.
-    ///      At a zero price read the roll falls through bare, so on a dead-priced subnet a
-    ///      chain-rejected roll consumes the forwarded gas.
-    function _sweepRotatedStake(
+    /// @dev Rolls stake stranded on rotated-out validators back onto the active set, so the position's
+    ///      backing always sits under current validators, then refreshes the remembered set. Reverts
+    ///      `ConsolidationBelowFloor` when the roll's seed provably cannot clear the stake floor; a
+    ///      zero price read skips the guard, so a roll the chain then rejects burns the forwarded gas.
+    function _consolidateRotatedStake(
         uint256 tokenId,
         address clone,
         bytes32 coldkey,
@@ -862,7 +856,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         uint256 alphaPriceE18
     ) private {
         bytes32[3] storage lastSeen = _lastSeenHotkeys[tokenId];
-        if (clone != address(0) && _anyRotatedOut(lastSeen, currentSet)) {
+        if (_anyRotatedOut(lastSeen, currentSet)) {
             uint16 netuid = _netuid(tokenId);
             (bytes32 rollerHotkey, uint256 seedBalance, uint256[3] memory lastSeenBalances, bool rollPending) =
                 _chooseRollSeed(lastSeen, currentSet, coldkey, netuid);
@@ -894,6 +888,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
                 SubnetClone(payable(clone)).moveStake(rollerHotkey, currentSet[0], netuid, pile);
             }
         }
+        // The refresh may only follow a clean roll: a rejected hop reverts the whole call, otherwise
+        // stake left on a rotated-out hotkey would drop out of the remembered set and be stranded.
         if (lastSeen[0] != currentSet[0]) lastSeen[0] = currentSet[0];
         if (lastSeen[1] != currentSet[1]) lastSeen[1] = currentSet[1];
         if (lastSeen[2] != currentSet[2]) lastSeen[2] = currentSet[2];
@@ -904,12 +900,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
             || _isRotatedOut(lastSeen[2], currentSet);
     }
 
-    /// @dev Pick the roll's seed - the richest union hotkey - and report the rotated-out slots'
-    ///      balances (reused by the roll loop) plus whether any of them holds a balance. The
-    ///      current set is scanned only when a roll is pending. The seed must be the union's
-    ///      richest balance: seeding from anything smaller would break the self-healing property
-    ///      that a fresh above-floor deposit re-seeds a roll whose orphans are all dust, and the
-    ///      owner floor cannot prove chain acceptance for a smaller seed when it lags the chain's.
+    /// @dev Seeds the roll from the richest hotkey across the remembered and current sets. The seed is
+    ///      the roll's binding floor check, so a smaller seed could trip `ConsolidationBelowFloor` on a
+    ///      pile the chain would accept, and seeding from a dust orphan would forfeit the self-healing
+    ///      case where a later above-floor deposit becomes the seed and carries the orphans over.
     function _chooseRollSeed(bytes32[3] storage lastSeen, bytes32[3] memory currentSet, bytes32 coldkey, uint16 netuid)
         private
         view
@@ -954,16 +948,17 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         }
     }
 
-    function _totalStake(uint256 tokenId, uint16 netuid)
+    function _unionStake(uint256 tokenId, uint16 netuid)
         private
         view
         returns (bytes32[6] memory, uint256[6] memory, uint256)
     {
         (bytes32[3] memory current,) = validatorRegistry.getValidators(netuid);
-        return _totalStake(tokenId, netuid, current);
+        return _unionStake(tokenId, netuid, current);
     }
 
-    function _totalStake(uint256 tokenId, uint16 netuid, bytes32[3] memory current)
+    /// @dev Per-hotkey stake across the remembered and current validator sets, with its total.
+    function _unionStake(uint256 tokenId, uint16 netuid, bytes32[3] memory current)
         private
         view
         returns (bytes32[6] memory hotkeys, uint256[6] memory balances, uint256 total)
@@ -975,12 +970,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
 
         uint256 n;
         for (uint256 i; i < 3;) {
-            bytes32 hk = lastSeen[i];
-            if (hk != bytes32(0)) {
-                hotkeys[n] = hk;
-                uint256 bal = staking.getStake(hk, coldkey, netuid);
-                balances[n] = bal;
-                total += bal;
+            bytes32 hotkey = lastSeen[i];
+            if (hotkey != bytes32(0)) {
+                hotkeys[n] = hotkey;
+                uint256 balance = staking.getStake(hotkey, coldkey, netuid);
+                balances[n] = balance;
+                total += balance;
                 unchecked {
                     ++n;
                 }
@@ -993,12 +988,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         // validator set, and the last-seen snapshot is a past copy of such a set. So only the
         // current-vs-last-seen overlap needs removing, which the guard below does.
         for (uint256 i; i < 3;) {
-            bytes32 hk = current[i];
-            if (hk != bytes32(0) && hk != lastSeen[0] && hk != lastSeen[1] && hk != lastSeen[2]) {
-                hotkeys[n] = hk;
-                uint256 bal = staking.getStake(hk, coldkey, netuid);
-                balances[n] = bal;
-                total += bal;
+            bytes32 hotkey = current[i];
+            if (hotkey != bytes32(0) && hotkey != lastSeen[0] && hotkey != lastSeen[1] && hotkey != lastSeen[2]) {
+                hotkeys[n] = hotkey;
+                uint256 balance = staking.getStake(hotkey, coldkey, netuid);
+                balances[n] = balance;
+                total += balance;
                 unchecked {
                     ++n;
                 }
@@ -1023,7 +1018,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         }
     }
 
-    /// @dev Salt = keccak256(user, netuid) — unique per (user, subnet) pair.
     function _cloneSalt(address user, uint256 netuid) private pure returns (bytes32) {
         return keccak256(abi.encodePacked(user, netuid));
     }
@@ -1040,17 +1034,17 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         return uint16(tokenId & 0xFFFF);
     }
 
-    function _regBlock(uint256 tokenId) private pure returns (uint64) {
+    function _registrationBlock(uint256 tokenId) private pure returns (uint64) {
         // forge-lint: disable-next-line(unsafe-typecast)
         return uint64(tokenId >> 16);
     }
 
     function _isIssuedForDissolvedSubnet(uint256 tokenId) private view returns (bool) {
-        uint64 currentRegBlock = StorageQueryReader.readNetworkRegisteredAt(_netuid(tokenId));
-        return currentRegBlock == 0 || currentRegBlock != _regBlock(tokenId);
+        uint64 currentRegistrationBlock = StorageQueryReader.readNetworkRegisteredAt(_netuid(tokenId));
+        return currentRegistrationBlock == 0 || currentRegistrationBlock != _registrationBlock(tokenId);
     }
 
-    // ──────────────────── Overrides ─────────────────────────────────────────────
+    // -------------------- Overrides ---------------------------------------------
 
     function _update(address from, address to, uint256[] memory ids, uint256[] memory values)
         internal

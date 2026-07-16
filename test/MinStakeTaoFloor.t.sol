@@ -92,7 +92,7 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
     }
 
     // Every slot is individually below the floor while the request clears it: the gather's first
-    // hop could never clear the chain's floor, so the redemption is rejected up front.
+    // hop could never clear the chain's floor, so the unwrap is rejected up front.
     function test_RevertWhen_UnwrapWithAllSlotsSubFloor() public {
         _depositAndWrap(alice, NETUID1, 4_500_000);
         _setVaultStakes(NETUID1, 1_500_000, 1_500_000, 1_500_000);
@@ -292,7 +292,7 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
     }
 
     // Delivery is exact-or-revert: the gather target's transfer is bare, so a chain rejection
-    // bubbles and the whole redemption rolls back with shares intact.
+    // bubbles and the whole unwrap rolls back with shares intact.
     function test_RevertWhen_DeliveryTransferFails() public {
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(5000, 5000));
         _simulateAlphaDepositHotkey(alice, NETUID1, 40e6, hotkey1);

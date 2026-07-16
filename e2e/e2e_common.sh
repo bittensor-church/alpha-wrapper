@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# alpha-wrapper — Local Chain E2E shared library
+# alpha-wrapper - Local Chain E2E shared library
 # ============================================================================
 #
 # Sourced by the localnet e2e test scripts. Holds everything the tests share:
@@ -21,7 +21,7 @@
 
 set -euo pipefail
 
-# ─── Configuration ───────────────────────────────────────────────────────────
+# --- Configuration -----------------------------------------------------------
 
 CHAIN_ENDPOINT="ws://127.0.0.1:9944"
 RPC_URL="http://127.0.0.1:9944"
@@ -43,7 +43,7 @@ WRAPPER_PK="0xf784bf897e423437b1d2a1584a7fc5c99b0ec3f34d70ff74a0643094ccfd4bbe"
 WRAPPER_SS58="5H9xN1Y6KqdhcK9wPqFSPHC7yeaRC5y4CL3nNF2GX6hJrmpT"
 
 STAKING="0x0000000000000000000000000000000000000805"
-# Alpha precompile (index 2056): exposes the chain's own alpha→TAO swap simulation.
+# Alpha precompile (index 2056): exposes the chain's own alpha->TAO swap simulation.
 ALPHA_PRECOMPILE="0x0000000000000000000000000000000000000808"
 
 STAKE_RATIOS=(600 400 200)
@@ -62,12 +62,12 @@ CAST_FLAGS="$EVM_FLAGS --gas-limit 500000"
 # Silence that module; keep error-level logging otherwise.
 export RUST_LOG="${RUST_LOG:-error,alloy_provider::blocks=off}"
 
-# ─── Helpers ─────────────────────────────────────────────────────────────────
+# --- Helpers -----------------------------------------------------------------
 
 log()  { echo -e "\n\033[1;34m=== $1 ===\033[0m"; }
-ok()   { echo -e "  \033[1;32m✓\033[0m $1"; }
-info() { echo -e "  \033[0;33m→\033[0m $1"; }
-fail() { echo -e "  \033[1;31m✗ $1\033[0m" >&2; exit 1; }
+ok()   { echo -e "  \033[1;32mOK\033[0m $1"; }
+info() { echo -e "  \033[0;33m->\033[0m $1"; }
+fail() { echo -e "  \033[1;31mFAIL $1\033[0m" >&2; exit 1; }
 
 h160_to_substrate_b32() { python3 e2e/chain_ops.py h160_to_substrate_b32 "$1"; }
 h160_to_ss58()          { python3 e2e/chain_ops.py h160_to_ss58 "$1"; }
@@ -145,7 +145,7 @@ register_hotkey() { # <netuid> <hotkey_name>
     REGISTERED_HK_SS58=$(read_hotkey_ss58 "$ALICE_WALLET" "$hk")
 }
 
-# ─── Chain read/write wrappers (DRY helpers over cast) ────────────────────────
+# --- Chain read/write wrappers (DRY helpers over cast) ------------------------
 
 # Alpha stake for a single (hotkey, coldkey, netuid) from the staking precompile.
 get_stake() { # <hotkey_b32> <coldkey_b32> <netuid>
@@ -379,18 +379,18 @@ set_vault_floor() { # <value> <fail_msg>
     vault_send_as "$DEPLOYER_PK" 200000 "$2" "setMinStakeTaoFloor(uint256)" "$1"
 }
 
-# Chain's own alpha→TAO quote (RAO out) for selling <alpha_rao> on <netuid>. Capture it *before*
+# Chain's own alpha->TAO quote (RAO out) for selling <alpha_rao> on <netuid>. Capture it *before*
 # the swap that pays out: simSwapAlphaForTao re-prices against live reserves and the curve is
 # concave, so a quote taken after the swap understates the payout by its own price impact
-# (a ~33 alpha exit re-quotes ~13% low — past assert_tao_gain's ±10%).
+# (a ~33 alpha exit re-quotes ~13% low - past assert_tao_gain's +/-10%).
 alpha_to_tao_quote() { # <netuid> <alpha_rao>
     cast call "$ALPHA_PRECOMPILE" "simSwapAlphaForTao(uint16,uint64)(uint256)" "$1" "$2" \
         --rpc-url "$RPC_URL" | awk '{print $1}'
 }
 
-# Assert the caller's native-TAO gain ≈ a pre-captured alpha→TAO <quote_rao> (within ±10%, which
-# absorbs gas and a block or two of emission drift) — a real value check, not just a positive
-# delta. The precompile quotes in RAO, so ×1e9 → wei. Echoes the wei gain.
+# Assert the caller's native-TAO gain ~ a pre-captured alpha->TAO <quote_rao> (within +/-10%, which
+# absorbs gas and a block or two of emission drift) - a real value check, not just a positive
+# delta. The precompile quotes in RAO, so x1e9 -> wei. Echoes the wei gain.
 assert_tao_gain() { # <pre_wei> <post_wei> <quote_rao> <fail_msg>
     local gain
     gain=$(python3 -c "print($2 - $1)")
@@ -405,12 +405,12 @@ deposit_and_wrap() {
     local netuid="$1" hk_b32="$2" hk_ss58="$3" amount="$4" gas="$5" msg="$6"
     local user="${7:-$WRAPPER_ADDR}" pk="${8:-$WRAPPER_PK}" mailbox
     mailbox=$(mailbox_addr "$netuid" "$user")
-    info "Transferring $amount RAO from Alice → mailbox under ${hk_b32:0:18}..."
+    info "Transferring $amount RAO from Alice -> mailbox under ${hk_b32:0:18}..."
     transfer_stake_py "$(h160_to_ss58 "$mailbox")" "$hk_ss58" "$netuid" "$amount" | tail -1
     vault_send_as "$pk" "$gas" "$msg" "wrap(address,uint256,bytes32)" "$user" "$netuid" "$hk_b32"
 }
 
-# ─── Bootstrap: pre-flight + phases 0-5 ──────────────────────────────────────
+# --- Bootstrap: pre-flight + phases 0-5 --------------------------------------
 #
 # Brings a fresh localnet to the point where a position can be deposited: funded
 # deployer, 3 emitting subnets with 3 registered+staked validators each, deployed
@@ -432,7 +432,7 @@ e2e_bootstrap() {
         NEED_REGEN=true
     elif [[ -f "$ALICE_COLDKEY_FILE" ]]; then
         if ! grep -q "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY" "$ALICE_COLDKEY_FILE" 2>/dev/null; then
-            echo "  ⚠ Existing alice wallet is NOT the dev Alice — regenerating from dev seed..."
+            echo "  WARNING: Existing alice wallet is NOT the dev Alice - regenerating from dev seed..."
             rm -rf "$HOME/.bittensor/wallets/$ALICE_WALLET"
             NEED_REGEN=true
         fi
@@ -473,7 +473,7 @@ e2e_bootstrap() {
             --amount "$FUND_AMOUNT" \
             --allow-death \
             --no-prompt 2>&1 | tail -2
-        ok "Transferred ${FUND_AMOUNT} TAO → $DEPLOYER_ADDR ($DEPLOYER_SS58)"
+        ok "Transferred ${FUND_AMOUNT} TAO -> $DEPLOYER_ADDR ($DEPLOYER_SS58)"
         ok "New balance: $(cast balance "$DEPLOYER_ADDR" --rpc-url "$RPC_URL" --ether) TAO"
     else
         log "Phase 0: Deployer already funded"
@@ -497,7 +497,7 @@ e2e_bootstrap() {
     log "Disable admin freeze window (deterministic sudo hyperparameter writes)"
     python3 e2e/chain_ops.py set_admin_freeze_window \
         --chain-endpoint "$CHAIN_ENDPOINT" --window 0 | tail -1
-    ok "AdminFreezeWindow → 0"
+    ok "AdminFreezeWindow -> 0"
 
     log "Start emissions + increase max_regs_per_block"
     for NETUID in "${NETUIDS[@]}"; do
@@ -507,7 +507,7 @@ e2e_bootstrap() {
 
         btcli_cmd sudo set --netuid "$NETUID" \
             --wallet-name "$ALICE_WALLET" --param max_regs_per_block --value 8 --no-prompt 2>&1 | tail -1
-        ok "netuid $NETUID max_regs_per_block → 8"
+        ok "netuid $NETUID max_regs_per_block -> 8"
     done
 
     log "Phase 2: Hotkeys & validators (3 per subnet)"
@@ -546,7 +546,7 @@ e2e_bootstrap() {
             add_stake_py "${ALL_HK_SS58S[$IDX]}" "$NET" "$((AMOUNT * 1000000000))" | tail -1
             STAKE=$(get_stake "${ALL_HK_B32S[$IDX]}" "$ALICE_COLDKEY_B32" "$NET")
             [[ "$STAKE" -gt 0 ]] || fail "stake add landed but $HK reads 0 RAO on netuid $NET"
-            ok "netuid $NET $HK: ${AMOUNT} TAO → $STAKE RAO"
+            ok "netuid $NET $HK: ${AMOUNT} TAO -> $STAKE RAO"
         done
     done
 
@@ -569,7 +569,7 @@ e2e_bootstrap() {
         | python3 -c "import json,sys; print(json.load(sys.stdin)['deployedTo'])")
     ok "SubnetClone: $SUBNET_CLONE_ADDR"
 
-    # DEPLOYER (0x7bD3...) < WRAPPER (0xd103...) hex-ascending — required by ValidatorRegistry's sorted-signers check.
+    # DEPLOYER (0x7bD3...) < WRAPPER (0xd103...) hex-ascending - required by ValidatorRegistry's sorted-signers check.
     VAL_REGISTRY_ADDR=$(forge create src/ValidatorRegistry.sol:ValidatorRegistry \
         --private-key "$DEPLOYER_PK" --rpc-url "$RPC_URL" $FORGE_FLAGS --json \
         --constructor-args "$DEPLOYER_ADDR" "[$DEPLOYER_ADDR,$WRAPPER_ADDR]" 2 \
@@ -624,7 +624,7 @@ e2e_bootstrap() {
             --amount 100 \
             --allow-death \
             --no-prompt 2>&1 | tail -2
-        ok "Transferred 100 TAO → $WRAPPER_ADDR ($WRAPPER_SS58)"
+        ok "Transferred 100 TAO -> $WRAPPER_ADDR ($WRAPPER_SS58)"
     else
         ok "Already funded: ${WRAPPER_BAL} TAO"
     fi

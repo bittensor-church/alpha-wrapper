@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# alpha-wrapper — Local Chain End-to-End Test
+# alpha-wrapper - Local Chain End-to-End Test
 # ============================================================================
 #
 # Prerequisites:
@@ -81,7 +81,7 @@ for i in 0 1 2; do
 done
 ok "All 3 vaults have positive shares / totalStake / sharePrice"
 
-log "Phase 9: Unwrap all shares → verify alpha returned"
+log "Phase 9: Unwrap all shares -> verify alpha returned"
 
 TOLERANCE_RAO=10
 
@@ -105,7 +105,7 @@ for i in 0 1 2; do
 
     OK_RETURNED=$(python3 -c "print('yes' if $SUM >= max(0, $DEPOSITED - $TOLERANCE_RAO) else 'no')")
     if [[ "$OK_RETURNED" != "yes" ]]; then
-        fail "netuid $NET: user only received $SUM RAO across 3 hotkeys; expected ≥ $((DEPOSITED - TOLERANCE_RAO))"
+        fail "netuid $NET: user only received $SUM RAO across 3 hotkeys; expected >= $((DEPOSITED - TOLERANCE_RAO))"
     fi
     ok "netuid $NET: user received $SUM RAO (deposited $DEPOSITED, tolerance ${TOLERANCE_RAO})"
 done
@@ -188,7 +188,7 @@ for i in 0 1 2; do
         --column-eq "alpha_unwrap_count=1" \
         --column-eq "tao_unwrap_count=0" \
         --column-eq "dissolved_unwrap_count=0" \
-        --column-eq "redemption_count=1" \
+        --column-eq "unwrap_count=1" \
         --column-eq "tao_received_wei=0" \
         --column-positive alpha_deposited_rao \
         --column-positive shares_minted \
@@ -206,7 +206,7 @@ for i in 0 1 2; do
         --column-eq "alpha_unwrap_count=1" \
         --column-eq "tao_unwrap_count=0" \
         --column-eq "dissolved_unwrap_count=0" \
-        --column-eq "redemption_count=1" \
+        --column-eq "unwrap_count=1" \
         -- python3 scripts/get_volumes.py \
             --rpc-url "$RPC_URL" --vault-address "$VAULT_ADDR" \
             --block-start "$BLOCK_START" --block-end "$BLOCK_END" \
@@ -236,7 +236,7 @@ RECLAIM_MAILBOX_SUB=$(h160_to_substrate_b32 "$RECLAIM_MAILBOX")
 RECLAIM_MAILBOX_SS58=$(h160_to_ss58 "$RECLAIM_MAILBOX")
 info "User mailbox on netuid $RECLAIM_NET: $RECLAIM_MAILBOX"
 
-info "Transferring $PER_HOTKEY_RAW RAO from Alice → mailbox under ${RECLAIM_HK_B32:0:18}..."
+info "Transferring $PER_HOTKEY_RAW RAO from Alice -> mailbox under ${RECLAIM_HK_B32:0:18}..."
 transfer_stake_py "$RECLAIM_MAILBOX_SS58" "$RECLAIM_HK_SS58" "$RECLAIM_NET" "$PER_HOTKEY_RAW" | tail -1
 
 MAILBOX_ALPHA_PRE=$(get_stake "$RECLAIM_HK_B32" "$RECLAIM_MAILBOX_SUB" "$RECLAIM_NET")
@@ -301,7 +301,7 @@ verify_script "get_volumes (unwrapForTao on netuid $WFT_NET)" \
     --column-eq "alpha_unwrap_count=0" \
     --column-eq "tao_unwrap_count=1" \
     --column-eq "dissolved_unwrap_count=0" \
-    --column-eq "redemption_count=1" \
+    --column-eq "unwrap_count=1" \
     --column-eq "tao_from_dissolutions_wei=0" \
     --column-positive alpha_requested_for_tao_rao \
     --column-positive tao_from_alpha_sales_wei \
@@ -311,7 +311,7 @@ verify_script "get_volumes (unwrapForTao on netuid $WFT_NET)" \
         --block-start "$WFT_BLOCK_START" --block-end "$WFT_BLOCK_END" \
         --token-id "$WFT_TID" --user "$WRAPPER_ADDR"
 
-log "Phase 13: Emission accrual → share-price appreciation (alpha rail)"
+log "Phase 13: Emission accrual -> share-price appreciation (alpha rail)"
 
 # Real emissions accrue on the clone's staked alpha over blocks: the position must appreciate
 # above the deposit, and the holder must be able to unwrap that gain. Mocks fake emissions,
@@ -325,7 +325,7 @@ deposit_and_wrap "$EMIT_NET" "${ALL_HK_B32S[0]}" "${ALL_HK_SS58S[0]}" 5000000000
 EMIT_SHARES=$(vault_shares "$EMIT_TID")
 EMIT_DEPOSITED=$(vault_total_stake "$EMIT_TID")
 [[ "$EMIT_SHARES" != "0" ]] || fail "Phase 13: no shares minted"
-ok "Deposited 50 alpha → shares=$EMIT_SHARES, deposit-synced totalStake=$EMIT_DEPOSITED RAO"
+ok "Deposited 50 alpha -> shares=$EMIT_SHARES, deposit-synced totalStake=$EMIT_DEPOSITED RAO"
 
 info "Waiting ~30 blocks for emissions to accrue..."
 EMIT_TARGET=$(( $(cast block-number --rpc-url "$RPC_URL") + 30 ))
@@ -335,8 +335,8 @@ done
 
 EMIT_PREVIEW=$(cast call "$VAULT_ADDR" "previewUnwrap(uint256,uint256)(uint256,uint256)" "$EMIT_TID" "$EMIT_SHARES" --rpc-url "$RPC_URL" | head -1 | awk '{print $1}')
 APPRECIATED=$(python3 -c "print('yes' if $EMIT_PREVIEW > $EMIT_DEPOSITED else 'no')")
-[[ "$APPRECIATED" == "yes" ]] || fail "Phase 13: no appreciation (previewUnwrap $EMIT_PREVIEW ≤ deposit $EMIT_DEPOSITED)"
-ok "previewUnwrap rose to $EMIT_PREVIEW RAO (> deposit $EMIT_DEPOSITED) — emissions accrued on-chain"
+[[ "$APPRECIATED" == "yes" ]] || fail "Phase 13: no appreciation (previewUnwrap $EMIT_PREVIEW <= deposit $EMIT_DEPOSITED)"
+ok "previewUnwrap rose to $EMIT_PREVIEW RAO (> deposit $EMIT_DEPOSITED) - emissions accrued on-chain"
 
 # Sum the user's coldkey stake across the validators before and after, so the payout is the delta.
 EMIT_BEFORE=$(sum_stake "$WRAPPER_SUB_B32" "$EMIT_NET" "${EMIT_HKS[@]}")
@@ -347,14 +347,14 @@ vault_send 2000000 "Phase 13 unwrap failed" \
 EMIT_AFTER=$(sum_stake "$WRAPPER_SUB_B32" "$EMIT_NET" "${EMIT_HKS[@]}")
 EMIT_RECEIVED=$((EMIT_AFTER - EMIT_BEFORE))
 CAPTURED=$(python3 -c "print('yes' if $EMIT_RECEIVED > $EMIT_DEPOSITED else 'no')")
-[[ "$CAPTURED" == "yes" ]] || fail "Phase 13: emissions not captured (received $EMIT_RECEIVED ≤ deposit $EMIT_DEPOSITED)"
-ok "User unwrapped $EMIT_RECEIVED RAO > deposited $EMIT_DEPOSITED — appreciation captured on the alpha rail"
+[[ "$CAPTURED" == "yes" ]] || fail "Phase 13: emissions not captured (received $EMIT_RECEIVED <= deposit $EMIT_DEPOSITED)"
+ok "User unwrapped $EMIT_RECEIVED RAO > deposited $EMIT_DEPOSITED - appreciation captured on the alpha rail"
 
-log "Phase 14: Validator rotation orphans stake → unwrap sweeps it (no funds stranded)"
+log "Phase 14: Validator rotation orphans stake -> unwrap consolidates it (no funds stranded)"
 
 # Rotating a validator out of the registry strands the clone's stake under it. The next unwrap
-# must sweep that orphan (real moveStake) and still pay the holder full value — a live-chain-only
-# check of the rotation/sweep path against real staking mechanics and the minRebalanceAmt floor.
+# must consolidate that orphan (real moveStake) and still pay the holder full value - a live-chain-only
+# check of the rotation/consolidation path against real staking mechanics and the minStakeTaoFloor gate.
 ROT_NET="${NETUIDS[1]}"
 ROT_TID="${VAULT_IDS[1]}"
 ROT_HK0="${ALL_HK_B32S[3]}"
@@ -369,12 +369,12 @@ ROT_CLONE=$(clone_addr "$ROT_TID")
 ROT_CLONE_SUB=$(h160_to_substrate_b32 "$ROT_CLONE")
 ROT_ORPHAN=$(get_stake "$ROT_HK2" "$ROT_CLONE_SUB" "$ROT_NET")
 [[ "$ROT_ORPHAN" != "0" ]] || fail "Phase 14: no stake under the 3rd validator to orphan"
-ok "Deposited 60 alpha → shares=$ROT_SHARES; clone holds $ROT_ORPHAN RAO under the soon-orphaned 3rd validator"
+ok "Deposited 60 alpha -> shares=$ROT_SHARES; clone holds $ROT_ORPHAN RAO under the soon-orphaned 3rd validator"
 
 # Drop the 3rd validator from the registry via a real EIP-712 attestation; no vault call runs,
 # so the vault's last-seen snapshot still references it and its stake becomes an orphan.
 set_validators_py "$ROT_NET" "$ROT_HK0,$ROT_HK1" "6000,4000" > /dev/null
-ok "Rotated registry → [v0, v1]; 3rd validator dropped with $ROT_ORPHAN RAO orphaned"
+ok "Rotated registry -> [v0, v1]; 3rd validator dropped with $ROT_ORPHAN RAO orphaned"
 
 ROT_BEFORE=$(sum_stake "$WRAPPER_SUB_B32" "$ROT_NET" "$ROT_HK0" "$ROT_HK1" "$ROT_HK2")
 
@@ -385,14 +385,14 @@ ROT_AFTER=$(sum_stake "$WRAPPER_SUB_B32" "$ROT_NET" "$ROT_HK0" "$ROT_HK1" "$ROT_
 ROT_RECEIVED=$((ROT_AFTER - ROT_BEFORE))
 ROT_ORPHAN_POST=$(get_stake "$ROT_HK2" "$ROT_CLONE_SUB" "$ROT_NET")
 
-# The sweep adds extra moveStake/drain ops, each losing ≤1 RAO to integer rounding
+# The consolidation adds extra moveStake/drain ops, each losing <=1 RAO to integer rounding
 # (Phase 9's simpler single unwrap uses TOLERANCE_RAO=10).
 SWEPT=$(python3 -c "print('yes' if $ROT_RECEIVED >= $ROT_DEPOSITED - 100 else 'no')")
 [[ "$SWEPT" == "yes" ]] || fail "Phase 14: orphan not swept (received $ROT_RECEIVED << deposit $ROT_DEPOSITED)"
 [[ "$ROT_ORPHAN_POST" == "0" ]] || fail "Phase 14: orphan NOT swept (3rd validator still holds $ROT_ORPHAN_POST RAO)"
-ok "Orphan swept; user received $ROT_RECEIVED RAO (≈ deposit $ROT_DEPOSITED), orphaned validator drained to 0"
+ok "Orphan swept; user received $ROT_RECEIVED RAO (~ deposit $ROT_DEPOSITED), orphaned validator drained to 0"
 
-log "Phase 15: unwrapForTao slippage guard against the real alpha→TAO price"
+log "Phase 15: unwrapForTao slippage guard against the real alpha->TAO price"
 
 # minTaoOut must reject a payout below the threshold against the REAL realized price (mocks use a
 # fixed configurable rate). An unsatisfiable minTaoOut reverts with shares intact; minTaoOut=0 pays.
@@ -403,13 +403,13 @@ deposit_and_wrap "$SLIP_NET" "${ALL_HK_B32S[6]}" "${ALL_HK_SS58S[6]}" 4000000000
 
 SLIP_SHARES=$(vault_shares "$SLIP_TID")
 [[ "$SLIP_SHARES" != "0" ]] || fail "Phase 15: no shares minted"
-ok "Deposited 40 alpha → shares=$SLIP_SHARES"
+ok "Deposited 40 alpha -> shares=$SLIP_SHARES"
 
 # An unsatisfiable minTaoOut (1e30 wei) must revert and leave the shares untouched.
 vault_send_expect_revert 2500000 "Phase 15: unwrapForTao with minTaoOut=1e30 did NOT revert" \
     "unwrapForTao(uint256,uint256,uint256)" "$SLIP_TID" "$SLIP_SHARES" 1000000000000000000000000000000
 SLIP_SHARES_AFTER=$(vault_shares "$SLIP_TID")
-[[ "$SLIP_SHARES_AFTER" == "$SLIP_SHARES" ]] || fail "Phase 15: shares changed after a reverted unwrapForTao ($SLIP_SHARES → $SLIP_SHARES_AFTER)"
+[[ "$SLIP_SHARES_AFTER" == "$SLIP_SHARES" ]] || fail "Phase 15: shares changed after a reverted unwrapForTao ($SLIP_SHARES -> $SLIP_SHARES_AFTER)"
 ok "Slippage guard rejected an unsatisfiable minTaoOut; shares preserved ($SLIP_SHARES)"
 
 # minTaoOut=0 succeeds against the real realized price; the user gains native TAO.
