@@ -75,6 +75,12 @@ jobs:
         run: |
           pip install bittensor-cli==9.23.2 substrate-interface
           pip install -r requirements.txt
+          # cyscale and py-scale-codec both claim the `scalecodec` namespace: the CLI pulls
+          # cyscale, substrate-interface pulls py-scale-codec, and whichever lands second
+          # breaks the other's import. cyscale is a drop-in replacement for py-scale-codec,
+          # so install it last and let it serve both.
+          pip uninstall -y scalecodec cyscale
+          pip install -U cyscale --force-reinstall
 
       - name: Compile-check Python scripts
         run: python -m py_compile scripts/*.py e2e/*.py
