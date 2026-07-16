@@ -1031,7 +1031,9 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(alice.balance - aliceBefore, 5 ether);
     }
 
-    function test_RevertWhen_UnwrapDuringBlackoutRegardlessOfForceSendDust() public {
+    /// @dev The freeze is per netuid: an old tokenId stays frozen while a newer subnet on the
+    ///      same netuid is dissolving.
+    function test_RevertWhen_UnwrapDuringSuccessorBlackoutRegardlessOfForceSendDust() public {
         _simulateAlphaDeposit(alice, NETUID1, 10 ether);
         _wrap(alice, NETUID1);
         uint256 tokenId = vault.currentTokenId(NETUID1);
@@ -1067,7 +1069,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(alice.balance - aliceBefore, 5 ether + 1);
     }
 
-    function test_RevertWhen_UnwrapDuringBlackout() public {
+    function test_RevertWhen_UnwrapDuringSuccessorBlackout() public {
         _simulateAlphaDeposit(alice, NETUID1, 10 ether);
         _wrap(alice, NETUID1);
         uint256 tokenId = vault.currentTokenId(NETUID1);
@@ -1183,7 +1185,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(tao, 40 ether);
     }
 
-    function test_RevertWhen_PreviewUnwrapDuringBlackout() public {
+    function test_RevertWhen_PreviewUnwrapDuringSuccessorBlackout() public {
         _simulateAlphaDeposit(alice, NETUID1, 10 ether);
         _wrap(alice, NETUID1);
         uint256 tokenId = vault.currentTokenId(NETUID1);
@@ -1197,7 +1199,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.previewUnwrap(tokenId, shares);
     }
 
-    function test_RevertWhen_PreviewUnwrapDuringBlackoutRegardlessOfForceSendDust() public {
+    function test_RevertWhen_PreviewUnwrapDuringSuccessorBlackoutRegardlessOfForceSendDust() public {
         _simulateAlphaDeposit(alice, NETUID1, 10 ether);
         _wrap(alice, NETUID1);
         uint256 tokenId = vault.currentTokenId(NETUID1);

@@ -23,6 +23,7 @@ import { ISubnet, SUBNET_PRECOMPILE } from "./interfaces/ISubnet.sol";
 /// @dev Architecture:
 ///   - Token ID = (netuid | registrationBlock << 16). No registration needed - vaults materialize on first deposit.
 ///   - Each vault tracks its own sharePrice independently: totalStake(tokenId) / totalSupply(tokenId).
+///     Integrators should read `sharePrice`, which also reverts during dissolution.
 ///   - EIP-1167 clones serve as deterministic "Mailbox" deposit addresses per (user, netuid).
 ///   - Validators + weights are read exclusively from ValidatorRegistry (no on-chain fallback).
 ///   - Deposits and unwraps rebalance toward the attested weights (up to N-1 pre-checked
@@ -552,8 +553,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Price of one share in 1e18 precision, expressed in alpha.
-    /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while the netuid sits in
-    ///         subtensor's dissolve cleanup queue, `SubnetDissolved` once cleanup has completed or
+    /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while the subnet is being dissolved,
+    ///         `SubnetDissolved` once dissolution has completed or
     ///         the tokenId does not correspond to the currently-registered subnet, and
     ///         `NoSharesOutstanding` when no shares have been minted against this tokenId
     ///         (a share price with zero supply has no meaningful value).
@@ -579,9 +580,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Preview the unwrap of `shares` for a position.
-    /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while the netuid sits in subtensor's
-    ///         dissolve cleanup queue and `SubnetDissolved` for a dissolved position whose clone
-    ///         holds no TAO refund.
+    /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while the subnet is being dissolved
+    ///         and `SubnetDissolved` for a dissolved position whose clone holds no TAO refund.
     ///         Live-path delivery is exact to within a few RAO of chain-side share rounding: unwrap
     ///         delivers this amount or reverts, so a sub-floor total is not deliverable here and
     ///         must be exited via unwrapForTao. That voluntary alpha-for-TAO sell is a market order
@@ -1062,7 +1062,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
 
     /// @dev Subtensor dissolves a subnet asynchronously over many blocks; alpha balances and
     ///      TAO refunds are in flux for the whole window, so every share-priced path is frozen
-    ///      until the netuid leaves the dissolve cleanup queue.
+    ///      until dissolution completes. The check is per netuid, so an already-dissolved
+    ///      position is also frozen while a newer subnet on the same netuid dissolves.
     function _requireNotDissolving(uint16 netuid) private view {
         if (ISubnet(SUBNET_PRECOMPILE).isSubnetDissolving(netuid)) revert SubnetInDissolutionBlackoutPeriod();
     }
