@@ -22,7 +22,7 @@ import { StorageQueryReader } from "./libraries/StorageQueryReader.sol";
 ///
 /// @dev Architecture:
 ///   - Token ID = (netuid | registrationBlock << 16). No registration needed - vaults materialize on first deposit.
-///   - Each vault tracks its own sharePrice independently: totalStake(netuid) / totalShares(netuid).
+///   - Each vault tracks its own sharePrice independently: totalStake(tokenId) / totalSupply(tokenId).
 ///   - EIP-1167 clones serve as deterministic "Mailbox" deposit addresses per (user, netuid).
 ///   - Validators + weights are read exclusively from ValidatorRegistry (no on-chain fallback).
 ///   - Deposits and unwraps rebalance toward the attested weights (up to N-1 pre-checked
@@ -160,7 +160,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
 
     /// @notice Flush the user's mailbox stake under `chosenHotkey` to the subnet clone and
     ///         rebalance the position to the attested BPS weights.
-    /// @dev    Caller-restriction prevents an attacker flushing the clone before the user is ready.
+    /// @dev    Caller-restriction prevents an attacker flushing the mailbox before the user is ready.
     ///         The call flushes only the mailbox balance recorded under `chosenHotkey`; a mailbox
     ///         holding stake under multiple hotkeys requires one `wrap` per hotkey.
     ///         `chosenHotkey` must be in the current attested validator set; reverts with
@@ -255,7 +255,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Burn vault shares pro-rata and pay the caller native TAO from selling the backing alpha.
-    /// @dev    Full-balance sells run bare (floor-exempt on the chain) and their failures bubble.
+    /// @dev    Full-balance sells go straight to the chain - full drains are exempt from its
+    ///         minimum - and their failures bubble.
     ///         A full burn claims the exact backing, so every slot drains fully and nothing is
     ///         withheld - the only exit for a sub-floor position. On a partial burn the remainder
     ///         is sold only when the chain is sure to take it cleanly - to within one RAO of quote
@@ -290,9 +291,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
 
         uint256 balanceBefore = clone.balance;
         uint256 dustThresholdTao = IStaking(STAKING_PRECOMPILE).getNominatorMinRequiredStake();
-        // Floor-exempt full drains sell on the first round so a shrunk partial can never starve a
-        // later slot's exact fit; the second round adds the pre-checked partials on what remains,
-        // at prices the earlier sells have moved.
+        // Round one sells only slots that empty completely - the chain exempts those from its
+        // minimum. Round two sells checked partial amounts from what then remains, at prices the
+        // earlier sells have moved; partials go last so their shrinking can never eat an amount a
+        // later slot would have emptied exactly.
         uint256 remaining = _sellRound(clone, netuid, hotkeys, balances, assets, dustThresholdTao, false);
         _sellRound(clone, netuid, hotkeys, balances, remaining, dustThresholdTao, true);
 
@@ -317,7 +319,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
         _consolidateRotatedStake(tokenId, clone, coldkey, hotkeys, alphaPriceE18);
 
-        // Post-consolidation the whole backing sits on the current set, so its balances are the full union.
+        // After consolidation the whole backing sits on the current validators, so these three
+        // balances count everything.
         uint256[3] memory balances = _fetchBalances(hotkeys, coldkey, netuid);
         uint256 totalAlpha = _sumBalances(balances);
         if (totalAlpha == 0) revert NothingToUnwrap();
@@ -361,18 +364,18 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
                 ++i;
             }
         }
-        // No gather needed when the largest slot already covers the request; its fetched balance is
-        // still live. A gather instead moves live piles a chain credit can round below the computed
-        // sum, so the delivery slot is re-read only after one runs.
+        // When the largest slot already covers the request, its fetched balance is still exact. A
+        // gather is different: the chain can credit each move slightly short, so summed balances
+        // overstate what a slot holds and the delivery slot is re-read after a gather runs.
         uint256 deliverable = balances[deliveryIndex];
         if (balances[deliveryIndex] < assets) {
-            // Hops are pile-sized and non-decreasing, so the largest slot is the binding floor
-            // check: if it is provably sub-floor, reject up front instead of rolling into a
-            // chain rejection that would burn the forwarded gas.
+            // Every gather hop moves at least the largest slot's balance, so if even that provably
+            // cannot clear the chain's minimum, no hop can: reject up front instead of paying full
+            // gas for the chain to reject it.
             if (_isBelowFloorAtAnyPrice(balances[deliveryIndex], alphaPriceE18)) revert GatherBelowFloor();
-            // Move the live pile each hop; `balances` still tracks which slots are drained and when
-            // the gather has enough. Reading the pile off the chain moves exactly what sits on the
-            // slot, never the one RAO the previous hop's credit rounded away.
+            // Each hop re-reads the moving balance from the chain: the previous hop may have been
+            // credited one RAO short, and asking for more than the slot holds would revert.
+            // `balances` still tracks which slots are drained and when the gather has enough.
             for (uint256 i; i < 3 && balances[deliveryIndex] < assets;) {
                 if (i != deliveryIndex && balances[i] != 0) {
                     uint256 pile = IStaking(STAKING_PRECOMPILE).getStake(hotkeys[deliveryIndex], coldkey, netuid);
@@ -451,7 +454,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ) private returns (uint256 total) {
         total = _sumBalances(balances);
 
-        // weights[0] != 0 is guaranteed by _resolveValidators, so weights[1] == 0 implies a
+        // The registry only stores contiguous non-zero prefixes, so weights[1] == 0 means a
         // single-validator set: nothing to rebalance against.
         if (weights[1] == 0 || total == 0) return total;
 
@@ -469,7 +472,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
             targets[lastIndex] = total - assigned;
         }
 
-        // move from overweight to underweight. Max N-1 iterations for N validators.
+        // Each step settles at least one slot exactly at its target, and surpluses and deficits
+        // cancel out, so settling all but one slot settles the last one too.
         for (uint256 round; round < lastIndex;) {
             if (!_rebalanceStep(tokenId, clone, hotkeys, balances, targets, alphaPriceE18)) break;
             unchecked {
@@ -512,13 +516,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         if (maxOver == 0 || maxUnder == 0) return false;
 
         uint256 moveAmount = maxOver < maxUnder ? maxOver : maxUnder;
-        // A rejected precompile call consumes all gas forwarded to it, so a doomed move must never
-        // be attempted (swallowing the failure instead would burn nearly all of the tx gas). The
-        // skip decision is exact, not best-effort: nothing on this path trades against the pool, so
-        // the entry price holds for the whole call, and the oracle only rounds down - a move that
-        // passes this check cannot be rejected as too small. Skipping (including every move at a
-        // zero price read) leaves the split drifted until a later call retries it; harmless, since
-        // share value depends on the total stake, not its split.
+        // A move the chain rejects burns all the gas sent with it, so a doomed move is skipped,
+        // never attempted. The skip is exact: nothing on this path trades against the pool and the
+        // price read only rounds down, so a move that passes this check cannot be rejected as too
+        // small. A skipped move (including every move at a zero price read) just leaves the split
+        // drifted for a later call - harmless, since share value depends on the total, not the split.
         if (alphaPriceE18 == 0 || _isBelowFloorAtReadPrice(moveAmount, alphaPriceE18)) return false;
         SubnetClone(payable(clone)).moveStake(hotkeys[overIndex], hotkeys[underIndex], _netuid(tokenId), moveAmount);
         emit Rebalanced(tokenId, hotkeys[overIndex], hotkeys[underIndex], moveAmount);
@@ -628,7 +630,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
 
     /// @notice Reclaim native TAO stuck in the caller's mailbox clone after subnet deregistration.
     /// @dev    Deploys the mailbox clone lazily if it was never materialized, so the TAO refund
-    ///         credited directly to the deterministic address can still be swept.
+    ///         credited directly to the deterministic address can still be recovered.
     ///         Reverts with `ZeroAmount` if the mailbox holds no balance.
     /// @param  netuid Subnet id whose mailbox clone should be drained to the caller.
     function reclaimTaoFromMailbox(uint256 netuid) external nonReentrant {
@@ -758,8 +760,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         return alphaPriceE18 != 0 && _taoValue(alphaAmount, alphaPriceE18 + ALPHA_PRICE_QUANTUM_E18) < minStakeTaoFloor;
     }
 
-    /// @dev One selling round over the union slots: full drains always; shrunk-and-checked
-    ///      partials only when `includePartials`. Returns what is left of `remaining`.
+    /// @dev One selling round over the union slots: full drains always; checked partials only
+    ///      when `includePartials`. Returns what is left of `remaining`.
     function _sellRound(
         address clone,
         uint16 netuid,
@@ -801,7 +803,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
         if (alphaPriceE18 == 0) return 0;
 
-        // The extra RAO of leftover value absorbs the one-RAO rounding of the marginal quote below.
+        // One extra RAO of leftover value covers the rounding of the leftover's quote below, so a
+        // leftover that passes that check is truly above the threshold.
         uint256 minLeftover = dustThresholdTao == 0 ? 0 : Math.ceilDiv((dustThresholdTao + 1) * 1e18, alphaPriceE18);
         if (balance <= minLeftover) return 0;
 
@@ -990,9 +993,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
                 ++i;
             }
         }
-        // Both lists are individually duplicate-free: the registry rejects duplicate hotkeys within a
-        // validator set, and the remembered set is a past copy of such a set. So only the
-        // current-vs-last-seen overlap needs removing, which the guard below does.
+        // Both lists are individually duplicate-free: the registry rejects duplicate hotkeys within
+        // a validator set, and the remembered set is a past copy of such a set. Only the overlap
+        // between the two lists needs removing.
         for (uint256 i; i < 3;) {
             bytes32 hotkey = current[i];
             if (hotkey != bytes32(0) && hotkey != lastSeen[0] && hotkey != lastSeen[1] && hotkey != lastSeen[2]) {
