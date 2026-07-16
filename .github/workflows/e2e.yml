@@ -73,7 +73,7 @@ jobs:
 
       - name: Install Python deps
         run: |
-          pip install bittensor-cli==9.20.1 substrate-interface
+          pip install bittensor-cli==9.23.2 substrate-interface
           pip install -r requirements.txt
 
       - name: Compile-check Python scripts
