@@ -745,8 +745,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         return (alphaAmount * alphaPriceE18) / 1e18;
     }
 
-    /// @dev The rounded-down read can under-value by up to one price quantum (under 0.004 TAO), so
-    ///      this can reject what the chain would accept, never the reverse. Must never gate a
+    /// @dev The rounded-down read can under-value the amount, so this can reject what the chain
+    ///      would accept, never the reverse. Must never gate a
     ///      full-balance unstake: those are floor-exempt and the only exit for sub-floor positions.
     ///      A zero read proves nothing; callers choose their own fall-through.
     function _isBelowFloorAtReadPrice(uint256 alphaAmount, uint256 alphaPriceE18) private view returns (bool) {
