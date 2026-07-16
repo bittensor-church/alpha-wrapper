@@ -39,8 +39,9 @@ jobs:
 
     services:
       subtensor:
-        # Pinned: :main is a moving target; bump deliberately.
-        image: ghcr.io/opentensor/subtensor-localnet:v3.4.9-424
+        # The opentensor namespace is frozen at spec 424, which predates isSubnetDissolving;
+        # the dissolution legs need the RaoFoundation package (spec 431+) to run at all.
+        image: ghcr.io/raofoundation/subtensor-localnet:devnet
         ports:
           - 9944:9944
           - 9945:9945

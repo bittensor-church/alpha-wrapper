@@ -30,6 +30,22 @@ dissolve_network_py() { # <netuid>
         --netuid "$1"
 }
 
+SUBNET_PRECOMPILE=0x0000000000000000000000000000000000000803
+
+# Cleanup drains asynchronously via on_idle; the wrapper freezes wrap/unwrap/previews
+# until the netuid leaves the dissolve queue, so assertions must wait it out.
+wait_dissolution_cleanup() { # <netuid>
+    for _ in $(seq 1 60); do
+        # A transient RPC failure counts as still dissolving so the poll retries instead of aborting.
+        DISSOLVING=$(cast call "$SUBNET_PRECOMPILE" "isSubnetDissolving(uint16)(bool)" "$1" --rpc-url "$RPC_URL" || echo true)
+        if [[ "$DISSOLVING" == "false" ]]; then
+            return 0
+        fi
+        sleep 2
+    done
+    fail "netuid $1 still dissolving (or subnet precompile unreachable) after 120s"
+}
+
 e2e_bootstrap
 
 log "Phase 6: Two users wrap positions on the soon-dissolved subnet"
@@ -93,6 +109,10 @@ log "Phase 9: Dissolve both the position's subnet and the mailbox's subnet"
 
 dissolve_network_py "$DEAD_NET" | tail -1
 dissolve_network_py "$MAIL_NET" | tail -1
+
+wait_dissolution_cleanup "$DEAD_NET"
+wait_dissolution_cleanup "$MAIL_NET"
+ok "Dissolve cleanup completed for netuids $DEAD_NET and $MAIL_NET"
 
 # Dissolution returns the position's and mailbox's alpha as native TAO to their
 # addresses, so those balances turn positive as the alpha is wiped.
