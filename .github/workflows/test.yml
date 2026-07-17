@@ -52,3 +52,14 @@ jobs:
 
       - name: Check per-call gas snapshots have not drifted
         run: git diff --exit-code snapshots/
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Python deps
+        run: pip install -r requirements.txt
+
+      - name: E2E helper unit tests (no chain)
+        run: python -m pytest e2e/tests -v -m "not scenario"

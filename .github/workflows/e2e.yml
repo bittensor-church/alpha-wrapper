@@ -18,31 +18,33 @@ env:
 
 jobs:
   e2e:
-    name: Localnet E2E (${{ matrix.script }})
+    name: Localnet E2E (${{ matrix.scenario }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     strategy:
       fail-fast: false
       matrix:
-        # Each leg gets its own fresh subtensor service container, so the
+        # Each scenario gets its own fresh subtensor service container, so the
         # transfers-off run (which globally disables alpha transfers) is isolated.
-        script:
-          - localnet-e2e.sh
-          - localnet-e2e-transfers-off.sh
-          - localnet-e2e-convicted-alpha.sh
-          - localnet-e2e-subnet-dissolved.sh
-          - localnet-e2e-min-stake-floor.sh
-          - localnet-e2e-dust-dos.sh
-          - localnet-e2e-hostile-dust.sh
-          - localnet-e2e-min-stake-liveness.sh
-          - localnet-e2e-ten-validators.sh
+        scenario:
+          - tests/test_environment_builds.py
+          - tests/test_full_flow.py
+          - tests/test_transfers_off.py
+          - tests/test_convicted_alpha.py
+          - tests/test_subnet_dissolved.py
+          - tests/test_min_stake_floor.py
+          - tests/test_dust_dos.py
+          - tests/test_hostile_dust.py
+          - tests/test_min_stake_liveness.py
+          - tests/test_ten_validators.py
 
     services:
       subtensor:
         # The opentensor namespace is frozen at spec 424, which predates isSubnetDissolving;
         # the dissolution legs need the RaoFoundation package (spec 431+) to run at all.
-        image: ghcr.io/raofoundation/subtensor-localnet:devnet
+        # Pinned by digest: devnet is a moving target; bump deliberately.
+        image: ghcr.io/raofoundation/subtensor-localnet:devnet@sha256:6efc6cd88dbaad7012e3bb8872da785ed6ce9a5e6610647889b2ba4fc26f7bcb
         ports:
           - 9944:9944
           - 9945:9945
@@ -73,18 +75,10 @@ jobs:
           python-version: "3.11"
 
       - name: Install Python deps
-        run: |
-          pip install bittensor-cli==9.23.2 substrate-interface
-          pip install -r requirements.txt
-          # cyscale and py-scale-codec both claim the `scalecodec` namespace: the CLI pulls
-          # cyscale, substrate-interface pulls py-scale-codec, and whichever lands second
-          # breaks the other's import. cyscale is a drop-in replacement for py-scale-codec,
-          # so install it last and let it serve both.
-          pip uninstall -y scalecodec cyscale
-          pip install cyscale
+        run: e2e/install-deps.sh
 
       - name: Compile-check Python scripts
-        run: python -m py_compile scripts/*.py e2e/*.py
+        run: python -m py_compile scripts/*.py e2e/*.py e2e/alpha_e2e/*.py e2e/tests/*.py
 
       - name: Wait for subtensor to be ready
         run: |
@@ -101,10 +95,11 @@ jobs:
           exit 1
 
       - name: Run E2E test
-        run: |
-          chmod +x e2e/${{ matrix.script }}
-          ./e2e/${{ matrix.script }}
+        working-directory: e2e
+        run: python -m pytest ${{ matrix.scenario }} -v -m scenario --tb=short
 
       - name: Collect subtensor logs
         if: failure()
-        run: docker logs subtensor 2>&1 | tail -100 || true
+        # The service key is only a network alias; docker knows the container by
+        # its runner-generated id.
+        run: docker logs "${{ job.services.subtensor.id }}" 2>&1 | tail -100 || true
