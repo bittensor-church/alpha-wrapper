@@ -128,8 +128,6 @@ def test_transfers_off(env):
         seed_netuid, seed_hotkey_pubkey, 0,
     )
     seed_alpha_after = env.stake(seed_hotkey_pubkey, seed_mailbox_coldkey, seed_netuid)
-    # The chain rounds the sold amount down to whole shares, so a mailbox that has
-    # been accruing emissions keeps a RAO or two of dust after the reclaim.
     assert seed_alpha_after <= config.ROUNDING_DUST_SLOT_RAO, (
         f"mailbox still holds {seed_alpha_after} RAO after reclaim"
     )

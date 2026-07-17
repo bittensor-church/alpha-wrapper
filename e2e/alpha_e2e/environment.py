@@ -131,28 +131,31 @@ class Environment:
             config.ALPHA_PRECOMPILE, "getAlphaInPool(uint16)(uint64)", netuid,
         ))
 
-    def wait_for_dissolution_cleanup(
-        self, netuid: int, attempts: int = 60, delay_seconds: int = 2,
-    ) -> None:
+    def is_subnet_dissolving(self, netuid: int) -> Optional[bool]:
+        """Whether the chain still reports the netuid mid-dissolution; None when
+        the probe fails (the RPC can flap while the chain tears a subnet down)."""
+        probe = chain.run(
+            ["cast", "call", config.SUBNET_PRECOMPILE,
+             "isSubnetDissolving(uint16)(bool)", str(netuid),
+             "--rpc-url", config.RPC_URL],
+            check=False,
+        )
+        if probe.returncode != 0:
+            return None
+        return probe.stdout.strip() == "true"
+
+    def wait_for_dissolution_cleanup(self, netuid: int) -> None:
         """Block until the chain finishes draining a dissolved netuid.
 
         The dissolve extrinsic only starts the drain, and the vault freezes the
         subnet's flows until it completes, so scenarios must wait it out before
-        asserting refunds. A failed probe counts as still dissolving: the RPC
-        can flap while the chain tears the subnet down."""
-        for _ in range(attempts):
-            probe = chain.run(
-                ["cast", "call", config.SUBNET_PRECOMPILE,
-                 "isSubnetDissolving(uint16)(bool)", str(netuid),
-                 "--rpc-url", config.RPC_URL],
-                check=False,
-            )
-            if probe.returncode == 0 and probe.stdout.strip() == "false":
+        asserting refunds. A failed probe counts as still dissolving."""
+        for _ in range(60):
+            if self.is_subnet_dissolving(netuid) is False:
                 return
-            time.sleep(delay_seconds)
+            time.sleep(2)
         raise AssertionError(
-            f"netuid {netuid} still dissolving (or subnet precompile unreachable) "
-            f"after {attempts * delay_seconds}s"
+            f"netuid {netuid} still dissolving (or subnet precompile unreachable) after 120s"
         )
 
     def alpha_value_tao(self, netuid: int, alpha_rao: int) -> int:
