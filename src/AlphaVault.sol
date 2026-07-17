@@ -45,7 +45,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
 
     /// @dev Validators the clone's stake was distributed across at the last state-mutating call;
     ///      refreshed only after a clean consolidation.
-    mapping(uint256 => bytes32[3]) private _lastSeenHotkeys;
+    mapping(uint256 => bytes32[]) private _lastSeenHotkeys;
 
     /// @notice Tao floor the vault uses to skip stake moves the chain would reject as too small.
     ///         Owner-tunable to follow the chain's minimum without a redeploy, up to a hard cap.
@@ -184,19 +184,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         // forge-lint: disable-next-line(unsafe-typecast)
         uint16 nid = uint16(netuid);
         _requireNotDissolving(nid);
-        (bytes32[3] memory hotkeys, uint16[3] memory weights) = _resolveValidators(nid);
-
-        bool inSet;
-        for (uint256 i; i < 3;) {
-            if (hotkeys[i] == chosenHotkey) {
-                inSet = true;
-                break;
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        if (!inSet) revert ChosenHotkeyNotInSet();
+        (bytes32[] memory hotkeys, uint16[] memory weights) = _resolveValidators(nid);
+        if (!_isInSet(chosenHotkey, hotkeys)) revert ChosenHotkeyNotInSet();
 
         address clone = subnetClone[tokenId];
         if (clone == address(0)) clone = _deploySubnetClone(tokenId);
@@ -281,7 +270,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         uint16 netuid = _netuid(tokenId);
         _requireNotDissolving(netuid);
 
-        (bytes32[6] memory hotkeys, uint256[6] memory balances, uint256 total) = _unionStake(tokenId, netuid, clone);
+        (bytes32[] memory hotkeys, uint256[] memory balances, uint256 total) = _unionStake(tokenId, netuid, clone);
         // The dissolving window is excluded above and completed dissolution zeroes the alpha
         // balance, so a non-zero total implies a live subnet and a zero total cannot be
         // exited via this rail regardless of cause.
@@ -320,15 +309,15 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         address clone,
         uint16 netuid
     ) private {
-        (bytes32[3] memory hotkeys, uint16[3] memory weights) = _resolveValidators(netuid);
+        (bytes32[] memory hotkeys, uint16[] memory weights) = _resolveValidators(netuid);
         bytes32 coldkey = _coldkeyOf(clone);
         // Nothing on this path trades against the pool, so one price read holds for the whole call.
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
         _consolidateRotatedStake(tokenId, clone, coldkey, hotkeys, alphaPriceE18);
 
-        // After consolidation the whole backing sits on the current validators, so these three
+        // After consolidation the whole backing sits on the current validators, so their
         // balances count everything.
-        uint256[3] memory balances = _fetchBalances(hotkeys, coldkey, netuid);
+        uint256[] memory balances = _fetchBalances(hotkeys, coldkey, netuid);
         uint256 totalAlpha = _sumBalances(balances);
         if (totalAlpha == 0) revert NothingToUnwrap();
 
@@ -355,17 +344,18 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     function _deliverAndAlign(
         uint256 tokenId,
         address clone,
-        bytes32[3] memory hotkeys,
-        uint16[3] memory weights,
-        uint256[3] memory balances,
+        bytes32[] memory hotkeys,
+        uint16[] memory weights,
+        uint256[] memory balances,
         bytes32 coldkey,
         bytes32 userColdkey,
         uint256 assets,
         uint256 alphaPriceE18
     ) private returns (uint256 alphaOut) {
         uint16 netuid = _netuid(tokenId);
+        uint256 validatorCount = hotkeys.length;
         uint256 deliveryIndex;
-        for (uint256 i = 1; i < 3;) {
+        for (uint256 i = 1; i < validatorCount;) {
             if (balances[i] > balances[deliveryIndex]) deliveryIndex = i;
             unchecked {
                 ++i;
@@ -375,7 +365,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         // gather is different: the chain can credit each move slightly short, so summed balances
         // overstate what a slot holds and the delivery slot is re-read after a gather runs.
         uint256 deliverable = balances[deliveryIndex];
-        if (balances[deliveryIndex] < assets) {
+        bool gathered = deliverable < assets;
+        if (gathered) {
             // Every gather hop moves at least the largest slot's balance, so if even that provably
             // cannot clear the chain's minimum, no hop can: reject up front instead of paying full
             // gas for the chain to reject it.
@@ -383,7 +374,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
             // Each hop re-reads the moving balance from the chain: the previous hop may have been
             // credited one RAO short, and asking for more than the slot holds would revert.
             // `balances` still tracks which slots are drained and when the gather has enough.
-            for (uint256 i; i < 3 && balances[deliveryIndex] < assets;) {
+            for (uint256 i; i < validatorCount && balances[deliveryIndex] < assets;) {
                 if (i != deliveryIndex && balances[i] != 0) {
                     uint256 pile = IStaking(STAKING_PRECOMPILE).getStake(hotkeys[deliveryIndex], coldkey, netuid);
                     SubnetClone(payable(clone)).moveStake(hotkeys[deliveryIndex], hotkeys[i], netuid, pile);
@@ -400,9 +391,14 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         // Deliver the entitlement, capped at what the gathered slot holds after the gather's rounding.
         alphaOut = assets < deliverable ? assets : deliverable;
         SubnetClone(payable(clone)).flush(userColdkey, hotkeys[deliveryIndex], netuid, alphaOut);
-        // Re-read live balances so the weight re-split never moves more than a slot holds.
-        uint256[3] memory postBalances = _fetchBalances(hotkeys, coldkey, netuid);
-        _alignToWeights(tokenId, clone, hotkeys, weights, postBalances, alphaPriceE18);
+        // Re-read live balances so the weight re-split never moves more than a slot holds. Without
+        // a gather only the delivery slot changed, so one read refreshes everything stale.
+        if (gathered) {
+            balances = _fetchBalances(hotkeys, coldkey, netuid);
+        } else {
+            balances[deliveryIndex] = IStaking(STAKING_PRECOMPILE).getStake(hotkeys[deliveryIndex], coldkey, netuid);
+        }
+        _alignToWeights(tokenId, clone, hotkeys, weights, balances, alphaPriceE18);
     }
 
     function _unwrapFromDissolvedSubnet(uint256 tokenId, uint256 shares, address clone) private {
@@ -434,7 +430,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         // forge-lint: disable-next-line(unsafe-typecast)
         uint16 nid = uint16(netuid);
         _requireNotDissolving(nid);
-        (bytes32[3] memory hotkeys, uint16[3] memory weights) = _resolveValidators(nid);
+        (bytes32[] memory hotkeys, uint16[] memory weights) = _resolveValidators(nid);
         bytes32 coldkey = _coldkeyOf(clone);
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
         _consolidateRotatedStake(tokenId, clone, coldkey, hotkeys, alphaPriceE18);
@@ -444,31 +440,30 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     function _rebalance(
         uint256 tokenId,
         address clone,
-        bytes32[3] memory hotkeys,
-        uint16[3] memory weights,
+        bytes32[] memory hotkeys,
+        uint16[] memory weights,
         bytes32 coldkey,
         uint256 alphaPriceE18
     ) private returns (uint256) {
-        uint256[3] memory balances = _fetchBalances(hotkeys, coldkey, _netuid(tokenId));
+        uint256[] memory balances = _fetchBalances(hotkeys, coldkey, _netuid(tokenId));
         return _alignToWeights(tokenId, clone, hotkeys, weights, balances, alphaPriceE18);
     }
 
     function _alignToWeights(
         uint256 tokenId,
         address clone,
-        bytes32[3] memory hotkeys,
-        uint16[3] memory weights,
-        uint256[3] memory balances,
+        bytes32[] memory hotkeys,
+        uint16[] memory weights,
+        uint256[] memory balances,
         uint256 alphaPriceE18
     ) private returns (uint256 total) {
         total = _sumBalances(balances);
 
-        // The registry only stores contiguous non-zero prefixes, so weights[1] == 0 means a
-        // single-validator set: nothing to rebalance against.
-        if (weights[1] == 0 || total == 0) return total;
+        uint256 validatorCount = hotkeys.length;
+        if (validatorCount == 1 || total == 0) return total;
 
-        uint256 lastIndex = weights[2] != 0 ? 2 : 1;
-        uint256[3] memory targets;
+        uint256 lastIndex = validatorCount - 1;
+        uint256[] memory targets = new uint256[](validatorCount);
         {
             uint256 assigned;
             for (uint256 i; i < lastIndex;) {
@@ -494,16 +489,17 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     function _rebalanceStep(
         uint256 tokenId,
         address clone,
-        bytes32[3] memory hotkeys,
-        uint256[3] memory balances,
-        uint256[3] memory targets,
+        bytes32[] memory hotkeys,
+        uint256[] memory balances,
+        uint256[] memory targets,
         uint256 alphaPriceE18
     ) private returns (bool) {
+        uint256 validatorCount = hotkeys.length;
         uint256 overIndex;
         uint256 maxOver;
         uint256 underIndex;
         uint256 maxUnder;
-        for (uint256 i; i < 3;) {
+        for (uint256 i; i < validatorCount;) {
             if (balances[i] > targets[i]) {
                 uint256 over = balances[i] - targets[i];
                 if (over > maxOver) {
@@ -608,17 +604,17 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         }
 
         // Reverts NoValidatorFound when the registry has no set for this subnet.
-        (bytes32[3] memory current,) = _resolveValidators(netuid);
+        (bytes32[] memory current,) = _resolveValidators(netuid);
 
         (,, uint256 totalAlpha) = _unionStake(tokenId, netuid, clone, current);
         return (_assetsFor(totalAlpha, supply, shares), 0);
     }
 
-    /// @notice Unused slots are bytes32(0).
-    function getCurrentValidators(uint256 netuid) external view returns (bytes32[3] memory) {
+    /// @notice Hotkeys of the attested validator set; reverts `NoValidatorFound` when unconfigured.
+    function getCurrentValidators(uint256 netuid) external view returns (bytes32[] memory) {
         if (netuid > type(uint16).max) revert NetuidOutOfRange();
         // forge-lint: disable-next-line(unsafe-typecast)
-        (bytes32[3] memory hotkeys,) = _resolveValidators(uint16(netuid));
+        (bytes32[] memory hotkeys,) = _resolveValidators(uint16(netuid));
         return hotkeys;
     }
 
@@ -701,20 +697,21 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     function _resolveValidators(uint16 netuid)
         private
         view
-        returns (bytes32[3] memory hotkeys, uint16[3] memory weights)
+        returns (bytes32[] memory hotkeys, uint16[] memory weights)
     {
         (hotkeys, weights) = validatorRegistry.getValidators(netuid);
-        if (weights[0] == 0) revert NoValidatorFound();
+        if (hotkeys.length == 0) revert NoValidatorFound();
     }
 
-    function _fetchBalances(bytes32[3] memory hotkeys, bytes32 coldkey, uint16 netuid)
+    function _fetchBalances(bytes32[] memory hotkeys, bytes32 coldkey, uint16 netuid)
         private
         view
-        returns (uint256[3] memory balances)
+        returns (uint256[] memory balances)
     {
+        uint256 validatorCount = hotkeys.length;
+        balances = new uint256[](validatorCount);
         IStaking staking = IStaking(STAKING_PRECOMPILE);
-        for (uint256 i; i < 3;) {
-            if (hotkeys[i] == bytes32(0)) break;
+        for (uint256 i; i < validatorCount;) {
             balances[i] = staking.getStake(hotkeys[i], coldkey, netuid);
             unchecked {
                 ++i;
@@ -722,8 +719,14 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         }
     }
 
-    function _sumBalances(uint256[3] memory balances) private pure returns (uint256) {
-        return balances[0] + balances[1] + balances[2];
+    function _sumBalances(uint256[] memory balances) private pure returns (uint256 total) {
+        uint256 count = balances.length;
+        for (uint256 i; i < count;) {
+            total += balances[i];
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     function _sharesFor(uint256 stake, uint256 supply, uint256 assets) private pure returns (uint256) {
@@ -742,8 +745,15 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         return IAddressMapping(ADDRESS_MAPPING_PRECOMPILE).addressMapping(evmAddress);
     }
 
-    function _isRotatedOut(bytes32 hotkey, bytes32[3] memory currentSet) private pure returns (bool) {
-        return hotkey != bytes32(0) && hotkey != currentSet[0] && hotkey != currentSet[1] && hotkey != currentSet[2];
+    function _isInSet(bytes32 hotkey, bytes32[] memory set) private pure returns (bool) {
+        uint256 count = set.length;
+        for (uint256 i; i < count;) {
+            if (set[i] == hotkey) return true;
+            unchecked {
+                ++i;
+            }
+        }
+        return false;
     }
 
     /// @dev Tao value of `alphaAmount` at `alphaPriceE18`, rounded down - the same arithmetic the
@@ -772,13 +782,14 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     function _sellRound(
         address clone,
         uint16 netuid,
-        bytes32[6] memory hotkeys,
-        uint256[6] memory balances,
+        bytes32[] memory hotkeys,
+        uint256[] memory balances,
         uint256 remaining,
         uint256 dustThresholdTao,
         bool includePartials
     ) private returns (uint256) {
-        for (uint256 i; i < 6 && remaining != 0;) {
+        uint256 slotCount = hotkeys.length;
+        for (uint256 i; i < slotCount && remaining != 0;) {
             uint256 balance = balances[i];
             uint256 chunk;
             if (balance <= remaining) {
@@ -850,16 +861,19 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         uint256 tokenId,
         address clone,
         bytes32 coldkey,
-        bytes32[3] memory currentSet,
+        bytes32[] memory currentSet,
         uint256 alphaPriceE18
     ) private {
-        bytes32[3] storage lastSeen = _lastSeenHotkeys[tokenId];
+        bytes32[] memory lastSeen = _lastSeenHotkeys[tokenId];
+        // Steady state: the attested set is exactly the remembered one, so nothing is rotated
+        // out and there is nothing to refresh.
+        if (keccak256(abi.encodePacked(lastSeen)) == keccak256(abi.encodePacked(currentSet))) return;
         if (_anyRotatedOut(lastSeen, currentSet)) {
             uint16 netuid = _netuid(tokenId);
             (
                 bytes32 rollerHotkey,
                 uint256 richestBalance,
-                uint256[3] memory lastSeenBalances,
+                uint256[] memory lastSeenBalances,
                 bool hasRotatedOutBalance
             ) = _chooseRichestSlot(lastSeen, currentSet, coldkey, netuid);
             // Every hop moves the whole pile and the pile only grows, so the richest balance - where
@@ -871,12 +885,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
             // the pile departs, so the roll must never revisit it. No other slot can repeat: a
             // validator set holds no duplicate hotkeys.
             bytes32 richestHotkey = rollerHotkey;
-            for (uint256 i; i < 3;) {
+            uint256 lastSeenCount = lastSeen.length;
+            for (uint256 i; i < lastSeenCount;) {
                 bytes32 lastSeenHotkey = lastSeen[i];
-                if (
-                    lastSeenHotkey != richestHotkey && _isRotatedOut(lastSeenHotkey, currentSet)
-                        && lastSeenBalances[i] > 0
-                ) {
+                // Balances are recorded only for rotated-out slots, so a positive entry alone
+                // marks a hop target.
+                if (lastSeenHotkey != richestHotkey && lastSeenBalances[i] > 0) {
                     // Move the live pile: a same-subnet move can credit the roller one RAO short, so a
                     // carried arithmetic sum would over-ask the next hop. Reading the balance off the
                     // chain moves exactly what sits on the roller.
@@ -888,21 +902,25 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
                     ++i;
                 }
             }
-            if (_isRotatedOut(rollerHotkey, currentSet)) {
+            if (!_isInSet(rollerHotkey, currentSet)) {
                 uint256 pile = IStaking(STAKING_PRECOMPILE).getStake(rollerHotkey, coldkey, netuid);
                 SubnetClone(payable(clone)).moveStake(rollerHotkey, currentSet[0], netuid, pile);
             }
         }
         // The refresh may only follow a clean roll: a rejected hop reverts the whole call, otherwise
         // stake left on a rotated-out hotkey would drop out of the remembered set and be stranded.
-        if (lastSeen[0] != currentSet[0]) lastSeen[0] = currentSet[0];
-        if (lastSeen[1] != currentSet[1]) lastSeen[1] = currentSet[1];
-        if (lastSeen[2] != currentSet[2]) lastSeen[2] = currentSet[2];
+        _lastSeenHotkeys[tokenId] = currentSet;
     }
 
-    function _anyRotatedOut(bytes32[3] storage lastSeen, bytes32[3] memory currentSet) private view returns (bool) {
-        return _isRotatedOut(lastSeen[0], currentSet) || _isRotatedOut(lastSeen[1], currentSet)
-            || _isRotatedOut(lastSeen[2], currentSet);
+    function _anyRotatedOut(bytes32[] memory lastSeen, bytes32[] memory currentSet) private pure returns (bool) {
+        uint256 lastSeenCount = lastSeen.length;
+        for (uint256 i; i < lastSeenCount;) {
+            if (!_isInSet(lastSeen[i], currentSet)) return true;
+            unchecked {
+                ++i;
+            }
+        }
+        return false;
     }
 
     /// @dev Picks the richest hotkey across the remembered and current sets as the roll's start. Its
@@ -911,26 +929,23 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///      dust would forfeit the self-healing case where a later above-floor deposit is the richest
     ///      balance and carries the rotated-out stake over. When no rotated-out balance remains, the
     ///      returned hotkey is only a placeholder.
-    function _chooseRichestSlot(
-        bytes32[3] storage lastSeen,
-        bytes32[3] memory currentSet,
-        bytes32 coldkey,
-        uint16 netuid
-    )
+    function _chooseRichestSlot(bytes32[] memory lastSeen, bytes32[] memory currentSet, bytes32 coldkey, uint16 netuid)
         private
         view
         returns (
             bytes32 richestHotkey,
             uint256 richestBalance,
-            uint256[3] memory lastSeenBalances,
+            uint256[] memory lastSeenBalances,
             bool hasRotatedOutBalance
         )
     {
+        uint256 lastSeenCount = lastSeen.length;
+        lastSeenBalances = new uint256[](lastSeenCount);
         bytes32 richestRotatedOut;
         uint256 richestRotatedOutBalance;
-        for (uint256 i; i < 3;) {
+        for (uint256 i; i < lastSeenCount;) {
             bytes32 candidate = lastSeen[i];
-            if (_isRotatedOut(candidate, currentSet)) {
+            if (!_isInSet(candidate, currentSet)) {
                 uint256 balance = IStaking(STAKING_PRECOMPILE).getStake(candidate, coldkey, netuid);
                 lastSeenBalances[i] = balance;
                 if (balance > richestRotatedOutBalance) {
@@ -946,14 +961,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
 
         hasRotatedOutBalance = true;
         richestHotkey = currentSet[0];
-        for (uint256 i; i < 3;) {
+        uint256 currentCount = currentSet.length;
+        for (uint256 i; i < currentCount;) {
             bytes32 candidate = currentSet[i];
-            if (candidate != bytes32(0)) {
-                uint256 balance = IStaking(STAKING_PRECOMPILE).getStake(candidate, coldkey, netuid);
-                if (balance > richestBalance) {
-                    richestHotkey = candidate;
-                    richestBalance = balance;
-                }
+            uint256 balance = IStaking(STAKING_PRECOMPILE).getStake(candidate, coldkey, netuid);
+            if (balance > richestBalance) {
+                richestHotkey = candidate;
+                richestBalance = balance;
             }
             unchecked {
                 ++i;
@@ -968,50 +982,61 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     function _unionStake(uint256 tokenId, uint16 netuid, address clone)
         private
         view
-        returns (bytes32[6] memory, uint256[6] memory, uint256)
+        returns (bytes32[] memory, uint256[] memory, uint256)
     {
-        (bytes32[3] memory current,) = validatorRegistry.getValidators(netuid);
+        (bytes32[] memory current,) = validatorRegistry.getValidators(netuid);
         return _unionStake(tokenId, netuid, clone, current);
     }
 
     /// @dev Per-hotkey stake across the remembered and current validator sets, with its total.
-    function _unionStake(uint256 tokenId, uint16 netuid, address clone, bytes32[3] memory current)
+    function _unionStake(uint256 tokenId, uint16 netuid, address clone, bytes32[] memory current)
         private
         view
-        returns (bytes32[6] memory hotkeys, uint256[6] memory balances, uint256 total)
+        returns (bytes32[] memory hotkeys, uint256[] memory balances, uint256 total)
     {
-        bytes32[3] memory lastSeen = _lastSeenHotkeys[tokenId];
-        bytes32 coldkey = _coldkeyOf(clone);
-        IStaking staking = IStaking(STAKING_PRECOMPILE);
+        hotkeys = _unionHotkeys(_lastSeenHotkeys[tokenId], current);
+        balances = _fetchBalances(hotkeys, _coldkeyOf(clone), netuid);
+        total = _sumBalances(balances);
+    }
 
-        uint256 slotCount;
-        for (uint256 i; i < 3;) {
-            bytes32 hotkey = lastSeen[i];
-            if (hotkey != bytes32(0)) {
-                hotkeys[slotCount] = hotkey;
-                uint256 balance = staking.getStake(hotkey, coldkey, netuid);
-                balances[slotCount] = balance;
-                total += balance;
+    /// @dev `lastSeen` followed by the `current` entries not already in it. Both lists are
+    ///      individually duplicate-free: the registry rejects duplicate hotkeys within a validator
+    ///      set, and the remembered set is a past copy of such a set. Only the overlap between the
+    ///      two lists needs removing.
+    function _unionHotkeys(bytes32[] memory lastSeen, bytes32[] memory current)
+        private
+        pure
+        returns (bytes32[] memory hotkeys)
+    {
+        uint256 lastSeenCount = lastSeen.length;
+        uint256 currentCount = current.length;
+        bool[] memory isNewEntry = new bool[](currentCount);
+        uint256 unionCount = lastSeenCount;
+        for (uint256 i; i < currentCount;) {
+            if (!_isInSet(current[i], lastSeen)) {
+                isNewEntry[i] = true;
                 unchecked {
-                    ++slotCount;
+                    ++unionCount;
                 }
             }
             unchecked {
                 ++i;
             }
         }
-        // Both lists are individually duplicate-free: the registry rejects duplicate hotkeys within
-        // a validator set, and the remembered set is a past copy of such a set. Only the overlap
-        // between the two lists needs removing.
-        for (uint256 i; i < 3;) {
-            bytes32 hotkey = current[i];
-            if (hotkey != bytes32(0) && hotkey != lastSeen[0] && hotkey != lastSeen[1] && hotkey != lastSeen[2]) {
-                hotkeys[slotCount] = hotkey;
-                uint256 balance = staking.getStake(hotkey, coldkey, netuid);
-                balances[slotCount] = balance;
-                total += balance;
+
+        hotkeys = new bytes32[](unionCount);
+        for (uint256 i; i < lastSeenCount;) {
+            hotkeys[i] = lastSeen[i];
+            unchecked {
+                ++i;
+            }
+        }
+        uint256 slot = lastSeenCount;
+        for (uint256 i; i < currentCount;) {
+            if (isNewEntry[i]) {
+                hotkeys[slot] = current[i];
                 unchecked {
-                    ++slotCount;
+                    ++slot;
                 }
             }
             unchecked {
@@ -1020,7 +1045,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         }
     }
 
-    function lastSeenHotkeys(uint256 tokenId) external view returns (bytes32[3] memory) {
+    function lastSeenHotkeys(uint256 tokenId) external view returns (bytes32[] memory) {
         return _lastSeenHotkeys[tokenId];
     }
 

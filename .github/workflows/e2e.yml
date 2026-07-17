@@ -36,6 +36,7 @@ jobs:
           - localnet-e2e-dust-dos.sh
           - localnet-e2e-hostile-dust.sh
           - localnet-e2e-min-stake-liveness.sh
+          - localnet-e2e-ten-validators.sh
 
     services:
       subtensor:

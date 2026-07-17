@@ -191,6 +191,11 @@ clone_coldkey() { # <tokenId>
     h160_to_substrate_b32 "$(clone_addr "$1")"
 }
 
+# Element count of a dynamic-array `cast call` result like "[0x..., 0x...]".
+count_entries() { # reads stdin
+    python3 -c "import sys; s = sys.stdin.read().strip().strip('[]').strip(); print(len(s.split(',')) if s else 0)"
+}
+
 # Current alpha price for a subnet (TAO per alpha, e18 scale).
 alpha_price() { # <netuid>
     cast call "$ALPHA_PRECOMPILE" "getAlphaPrice(uint16)(uint256)" "$1" --rpc-url "$RPC_URL" | awk '{print $1}'

@@ -420,11 +420,13 @@ def set_validators(
 
     att_tuple = (netuid, hotkey_bytes, weights, next_nonce, deadline)
     tx_nonce = w3.eth.get_transaction_count(submitter.address)
+    # Gas estimation fails on the Bittensor EVM, so the limit is explicit; storing each
+    # hotkey dominates the cost, so scale the headroom with the set size.
     tx = registry_contract.functions.updateValidators(att_tuple, sigs).build_transaction(
         {
             "from": submitter.address,
             "nonce": tx_nonce,
-            "gas": 500_000,
+            "gas": 500_000 + 60_000 * len(hotkeys),
             "gasPrice": w3.to_wei(10, "gwei"),
             "chainId": chain_id,
         }

@@ -120,7 +120,7 @@ assert_le "$DUST_RESIDUE_POST" "$ROUNDING_DUST_SLOT_RAO" "Dust consolidation: ro
 ok "Next wrap consolidated the rotated dust: rotated-out hotkey left with $DUST_RESIDUE_POST RAO"
 
 # The remembered set must drop the drained hotkey and the backing must fold in deposit + reclaimed dust.
-DUST_LAST_SEEN=$(cast call "$VAULT_ADDR" "lastSeenHotkeys(uint256)(bytes32[3])" "$DUST_TOKEN_ID" --rpc-url "$RPC_URL")
+DUST_LAST_SEEN=$(cast call "$VAULT_ADDR" "lastSeenHotkeys(uint256)(bytes32[])" "$DUST_TOKEN_ID" --rpc-url "$RPC_URL")
 if echo "$DUST_LAST_SEEN" | grep -qi "${DUST_HOTKEY#0x}"; then
     fail "Dust consolidation: consolidated hotkey still present in lastSeenHotkeys"
 fi

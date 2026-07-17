@@ -49,8 +49,6 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     uint16 public constant NETUID2_BPS_HK2 = 6000;
     uint16 public constant NETUID2_BPS_HK1 = 4000;
 
-    uint16 public constant BPS_BASE = 10_000;
-
     // The simulated chain min-stake floor and dust threshold; aliased so they can never drift.
     uint256 internal constant MIN_STAKE_FLOOR = CHAIN_MIN_STAKE;
     uint256 internal constant DUST_THRESHOLD = CHAIN_NOMINATOR_MIN_STAKE;
@@ -308,6 +306,19 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         _simulateAlphaDeposit(user, netuid, amount);
         _wrap(user, netuid);
         shares = vault.balanceOf(user, vault.currentTokenId(netuid));
+    }
+
+    /// @dev Attests `validators` with `weights`, then wraps `amount` deposited under the first one.
+    function _attestAndWrap(
+        address user,
+        uint256 netuid,
+        bytes32[] memory validators,
+        uint16[] memory weights,
+        uint256 amount
+    ) internal {
+        _setValidators(netuid, validators, weights);
+        _simulateAlphaDepositHotkey(user, netuid, amount, validators[0]);
+        _wrapHotkey(user, netuid, validators[0]);
     }
 
     function _setRemoveStakeReverts(bool v) internal {

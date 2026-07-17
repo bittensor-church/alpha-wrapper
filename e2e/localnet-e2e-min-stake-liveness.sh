@@ -107,7 +107,7 @@ churn_cycle() { # <round> <primary_b32> <primary_ss58> <secondary_b32> <secondar
     unwrap_step "Cycle $round (over the rotated-out balances)" 50
     assert_le "$(get_stake "$primary_b32" "$CLONE_COLDKEY" "$NETUID")" "$ROUNDING_DUST_SLOT_RAO" \
         "Cycle $round: rotated-out validator still holds stake"
-    if cast call "$VAULT_ADDR" "lastSeenHotkeys(uint256)(bytes32[3])" "$TOKEN_ID" --rpc-url "$RPC_URL" \
+    if cast call "$VAULT_ADDR" "lastSeenHotkeys(uint256)(bytes32[])" "$TOKEN_ID" --rpc-url "$RPC_URL" \
         | grep -qi "${primary_b32#0x}"; then
         fail "Cycle $round: rotated-out validator still present in lastSeenHotkeys"
     fi

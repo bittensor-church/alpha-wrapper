@@ -74,4 +74,48 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
         vm.snapshotGasLastCall("AlphaVault", "rebalance: after registry weight update");
     }
+
+    function test_gas_wrap_tenValidators() public {
+        _attestAndWrap(alice, NETUID1, _generatedHotkeys(10), _splitWeights(10), 100 ether);
+        vm.snapshotGasLastCall("AlphaVault", "wrap: ten validators");
+    }
+
+    function test_gas_unwrap_fullTenValidators() public {
+        _attestAndWrap(alice, NETUID1, _generatedHotkeys(10), _splitWeights(10), 100 ether);
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vm.snapshotGasLastCall("AlphaVault", "unwrap: full ten validators");
+    }
+
+    function test_gas_wrap_maxValidators() public {
+        uint256 maxValidators = registry.MAX_VALIDATORS();
+        _attestAndWrap(alice, NETUID1, _generatedHotkeys(maxValidators), _splitWeights(maxValidators), 100 ether);
+        vm.snapshotGasLastCall("AlphaVault", "wrap: max validators");
+    }
+
+    /// @dev The costliest wrap shape: the whole max-size set is rotated out, so the call rolls
+    ///      every old slot onto the new set before splitting across it.
+    function test_gas_wrap_maxValidatorRotation() public {
+        uint256 maxValidators = registry.MAX_VALIDATORS();
+        _attestAndWrap(alice, NETUID1, _generatedHotkeys(maxValidators), _splitWeights(maxValidators), 100 ether);
+
+        _attestAndWrap(bob, NETUID1, _generatedHotkeys(maxValidators, 1), _splitWeights(maxValidators), 100 ether);
+        vm.snapshotGasLastCall("AlphaVault", "wrap: max-validator rotation");
+    }
+
+    /// @dev The costliest unwrap shape: consolidation first rolls the whole rotated-out max-size
+    ///      set onto the new one, then the gathered backing is delivered.
+    function test_gas_unwrap_maxValidatorRotation() public {
+        uint256 maxValidators = registry.MAX_VALIDATORS();
+        _attestAndWrap(alice, NETUID1, _generatedHotkeys(maxValidators), _splitWeights(maxValidators), 100 ether);
+
+        _setValidators(NETUID1, _generatedHotkeys(maxValidators, 1), _splitWeights(maxValidators));
+
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vm.snapshotGasLastCall("AlphaVault", "unwrap: full after max-validator rotation");
+    }
 }

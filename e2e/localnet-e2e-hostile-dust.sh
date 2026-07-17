@@ -100,7 +100,7 @@ assert_ge "$DELIVERED_FIRST" "$(python3 -c "print($ASSETS_PRE * 9 // 10 * 98 // 
     "Hostile dust: withdrawal under-delivered"
 assert_le "$(get_stake "$HOTKEY_C" "$CLONE_COLDKEY" "$NETUID")" "$ROUNDING_DUST_SLOT_RAO" \
     "Hostile dust: hostile plant not consolidated"
-if cast call "$VAULT_ADDR" "lastSeenHotkeys(uint256)(bytes32[3])" "$TOKEN_ID" --rpc-url "$RPC_URL" \
+if cast call "$VAULT_ADDR" "lastSeenHotkeys(uint256)(bytes32[])" "$TOKEN_ID" --rpc-url "$RPC_URL" \
     | grep -qi "${HOTKEY_C#0x}"; then
     fail "Hostile dust: consolidated hotkey still present in lastSeenHotkeys"
 fi
