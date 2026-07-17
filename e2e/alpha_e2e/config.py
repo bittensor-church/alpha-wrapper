@@ -35,6 +35,8 @@ SECOND_HOLDER_PRIVATE_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a841
 STAKING_PRECOMPILE = "0x0000000000000000000000000000000000000805"
 # Exposes the chain's own alpha price and alpha->TAO swap simulation.
 ALPHA_PRECOMPILE = "0x0000000000000000000000000000000000000808"
+# Answers whether a netuid is still mid-dissolution after a dissolve call.
+SUBNET_PRECOMPILE = "0x0000000000000000000000000000000000000803"
 
 # --- Seeding amounts ---------------------------------------------------------
 VALIDATOR_STAKE_TAO = (600, 400, 200)

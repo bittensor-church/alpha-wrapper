@@ -1,6 +1,6 @@
 # Everything the e2e suite needs on top of the shared repo requirements.
-# Single source of truth for the pins -- CI (.github/workflows/e2e.yml) and
-# local setups both install from this file.
+# Install via install-deps.sh (CI does too), not bare pip: these pins pull in
+# conflicting providers of the `scalecodec` namespace that the script reorders.
 -r ../requirements.txt
-bittensor-cli==9.20.1
+bittensor-cli==9.23.2
 substrate-interface==1.7.11

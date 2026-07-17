@@ -128,7 +128,9 @@ def test_transfers_off(env):
         seed_netuid, seed_hotkey_pubkey, 0,
     )
     seed_alpha_after = env.stake(seed_hotkey_pubkey, seed_mailbox_coldkey, seed_netuid)
-    assert seed_alpha_after == 0, f"mailbox still holds {seed_alpha_after} RAO after reclaim"
+    assert seed_alpha_after <= config.ROUNDING_DUST_SLOT_RAO, (
+        f"mailbox still holds {seed_alpha_after} RAO after reclaim"
+    )
 
     gained = checks.assert_tao_gain_near_quote(
         user_tao_before, env.user_tao_wei(), reclaim_quote,

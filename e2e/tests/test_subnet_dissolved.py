@@ -95,6 +95,8 @@ def test_subnet_dissolved(env):
     # --- Phase 9: dissolve both the position's subnet and the mailbox's subnet ----
     extrinsics.dissolve_network(dissolved_netuid)
     extrinsics.dissolve_network(parked_netuid)
+    env.wait_for_dissolution_cleanup(dissolved_netuid)
+    env.wait_for_dissolution_cleanup(parked_netuid)
 
     # Dissolution returns the position's and mailbox's alpha as native TAO to
     # their addresses, so those balances turn positive as the alpha is wiped.

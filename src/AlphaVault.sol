@@ -14,7 +14,7 @@ import { IStaking, STAKING_PRECOMPILE } from "./interfaces/IStaking.sol";
 import { IAlpha, ALPHA_PRECOMPILE } from "./interfaces/IAlpha.sol";
 import { IValidatorRegistry } from "./interfaces/IValidatorRegistry.sol";
 import { IAddressMapping, ADDRESS_MAPPING_PRECOMPILE } from "./interfaces/IAddressMapping.sol";
-import { StorageQueryReader } from "./libraries/StorageQueryReader.sol";
+import { ISubnet, SUBNET_PRECOMPILE } from "./interfaces/ISubnet.sol";
 
 /// @title AlphaVault
 /// @notice ERC1155 multi-vault that wraps Bittensor Alpha Stake into fungible share tokens.
@@ -23,6 +23,7 @@ import { StorageQueryReader } from "./libraries/StorageQueryReader.sol";
 /// @dev Architecture:
 ///   - Token ID = (netuid | registrationBlock << 16). No registration needed - vaults materialize on first deposit.
 ///   - Each vault tracks its own sharePrice independently: totalStake(tokenId) / totalSupply(tokenId).
+///     Integrators should read `sharePrice`, which also reverts during dissolution.
 ///   - EIP-1167 clones serve as deterministic "Mailbox" deposit addresses per (user, netuid).
 ///   - Validators + weights are read exclusively from ValidatorRegistry (no on-chain fallback).
 ///   - Deposits and unwraps rebalance toward the attested weights (up to N-1 pre-checked
@@ -136,7 +137,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         if (netuid > type(uint16).max) revert NetuidOutOfRange();
         // forge-lint: disable-next-line(unsafe-typecast)
         uint16 nid = uint16(netuid);
-        uint64 registrationBlock = StorageQueryReader.readNetworkRegisteredAt(nid);
+        uint64 registrationBlock = ISubnet(SUBNET_PRECOMPILE).getNetworkRegistrationBlock(nid);
         if (registrationBlock == 0) revert SubnetNotRegistered();
         return uint256(nid) | (uint256(registrationBlock) << 16);
     }
@@ -173,6 +174,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///         Rebalance moves below the stake floor are skipped pre-call, so small deposits may
     ///         leave the position drifted from target weights until a later deposit or unwrap
     ///         produces a movable residual.
+    ///         Reverts `SubnetInDissolutionBlackoutPeriod` while a dissolving subnet still has a
+    ///         registration block, then `SubnetNotRegistered` once cleanup has removed it.
     function wrap(address user, uint256 netuid, bytes32 chosenHotkey) external nonReentrant {
         if (msg.sender != user && msg.sender != owner()) revert UnauthorizedCaller();
         if (chosenHotkey == bytes32(0)) revert ZeroHotkey();
@@ -180,6 +183,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         uint256 tokenId = currentTokenId(netuid);
         // forge-lint: disable-next-line(unsafe-typecast)
         uint16 nid = uint16(netuid);
+        _requireNotDissolving(nid);
         (bytes32[3] memory hotkeys, uint16[3] memory weights) = _resolveValidators(nid);
 
         bool inSet;
@@ -224,16 +228,15 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     // -------------------- Unwrap Flow -----------------------------------------
 
     /// @notice Burn shares and pay out the underlying position.
-    /// @dev    Dispatches on subnet state:
+    /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while subtensor's asynchronous
+    ///         cleanup of the netuid is in progress (alpha and TAO refunds are in flux),
+    ///         then dispatches on subnet state:
     ///           - permanently dissolved (tokenId's registrationBlock no longer current): pays pro-rata
-    ///             native TAO from the clone's refund balance. Reverts
-    ///             `SubnetInDissolutionBlackoutPeriod` if subtensor cleanup is still in progress.
+    ///             native TAO from the clone's refund balance.
     ///           - live: consolidates the position onto one hotkey and delivers the full pro-rata
     ///             alpha to `userSubstrateColdkey` in a single transfer (exact to within a few RAO
     ///             of chain-side share rounding, or reverting - never partial), then re-splits the
-    ///             remainder toward the attested weights. The live path
-    ///             does not pre-check the dissolved-networks queue; during pass-1 of a dissolving
-    ///             current registration the staking precompile itself rejects with `SubnetNotExists`.
+    ///             remainder toward the attested weights.
     ///             At a readable price, reverts `WithdrawTooSmall` when the request is below the
     ///             chain's floor, `GatherBelowFloor` when the gather's largest slot provably cannot
     ///             clear it, and `ConsolidationBelowFloor` when pending rotated-out stake cannot be
@@ -244,11 +247,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     function unwrap(uint256 tokenId, uint256 shares, bytes32 userSubstrateColdkey) external nonReentrant {
         if (shares == 0) revert ZeroAmount();
         if (balanceOf(msg.sender, tokenId) < shares) revert InsufficientShares();
+        uint16 netuid = _netuid(tokenId);
+        _requireNotDissolving(netuid);
         address clone = subnetClone[tokenId];
 
-        uint16 netuid = _netuid(tokenId);
         if (_isIssuedForDissolvedSubnet(tokenId)) {
-            _unwrapFromDissolvedSubnet(tokenId, shares, clone, netuid);
+            _unwrapFromDissolvedSubnet(tokenId, shares, clone);
         } else {
             _unwrapFromLiveSubnet(tokenId, shares, userSubstrateColdkey, clone, netuid);
         }
@@ -266,6 +270,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///         fires when nothing sells. It is also the exit to use when the subnet's alpha price
     ///         reads zero on EVM: there the alpha rail can revert at full gas while consolidating
     ///         rotated-out dust, and only a full burn here still exits - while the pool can sell it.
+    ///         Reverts `SubnetInDissolutionBlackoutPeriod` while the subnet is being dissolved.
     /// @param  tokenId    Vault token id.
     /// @param  shares     Shares to burn.
     /// @param  minTaoOut  Slippage floor; revert if realized TAO is less.
@@ -274,10 +279,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         if (balanceOf(msg.sender, tokenId) < shares) revert InsufficientShares();
         address clone = subnetClone[tokenId];
         uint16 netuid = _netuid(tokenId);
+        _requireNotDissolving(netuid);
 
         (bytes32[6] memory hotkeys, uint256[6] memory balances, uint256 total) = _unionStake(tokenId, netuid, clone);
-        // Dissolution permanently zeroes the alpha balance, so a non-zero total already implies
-        // a live subnet and a zero total cannot be exited via this rail regardless of cause.
+        // The dissolving window is excluded above and completed dissolution zeroes the alpha
+        // balance, so a non-zero total implies a live subnet and a zero total cannot be
+        // exited via this rail regardless of cause.
         if (total == 0) revert NothingToUnwrap();
 
         uint256 supply = totalSupply(tokenId);
@@ -398,8 +405,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         _alignToWeights(tokenId, clone, hotkeys, weights, postBalances, alphaPriceE18);
     }
 
-    function _unwrapFromDissolvedSubnet(uint256 tokenId, uint256 shares, address clone, uint16 netuid) private {
-        if (StorageQueryReader.isNetuidInDissolvedQueue(netuid)) revert SubnetInDissolutionBlackoutPeriod();
+    function _unwrapFromDissolvedSubnet(uint256 tokenId, uint256 shares, address clone) private {
         uint256 cloneBalance = clone.balance;
         if (cloneBalance == 0) revert NothingToUnwrap();
 
@@ -417,6 +423,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     /// @dev    Sub-floor and zero-price moves are skipped. Reverts `ConsolidationBelowFloor` when
     ///         pending rotated-out stake cannot be consolidated above the chain's floor; any other
     ///         rejected move bubbles the chain's error.
+    ///         Reverts `SubnetInDissolutionBlackoutPeriod` while a dissolving subnet still has a
+    ///         registration block, then `SubnetNotRegistered` once cleanup has removed it.
     /// @param netuid The subnet to rebalance.
     function rebalance(uint256 netuid) external nonReentrant {
         uint256 tokenId = currentTokenId(netuid);
@@ -425,6 +433,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
 
         // forge-lint: disable-next-line(unsafe-typecast)
         uint16 nid = uint16(netuid);
+        _requireNotDissolving(nid);
         (bytes32[3] memory hotkeys, uint16[3] memory weights) = _resolveValidators(nid);
         bytes32 coldkey = _coldkeyOf(clone);
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
@@ -532,6 +541,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     // -------------------- View Functions ----------------------------------------
 
     /// @notice Total alpha backing this token's shares. Returns 0 before the clone exists.
+    /// @dev    While subtensor dissolution cleanup runs for the netuid the backing alpha is in
+    ///         flux; treat the value as unstable whenever `isSubnetDissolving(netuid)` is true.
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @return Alpha staked under the clone for this token.
     function totalStake(uint256 tokenId) public view returns (uint256) {
@@ -542,18 +553,15 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Price of one share in 1e18 precision, expressed in alpha.
-    /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while the netuid sits in the
-    ///         dissolved-networks queue, `SubnetDissolved` once cleanup has completed or
+    /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while the subnet is being dissolved,
+    ///         `SubnetDissolved` once dissolution has completed or
     ///         the tokenId does not correspond to the currently-registered subnet, and
     ///         `NoSharesOutstanding` when no shares have been minted against this tokenId
     ///         (a share price with zero supply has no meaningful value).
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @return Price of one share scaled by 1e18.
     function sharePrice(uint256 tokenId) external view returns (uint256) {
-        if (StorageQueryReader.isNetuidInDissolvedQueue(_netuid(tokenId))) {
-            revert SubnetInDissolutionBlackoutPeriod();
-        }
-        if (_isIssuedForDissolvedSubnet(tokenId)) revert SubnetDissolved();
+        _requireCurrentRegistration(tokenId);
         uint256 supply = totalSupply(tokenId);
         if (supply == 0) revert NoSharesOutstanding();
         return (totalStake(tokenId) * 1e18) / supply;
@@ -567,15 +575,14 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     /// @param  assets  Amount of alpha being deposited.
     /// @return Number of shares that would be minted.
     function previewWrap(uint256 tokenId, uint256 assets) external view returns (uint256) {
-        if (StorageQueryReader.isNetuidInDissolvedQueue(_netuid(tokenId))) {
-            revert SubnetInDissolutionBlackoutPeriod();
-        }
-        if (_isIssuedForDissolvedSubnet(tokenId)) revert SubnetDissolved();
+        _requireCurrentRegistration(tokenId);
         return _convertToShares(tokenId, assets);
     }
 
     /// @notice Preview the unwrap of `shares` for a position.
-    /// @dev    Live-path delivery is exact to within a few RAO of chain-side share rounding: unwrap
+    /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while the subnet is being dissolved
+    ///         and `SubnetDissolved` for a dissolved position whose clone holds no TAO refund.
+    ///         Live-path delivery is exact to within a few RAO of chain-side share rounding: unwrap
     ///         delivers this amount or reverts, so a sub-floor total is not deliverable here and
     ///         must be exited via unwrapForTao. That voluntary alpha-for-TAO sell is a market order
     ///         with no preview of its own: its payout is bounded by the caller's minTaoOut, not
@@ -592,7 +599,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         if (supply == 0) return (0, 0);
 
         uint16 netuid = _netuid(tokenId);
-        if (StorageQueryReader.isNetuidInDissolvedQueue(netuid)) revert SubnetInDissolutionBlackoutPeriod();
+        _requireNotDissolving(netuid);
 
         if (_isIssuedForDissolvedSubnet(tokenId)) {
             uint256 cloneBalance = clone.balance;
@@ -1049,8 +1056,24 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     }
 
     function _isIssuedForDissolvedSubnet(uint256 tokenId) private view returns (bool) {
-        uint64 currentRegistrationBlock = StorageQueryReader.readNetworkRegisteredAt(_netuid(tokenId));
+        uint64 currentRegistrationBlock = ISubnet(SUBNET_PRECOMPILE).getNetworkRegistrationBlock(_netuid(tokenId));
         return currentRegistrationBlock == 0 || currentRegistrationBlock != _registrationBlock(tokenId);
+    }
+
+    /// @dev Subtensor dissolves a subnet asynchronously over many blocks; alpha balances and
+    ///      TAO refunds are in flux for the whole window, so every share-priced path is frozen
+    ///      until dissolution completes. The check is per netuid, so an already-dissolved
+    ///      position is also frozen while a newer subnet on the same netuid dissolves.
+    function _requireNotDissolving(uint16 netuid) private view {
+        if (ISubnet(SUBNET_PRECOMPILE).isSubnetDissolving(netuid)) revert SubnetInDissolutionBlackoutPeriod();
+    }
+
+    /// @dev Shared guard for views that quote only the currently-registered subnet: the blackout
+    ///      check must precede the registration-block comparison so an in-flux registration is
+    ///      never classified as dissolved.
+    function _requireCurrentRegistration(uint256 tokenId) private view {
+        _requireNotDissolving(_netuid(tokenId));
+        if (_isIssuedForDissolvedSubnet(tokenId)) revert SubnetDissolved();
     }
 
     // -------------------- Overrides ---------------------------------------------

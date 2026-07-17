@@ -5,6 +5,7 @@ bootstrap.build_environment() with typed on-chain getters (stakes, shares,
 prices, quotes) and scenario actions (vault sends, deposits, floor changes,
 validator rotations, revert assertions).
 """
+import time
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -129,6 +130,33 @@ class Environment:
         return int(chain.cast_call(
             config.ALPHA_PRECOMPILE, "getAlphaInPool(uint16)(uint64)", netuid,
         ))
+
+    def is_subnet_dissolving(self, netuid: int) -> Optional[bool]:
+        """Whether the chain still reports the netuid mid-dissolution; None when
+        the probe fails (the RPC can flap while the chain tears a subnet down)."""
+        probe = chain.run(
+            ["cast", "call", config.SUBNET_PRECOMPILE,
+             "isSubnetDissolving(uint16)(bool)", str(netuid),
+             "--rpc-url", config.RPC_URL],
+            check=False,
+        )
+        if probe.returncode != 0:
+            return None
+        return probe.stdout.strip() == "true"
+
+    def wait_for_dissolution_cleanup(self, netuid: int) -> None:
+        """Block until the chain finishes draining a dissolved netuid.
+
+        The dissolve extrinsic only starts the drain, and the vault freezes the
+        subnet's flows until it completes, so scenarios must wait it out before
+        asserting refunds. A failed probe counts as still dissolving."""
+        for _ in range(60):
+            if self.is_subnet_dissolving(netuid) is False:
+                return
+            time.sleep(2)
+        raise AssertionError(
+            f"netuid {netuid} still dissolving (or subnet precompile unreachable) after 120s"
+        )
 
     def alpha_value_tao(self, netuid: int, alpha_rao: int) -> int:
         """Spot TAO value (RAO) of an alpha amount at the current oracle price."""

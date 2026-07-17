@@ -40,8 +40,10 @@ jobs:
 
     services:
       subtensor:
-        # Pinned: :main is a moving target; bump deliberately.
-        image: ghcr.io/opentensor/subtensor-localnet:v3.4.9-424
+        # The opentensor namespace is frozen at spec 424, which predates isSubnetDissolving;
+        # the dissolution legs need the RaoFoundation package (spec 431+) to run at all.
+        # Pinned by digest: devnet is a moving target; bump deliberately.
+        image: ghcr.io/raofoundation/subtensor-localnet:devnet@sha256:6efc6cd88dbaad7012e3bb8872da785ed6ce9a5e6610647889b2ba4fc26f7bcb
         ports:
           - 9944:9944
           - 9945:9945
@@ -72,7 +74,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install Python deps
-        run: pip install -r e2e/requirements.txt
+        run: e2e/install-deps.sh
 
       - name: Compile-check Python scripts
         run: python -m py_compile scripts/*.py e2e/*.py e2e/alpha_e2e/*.py e2e/tests/*.py
@@ -97,4 +99,6 @@ jobs:
 
       - name: Collect subtensor logs
         if: failure()
-        run: docker logs subtensor 2>&1 | tail -100 || true
+        # The service key is only a network alias; docker knows the container by
+        # its runner-generated id.
+        run: docker logs "${{ job.services.subtensor.id }}" 2>&1 | tail -100 || true

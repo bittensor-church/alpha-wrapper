@@ -10,6 +10,19 @@ Bittensor alpha-token wrapper (ERC-1155 vault + staking precompile integration).
 - `src/interfaces/` — Bittensor precompile interfaces (IStaking, IMetagraph, IAddressMapping) + IValidatorRegistry
 - `test/` — Foundry tests + mocks for the precompiles
 
+## Subnet dissolution
+
+Subtensor dissolves subnets asynchronously. While cleanup is in progress, the
+vault temporarily freezes share-priced operations for the affected netuid so
+they cannot price or distribute an incomplete TAO refund.
+
+The blackout is scoped by netuid because Subtensor's precompile does not
+identify the registration generation being dissolved. As a result, an older,
+already-dissolved position can also be temporarily non-redeemable while a
+successor on the same netuid is dissolving. Redemption resumes when that
+cleanup completes. This conservative availability tradeoff avoids adding
+per-generation finalization storage and its gas cost to every unwrap.
+
 ## Build
 ```bash
 forge install foundry-rs/forge-std --no-commit

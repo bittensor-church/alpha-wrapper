@@ -8,14 +8,13 @@ import { SubnetClone } from "src/SubnetClone.sol";
 import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
 import { MockStaking, CHAIN_MIN_STAKE, CHAIN_NOMINATOR_MIN_STAKE } from "./mocks/MockStaking.sol";
 import { MockAddressMapping } from "./mocks/MockAddressMapping.sol";
-import { MockStorageQuery } from "./mocks/MockStorageQuery.sol";
+import { MockSubnetPrecompile } from "./mocks/MockSubnetPrecompile.sol";
 import { MockAlpha } from "./mocks/MockAlpha.sol";
 import { AttestationHelper } from "./helpers/AttestationHelper.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 import { ADDRESS_MAPPING_PRECOMPILE } from "src/interfaces/IAddressMapping.sol";
 import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
-
-address constant STORAGE_QUERY = 0x0000000000000000000000000000000000000807;
+import { SUBNET_PRECOMPILE } from "src/interfaces/ISubnet.sol";
 
 abstract contract AlphaVaultTestBase is AttestationHelper {
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
@@ -62,10 +61,10 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     function setUp() public virtual {
         vm.etch(STAKING_PRECOMPILE, address(new MockStaking()).code);
         vm.etch(ADDRESS_MAPPING_PRECOMPILE, address(new MockAddressMapping()).code);
-        vm.etch(STORAGE_QUERY, address(new MockStorageQuery()).code);
+        vm.etch(SUBNET_PRECOMPILE, address(new MockSubnetPrecompile()).code);
         vm.etch(ALPHA_PRECOMPILE, address(new MockAlpha()).code);
-        MockStorageQuery(STORAGE_QUERY).setRegisteredAt(uint16(NETUID1), 100);
-        MockStorageQuery(STORAGE_QUERY).setRegisteredAt(uint16(NETUID2), 200);
+        MockSubnetPrecompile(SUBNET_PRECOMPILE).setRegisteredAt(uint16(NETUID1), 100);
+        MockSubnetPrecompile(SUBNET_PRECOMPILE).setRegisteredAt(uint16(NETUID2), 200);
         // Pre-fund so the staking precompile mock can credit native TAO back to callers.
         vm.deal(STAKING_PRECOMPILE, 1_000_000 ether);
         // etch copies code, not storage, so the sell rate starts 0/0 and any un-parameterized sell
@@ -245,7 +244,11 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     }
 
     function _setRegBlock(uint256 netuid, uint64 blockNum) internal {
-        MockStorageQuery(STORAGE_QUERY).setRegisteredAt(uint16(netuid), blockNum);
+        MockSubnetPrecompile(SUBNET_PRECOMPILE).setRegisteredAt(uint16(netuid), blockNum);
+    }
+
+    function _setDissolving(uint256 netuid, bool value) internal {
+        MockSubnetPrecompile(SUBNET_PRECOMPILE).setDissolving(uint16(netuid), value);
     }
 
     function _registerSubnet(uint256 netuid, bytes32 hotkey) internal {
@@ -267,8 +270,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     function _simulateDissolutionCompleted(uint256 netuid) internal {
         _setRegBlock(netuid, 0);
-        uint16[] memory empty = new uint16[](0);
-        MockStorageQuery(STORAGE_QUERY).setDissolvedNetworks(empty);
+        _setDissolving(netuid, false);
     }
 
     function _simulateNewNetworkRegistered(uint256 tokenId, uint64 newRegBlock, uint256 taoInClone) internal {
@@ -276,12 +278,10 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         _setRegBlock(tokenId & 0xFFFF, newRegBlock);
     }
 
-    function _simulateDissolutionStarted(uint256 tokenId, uint64 newRegBlock) internal {
-        uint256 netuid = tokenId & 0xFFFF;
-        _setRegBlock(netuid, newRegBlock);
-        uint16[] memory queue = new uint16[](1);
-        queue[0] = uint16(netuid);
-        MockStorageQuery(STORAGE_QUERY).setDissolvedNetworks(queue);
+    /// @dev Dissolve leaves the registration block untouched; subtensor removes it only
+    ///      partway through the asynchronous cleanup.
+    function _simulateDissolutionStarted(uint256 netuid) internal {
+        _setDissolving(netuid, true);
     }
 
     function _setAlphaPrice(uint256 netuid, uint256 alphaPriceE18) internal {
