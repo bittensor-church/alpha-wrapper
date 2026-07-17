@@ -74,14 +74,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install Python deps
-        run: |
-          pip install -r e2e/requirements.txt
-          # cyscale and py-scale-codec both claim the `scalecodec` namespace: the CLI pulls
-          # cyscale, substrate-interface pulls py-scale-codec, and whichever lands second
-          # breaks the other's import. cyscale is a drop-in replacement for py-scale-codec,
-          # so install it last and let it serve both.
-          pip uninstall -y scalecodec cyscale
-          pip install cyscale==0.5.0
+        run: e2e/install-deps.sh
 
       - name: Compile-check Python scripts
         run: python -m py_compile scripts/*.py e2e/*.py e2e/alpha_e2e/*.py e2e/tests/*.py
@@ -106,4 +99,6 @@ jobs:
 
       - name: Collect subtensor logs
         if: failure()
-        run: docker logs subtensor 2>&1 | tail -100 || true
+        # The service key is only a network alias; docker knows the container by
+        # its runner-generated id.
+        run: docker logs "${{ job.services.subtensor.id }}" 2>&1 | tail -100 || true

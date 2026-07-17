@@ -12,13 +12,10 @@ scripts.
   `http://127.0.0.1:9944`), pre-funded with the well-known dev keys in
   `alpha_e2e/config.py`.
 - `btcli` and `cast`/`forge` (Foundry) on `PATH`.
-- Python deps installed from the repo root: `pip install -r e2e/requirements.txt`
-  (pulls in the shared repo requirements plus the pinned `bittensor-cli` and
-  `substrate-interface` the scenarios need), then
-  `pip uninstall -y scalecodec cyscale && pip install cyscale==0.5.0` so `cyscale`
-  owns the shared `scalecodec` namespace (same fix CI applies; `bittensor-cli` and
-  `substrate-interface` each pull a different provider of that namespace and
-  whichever lands second breaks the other's import).
+- Python deps installed via `e2e/install-deps.sh` (CI uses the same script). It
+  wraps `pip install -r e2e/requirements.txt` plus a reinstall that lets
+  `cyscale` own the shared `scalecodec` namespace; the script's header explains
+  why a bare pip install is not enough.
 
 ## How to run
 
