@@ -1187,6 +1187,25 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.unwrapForTao(tokenId, shares, 0);
     }
 
+    /// @dev Pins the late window for the TAO exit: cleanup has already removed the registration
+    ///      block but the refund is still landing. This exit takes the token id directly and
+    ///      skips the registration lookup, so the dissolution gate alone keeps it from selling
+    ///      a mid-drain position.
+    function test_RevertWhen_UnwrapForTaoDuringLateBlackout() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 tokenId = vault.currentTokenId(NETUID1);
+        uint256 shares = vault.balanceOf(alice, tokenId);
+
+        _simulateDissolutionStarted(NETUID1);
+        _simulateTaoAwardedOnDissolution(tokenId, 5 ether);
+        _setRegBlock(NETUID1, 0);
+
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.SubnetInDissolutionBlackoutPeriod.selector);
+        vault.unwrapForTao(tokenId, shares, 0);
+    }
+
     function test_RevertWhen_RebalanceDuringBlackout() public {
         _simulateAlphaDeposit(alice, NETUID1, 10 ether);
         _wrap(alice, NETUID1);
