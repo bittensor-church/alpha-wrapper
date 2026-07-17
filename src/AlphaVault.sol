@@ -33,6 +33,10 @@ import { ISubnet, SUBNET_PRECOMPILE } from "./interfaces/ISubnet.sol";
 ///     whole position through them; any consolidation failure reverts the call, so stake is never
 ///     stranded. The last-seen validator set is tracked per token.
 ///   - Per-subnet clones isolate alpha and TAO returned by dissolved subnets.
+///   - Native TAO credited to a clone while its subnet is live (forced dust sales, donations) is
+///     distributed to holders through a cumulative per-share claim index; it is never traded and
+///     never enters the live share price. Arrivals are observed lazily at the next balance change
+///     or claim; anything still unobserved when dissolution starts folds into the pro-rata refund.
 contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     // -------------------- Immutables --------------------------------------------
     address public immutable mailboxLogic;
@@ -53,6 +57,25 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///         attempts doomed moves that revert at full gas cost.
     uint256 public minStakeTaoFloor;
 
+    /// @notice Cumulative TAO credited per share over a token's lifetime, scaled by
+    ///         `TAO_INDEX_PRECISION`. Grows when the clone receives TAO the vault did not pay out.
+    mapping(uint256 => uint256) public cumulativeTaoPerShare;
+
+    /// @notice TAO recognized for holders through the index but not yet claimed. This portion of
+    ///         the clone's balance backs claims, never redemptions.
+    mapping(uint256 => uint256) public taoLiability;
+
+    /// @notice TAO that arrived while no shares existed. It belongs to no holder and is excluded
+    ///         from both the index and redemptions until the owner recovers it.
+    mapping(uint256 => uint256) public excludedTao;
+
+    /// @dev Index level already settled for an account's current balance; the difference to the
+    ///      live index times the balance is the account's unrecorded entitlement.
+    mapping(uint256 => mapping(address => uint256)) public taoIndexDebt;
+
+    /// @notice TAO an account has earned and can withdraw via `claimTao`.
+    mapping(uint256 => mapping(address => uint256)) public claimableTao;
+
     // -------------------- Precision ---------------------------------------------
     /// @dev Virtual shares/assets to prevent inflation attacks (ERC4626 pattern).
     uint256 private constant VIRTUAL_SHARES = 1e9;
@@ -66,6 +89,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     /// @dev `getAlphaPrice` rounds down to a multiple of this (e18 scale), so the true price is
     ///      always below the read plus one step.
     uint256 private constant ALPHA_PRICE_QUANTUM_E18 = 1e9;
+    /// @dev Claim-index scale. Far above any reachable share supply, so one synchronization's
+    ///      flooring loses less than one wei in total.
+    uint256 private constant TAO_INDEX_PRECISION = 1e36;
+    /// @dev Gas forwarded to subnet-precompile probes on the transfer path. Healthy reads cost a
+    ///      few thousand gas; the cap keeps a failure mode that burns everything forwarded from
+    ///      starving the transfer itself.
+    uint256 private constant SUBNET_PROBE_GAS_CAP = 100_000;
 
     // -------------------- Events ------------------------------------------------
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
@@ -89,6 +119,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         address indexed user, uint256 indexed netuid, bytes32 indexed hotkey, uint256 alpha, uint256 taoOut
     );
     event MinStakeTaoFloorUpdated(uint256 oldValue, uint256 newValue);
+    /// @notice A holder withdrew accumulated native TAO. `amount` is in EVM wei.
+    event TaoClaimed(address indexed user, uint256 indexed tokenId, address recipient, uint256 amount);
+    /// @notice The owner recovered TAO that had arrived while no shares existed.
+    event ExcludedTaoRecovered(uint256 indexed tokenId, address recipient, uint256 amount);
 
     // -------------------- Errors ------------------------------------------------
     error ZeroAmount();
@@ -313,6 +347,30 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         emit UnwrappedForTao(msg.sender, tokenId, shares, assets, taoOut);
     }
 
+    /// @notice Pay out the caller's accumulated TAO entitlement for `tokenId` to `recipient`.
+    /// @dev    Entitlement is settled before every balance change, so it survives transfers and
+    ///         full exits and can be claimed at any time, including during and after dissolution.
+    /// @param  tokenId   Vault token id the entitlement was earned on.
+    /// @param  recipient Address receiving the native TAO.
+    function claimTao(uint256 tokenId, address payable recipient) external nonReentrant {
+        if (recipient == address(0)) revert ZeroAddress();
+        address clone = _syncTao(tokenId);
+        uint256 index = cumulativeTaoPerShare[tokenId];
+        uint256 entitlement = claimableTao[tokenId][msg.sender] + _pendingAt(msg.sender, tokenId, index);
+        // Per-holder accruals floor against a ceiling-rounded allocation, so summed entitlements
+        // can overstate the recorded liability by stray wei; a claim pays only what the liability
+        // backs - anything beyond it would draw on the quarantined and dissolution backing - and
+        // keeps the difference recorded instead of erasing it.
+        uint256 liability = taoLiability[tokenId];
+        uint256 amount = entitlement > liability ? liability : entitlement;
+        if (amount == 0) revert ZeroAmount();
+        claimableTao[tokenId][msg.sender] = entitlement - amount;
+        _settleIndexDebt(msg.sender, tokenId, index);
+        taoLiability[tokenId] = liability - amount;
+        SubnetClone(payable(clone)).unwrapTao(recipient, amount);
+        emit TaoClaimed(msg.sender, tokenId, recipient, amount);
+    }
+
     function _unwrapFromLiveSubnet(
         uint256 tokenId,
         uint256 shares,
@@ -406,11 +464,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     }
 
     function _unwrapFromDissolvedSubnet(uint256 tokenId, uint256 shares, address clone) private {
-        uint256 cloneBalance = clone.balance;
-        if (cloneBalance == 0) revert NothingToUnwrap();
+        uint256 backing = _unreservedCloneTao(tokenId, clone);
+        if (backing == 0) revert NothingToUnwrap();
 
         uint256 supplyBefore = totalSupply(tokenId);
-        uint256 userTao = (cloneBalance * shares) / supplyBefore;
+        uint256 userTao = (backing * shares) / supplyBefore;
         _burn(msg.sender, tokenId, shares);
         if (userTao > 0) SubnetClone(payable(clone)).unwrapTao(payable(msg.sender), userTao);
         emit DissolvedSubnetUnwrapped(msg.sender, tokenId, shares, userTao);
@@ -602,9 +660,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         _requireNotDissolving(netuid);
 
         if (_isIssuedForDissolvedSubnet(tokenId)) {
-            uint256 cloneBalance = clone.balance;
-            if (cloneBalance == 0) revert SubnetDissolved();
-            return (0, (cloneBalance * shares) / supply);
+            uint256 backing = _unreservedCloneTao(tokenId, clone);
+            if (backing == 0) revert SubnetDissolved();
+            return (0, (backing * shares) / supply);
         }
 
         // Reverts NoValidatorFound when the registry has no set for this subnet.
@@ -612,6 +670,24 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
 
         (,, uint256 totalAlpha) = _unionStake(tokenId, netuid, clone, current);
         return (_assetsFor(totalAlpha, supply, shares), 0);
+    }
+
+    /// @notice TAO withdrawable by `account` for `tokenId` right now: what `claimTao` would pay,
+    ///         including entitlement the storage has not settled yet.
+    function claimableTaoOf(address account, uint256 tokenId) external view returns (uint256) {
+        uint256 index = cumulativeTaoPerShare[tokenId];
+        uint256 backing = taoLiability[tokenId];
+        address clone = subnetClone[tokenId];
+        if (clone != address(0)) {
+            uint256 unreserved = _unreservedCloneTao(tokenId, clone);
+            uint256 supply = totalSupply(tokenId);
+            if (unreserved != 0 && supply != 0 && _isLiveForIndexing(tokenId)) {
+                index += Math.mulDiv(unreserved, TAO_INDEX_PRECISION, supply);
+                backing += unreserved;
+            }
+        }
+        uint256 entitlement = claimableTao[tokenId][account] + _pendingAt(account, tokenId, index);
+        return entitlement > backing ? backing : entitlement;
     }
 
     /// @notice Unused slots are bytes32(0).
@@ -633,6 +709,28 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
 
     function setURI(string calldata newUri) external onlyOwner {
         _setURI(newUri);
+    }
+
+    /// @notice Recover TAO attributable to no holder: arrivals quarantined at zero supply, plus
+    ///         any unreserved remainder once no shares are outstanding.
+    /// @dev    Holder entitlements and redemption backing are untouchable here. Synchronizes
+    ///         first: with no holders left there may have been no balance change to record an
+    ///         arrival.
+    function recoverExcludedTao(uint256 tokenId, address payable recipient) external onlyOwner nonReentrant {
+        if (recipient == address(0)) revert ZeroAddress();
+        address clone = _syncTao(tokenId);
+        if (clone == address(0)) revert ZeroAmount();
+        uint256 amount = excludedTao[tokenId];
+        // Synchronization cannot quarantine once the subnet is no longer live; with no shares
+        // outstanding the unreserved remainder is just as unattributable, so it is recoverable
+        // the same way.
+        if (totalSupply(tokenId) == 0) {
+            amount += _unreservedCloneTao(tokenId, clone);
+        }
+        if (amount == 0) revert ZeroAmount();
+        excludedTao[tokenId] = 0;
+        SubnetClone(payable(clone)).unwrapTao(recipient, amount);
+        emit ExcludedTaoRecovered(tokenId, recipient, amount);
     }
 
     /// @notice Reclaim native TAO stuck in the caller's mailbox clone after subnet deregistration.
@@ -1076,12 +1174,141 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         if (_isIssuedForDissolvedSubnet(tokenId)) revert SubnetDissolved();
     }
 
+    // -------------------- TAO Claim Index ----------------------------------------
+
+    /// @dev Folds TAO the clone received since the last synchronization into the per-share index
+    ///      and returns the clone address. Skipped while the subnet is dissolving or dissolved:
+    ///      from then on new clone balance is the dissolution refund, which the dissolved unwrap
+    ///      path distributes pro rata instead.
+    function _syncTao(uint256 tokenId) private returns (address clone) {
+        clone = subnetClone[tokenId];
+        if (clone == address(0)) return clone;
+        uint256 newTao = _unreservedCloneTao(tokenId, clone);
+        if (newTao == 0) return clone;
+        if (!_isLiveForIndexing(tokenId)) return clone;
+        uint256 supply = totalSupply(tokenId);
+        if (supply == 0) {
+            excludedTao[tokenId] += newTao;
+            return clone;
+        }
+        uint256 indexIncrease = Math.mulDiv(newTao, TAO_INDEX_PRECISION, supply);
+        cumulativeTaoPerShare[tokenId] += indexIncrease;
+        // Rounded up so every index increase moves the liability: a floored-to-zero allocation
+        // would leave the same arrival re-countable on every later synchronization. The product
+        // never exceeds newTao times the scale, so the ceiling cannot over-reserve.
+        taoLiability[tokenId] += Math.mulDiv(indexIncrease, supply, TAO_INDEX_PRECISION, Math.Rounding.Ceil);
+    }
+
+    /// @dev The clone balance not yet promised through the claim index: assignable to the index
+    ///      while the subnet is live, and the redemption backing once it is dissolved.
+    function _unreservedCloneTao(uint256 tokenId, address clone) private view returns (uint256) {
+        uint256 balance = clone.balance;
+        if (balance == 0) return 0;
+        uint256 reserved = taoLiability[tokenId] + excludedTao[tokenId];
+        return balance > reserved ? balance - reserved : 0;
+    }
+
+    /// @dev Dissolution probe for the balance-change hook: transfers must survive a broken or
+    ///      missing precompile, so an unreadable state reads as not live and indexing pauses
+    ///      instead of reverting.
+    function _isLiveForIndexing(uint256 tokenId) private view returns (bool) {
+        uint16 netuid = _netuid(tokenId);
+        (bool readable, uint256 registrationBlock) =
+            _tryReadSubnetValue(abi.encodeCall(ISubnet.getNetworkRegistrationBlock, (netuid)));
+        if (!readable || registrationBlock != _registrationBlock(tokenId)) return false;
+        (bool readableDissolving, uint256 dissolving) =
+            _tryReadSubnetValue(abi.encodeCall(ISubnet.isSubnetDissolving, (netuid)));
+        return readableDissolving && dissolving == 0;
+    }
+
+    /// @dev Gas-capped so a precompile failure that consumes everything forwarded cannot starve
+    ///      the enclosing transfer; the cap is far above the cost of a healthy read.
+    function _tryReadSubnetValue(bytes memory encodedCall) private view returns (bool readable, uint256 value) {
+        (bool success, bytes memory data) = SUBNET_PRECOMPILE.staticcall{ gas: SUBNET_PROBE_GAS_CAP }(encodedCall);
+        if (!success || data.length < 32) return (false, 0);
+        return (true, abi.decode(data, (uint256)));
+    }
+
+    /// @dev Moves the account's earned-but-unrecorded TAO into its claimable balance. Leaves the
+    ///      debt untouched: callers follow up with `_settleIndexDebt` against the balance that
+    ///      anchors future accrual.
+    function _accrue(address account, uint256 tokenId, uint256 index) private {
+        uint256 pending = _pendingAt(account, tokenId, index);
+        if (pending != 0) {
+            claimableTao[tokenId][account] += pending;
+        }
+    }
+
+    /// @dev Earned-but-unrecorded TAO for the account at the given index level.
+    function _pendingAt(address account, uint256 tokenId, uint256 index) private view returns (uint256) {
+        uint256 earnedToDate = _earnedAt(account, tokenId, index);
+        uint256 debt = taoIndexDebt[tokenId][account];
+        return earnedToDate > debt ? earnedToDate - debt : 0;
+    }
+
+    function _settleIndexDebt(address account, uint256 tokenId, uint256 index) private {
+        taoIndexDebt[tokenId][account] = _earnedAt(account, tokenId, index);
+    }
+
+    function _earnedAt(address account, uint256 tokenId, uint256 index) private view returns (uint256) {
+        return Math.mulDiv(balanceOf(account, tokenId), index, TAO_INDEX_PRECISION);
+    }
+
+    function _isFirstOccurrence(uint256[] memory ids, uint256 index) private pure returns (bool) {
+        uint256 candidate = ids[index];
+        for (uint256 i; i < index;) {
+            if (ids[i] == candidate) return false;
+            unchecked {
+                ++i;
+            }
+        }
+        return true;
+    }
+
     // -------------------- Overrides ---------------------------------------------
 
+    /// @dev Settles the TAO claim index around every balance change. Accruals read pre-change
+    ///      balances and supply (supply updates inside the inherited update); debts are re-settled
+    ///      on post-change balances afterwards, before any acceptance callback runs, so a receiver
+    ///      re-entering mid-callback sees consistent balance and debt. Repeated ids settle once:
+    ///      the extra passes would be value-neutral, so the guard only skips redundant work.
     function _update(address from, address to, uint256[] memory ids, uint256[] memory values)
         internal
         override(ERC1155, ERC1155Supply)
     {
+        for (uint256 i; i < ids.length;) {
+            uint256 id = ids[i];
+            if (_isFirstOccurrence(ids, i)) {
+                _syncTao(id);
+                uint256 index = cumulativeTaoPerShare[id];
+                // A zero index means no TAO was ever indexed for this id, so no debt or
+                // entitlement can exist and settlement is a no-op. A self-transfer accrues once:
+                // accrual leaves the debt to the post-update settlement, so a second pass against
+                // the same debt would credit the same earnings again.
+                if (index != 0) {
+                    if (from != address(0)) _accrue(from, id, index);
+                    if (to != address(0) && to != from) _accrue(to, id, index);
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
         super._update(from, to, ids, values);
+        // All of the batch's changes for an id are applied by now, so the first occurrence of a
+        // repeated id already reads final balances and later duplicates are skipped.
+        for (uint256 i; i < ids.length;) {
+            uint256 id = ids[i];
+            if (_isFirstOccurrence(ids, i)) {
+                uint256 index = cumulativeTaoPerShare[id];
+                if (index != 0) {
+                    if (from != address(0)) _settleIndexDebt(from, id, index);
+                    if (to != address(0) && to != from) _settleIndexDebt(to, id, index);
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
     }
 }

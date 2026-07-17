@@ -49,7 +49,9 @@ PER_HOTKEY_TRANSFER_RAO = TRANSFER_AMOUNT_TAO * 10**9 // VALIDATORS_PER_SUBNET
 # --- Foundry / subprocess flags ------------------------------------------------
 # Bittensor EVM: gas estimation fails; always use legacy txs with explicit gas.
 EVM_TX_FLAGS = ["--legacy", "--gas-price", "10000000000"]
-FORGE_CREATE_FLAGS = EVM_TX_FLAGS + ["--gas-limit", "5000000", "--broadcast"]
+# AlphaVault's runtime is ~22.8 KB, so code deposit alone is ~4.6M gas; the ceiling clears that
+# plus constructor and intrinsic while staying well under the block gas limit.
+FORGE_CREATE_FLAGS = EVM_TX_FLAGS + ["--gas-limit", "8000000", "--broadcast"]
 # The localnet charges a fixed gas price, which payout reconstruction relies on.
 LOCALNET_GAS_PRICE_WEI = 10**10
 
