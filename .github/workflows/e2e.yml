@@ -37,6 +37,7 @@ jobs:
           - tests/test_dust_dos.py
           - tests/test_hostile_dust.py
           - tests/test_min_stake_liveness.py
+          - tests/test_claimable_tao.py
 
     services:
       subtensor:
