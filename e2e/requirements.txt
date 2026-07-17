@@ -1,0 +1,6 @@
+# Everything the e2e suite needs on top of the shared repo requirements.
+# Single source of truth for the pins -- CI (.github/workflows/e2e.yml) and
+# local setups both install from this file.
+-r ../requirements.txt
+bittensor-cli==9.20.1
+substrate-interface==1.7.11
