@@ -1,26 +1,119 @@
-# e2e/
+# e2e
 
-Localnet end-to-end tests. Run from the repo root against a local subtensor (see
-the prerequisites in each script's header). The tests source `e2e_common.sh` and
-drive the chain through `chain_ops.py`.
+Real-chain end-to-end tests for the alpha-wrapper vault. A pytest suite that
+drives a live localnet through cast/forge/btcli subprocess calls and
+substrate extrinsics -- deposits, unwraps on both rails, floor handling,
+dust and hostility scenarios, subnet dissolution, and the observability
+scripts.
 
-| File | Description |
-|---|---|
-| `localnet-e2e.sh` | Full end-to-end flow against a local subtensor |
-| `localnet-e2e-transfers-off.sh` | E2E with subnet alpha transfers disabled: alpha rail reverts, TAO rails still pay |
-| `localnet-e2e-convicted-alpha.sh` | E2E with conviction-locked alpha: over-movable deposits refused on-chain, movable portion wraps, vault flows and unwraps unaffected |
-| `localnet-e2e-subnet-dissolved.sh` | E2E with a dissolved subnet: dissolved unwrap and mailbox reclaim recover native TAO, alpha rails revert, untouched subnet unaffected |
-| `localnet-e2e-min-stake-floor.sh` | E2E for min-stake floor handling: the wrap gate binds between the chain floor and a raised vault floor, rotated-out dust is consolidated by the next wrap, sub-floor rebalance moves are skipped in-budget |
-| `localnet-e2e-dust-dos.sh` | E2E for dust lockout: rotated-out dust, a price crash, and a sub-floor co-holder all refuse cheaply with designed errors while the TAO exit, top-ups, and fresh deposits clear them |
-| `localnet-e2e-hostile-dust.sh` | E2E for third-party dust: stake planted in a user's mailbox and on the vault is ignored or absorbed as a donation, never a way to stop wraps or unwraps |
-| `localnet-e2e-min-stake-liveness.sh` | E2E for sequence liveness: two churn cycles of deposits, withdrawals, and rotations plus a market drop leave every kind of small leftover, with every call staying live and nothing forfeited |
-| `e2e_common.sh` | Shared config + helpers + bootstrap (phases 0-5) sourced by the tests |
-| `chain_ops.py` | Chain-operation subcommands the tests drive the localnet with (H160<->SS58 mapping, stake transfers and sales, validator attestations, sudo toggles), signed by the dev Alice key |
-| `verify_csv.py` | Asserts invariants on the CSV output of the `../scripts/` observability readers |
+## Prerequisites
 
-Usage (from the repo root, so the `e2e/...`/`src/...`/`out/...` paths resolve):
+- A running localnet subtensor at `ws://127.0.0.1:9944` (RPC at
+  `http://127.0.0.1:9944`), pre-funded with the well-known dev keys in
+  `alpha_e2e/config.py`.
+- `btcli` and `cast`/`forge` (Foundry) on `PATH`.
+- Python deps installed from the repo root: `pip install -r e2e/requirements.txt`
+  (pulls in the shared repo requirements plus the pinned `bittensor-cli` and
+  `substrate-interface` the scenarios need).
 
-```sh
-./e2e/localnet-e2e.sh
-./e2e/localnet-e2e-transfers-off.sh
+## How to run
+
+From the repo root:
+
+```bash
+cd e2e
+
+# One scenario against a fresh localnet:
+python3 -m pytest tests/test_full_flow.py -v -m scenario
+
+# All chainless unit tests (no chain required):
+python3 -m pytest tests -v -m "not scenario"
 ```
+
+`pytest.ini` sets `testpaths = tests` and registers the `scenario` marker
+(a full localnet scenario -- slow, needs a running chain). Tests without that
+marker are pure-Python unit tests (address derivation, cast-output parsing,
+assertion helpers) and run with no chain at all.
+
+**IMPORTANT:** scenario modules are designed for one-module-per-fresh-chain.
+CI runs each `tests/test_*.py` scenario as its own matrix job against its own
+subtensor container. Running multiple scenario modules in a single pytest
+invocation against one long-lived localnet is not supported -- they share
+chain and contract state (netuids, token ids, vault floor) via the session
+`env` fixture, and a later module's assumptions about that state will not
+hold if an earlier module already mutated the chain.
+
+## Layout
+
+`alpha_e2e/` -- the framework package:
+
+- `config.py` -- localnet dev constants (RPC/chain endpoints, dev keys, gas
+  budgets, rounding-dust tolerances).
+- `substrate.py` -- pure-Python substrate address derivation (blake2b
+  HashedAddressMapping, SS58) and wallet-file readers.
+- `chain.py` -- typed subprocess wrappers over `cast`/`forge`/`btcli`.
+- `extrinsics.py` -- substrate extrinsics signed by the dev Alice key (stake
+  transfers and sales, conviction locks, sudo toggles, subnet dissolution);
+  failures raise with the chain's decoded module error.
+- `validators.py` -- EIP-712 validator-set attestations for the
+  ValidatorRegistry.
+- `checks.py` -- shared assertion helpers (gas budgets, quote-based payout
+  checks, CSV invariants over the observability scripts).
+- `environment.py` -- the `Environment` dataclass: on-chain getters and typed
+  actions (`deposit_and_wrap`, `vault_send`, `assert_vault_reverts_with`,
+  `set_validators`, `crash_price_until_below`, ...) every scenario drives.
+- `bootstrap.py` -- `build_environment()`: one-time localnet setup (subnets,
+  validators, staking, contract deploy, funding), pre-flight + Phases 0-5.
+- `fixtures.py` -- the session-scoped `env` pytest fixture wrapping
+  `bootstrap.build_environment()`.
+
+`pytest.ini` puts the package on the import path (`pythonpath = .`);
+`conftest.py` `chdir`s to the repo root (so `cast`/`forge` and the
+observability scripts see repo-relative paths like `src/...`) and registers
+the `env` fixture plugin. `chain_ops.py` is a standalone CLI over the same
+chain operations, kept for manual localnet work.
+
+## Scenarios
+
+One module per scenario (each expects its own fresh localnet); the module
+docstring in each file carries the full phase-by-phase description.
+
+- `test_environment_builds.py` -- smoke test: the `env` fixture builds,
+  deploys, and funds correctly (3 subnets, 9 staked validators, live vault).
+- `test_full_flow.py` -- the main flow: deposits split across 3 validators on
+  3 subnets, full alpha unwraps, both TAO-rail exits, emission accrual,
+  validator rotation, the TAO-exit slippage guard, and every observability
+  script asserted row-by-row.
+- `test_transfers_off.py` -- subnet alpha transfers disabled: the alpha rail
+  reverts with shares intact, both TAO rails still pay out on quote.
+- `test_convicted_alpha.py` -- conviction-locked alpha: over-movable deposits
+  refused on-chain, the movable portion wraps, unwraps to a lock-holding
+  coldkey and TAO exits leave lock state untouched.
+- `test_subnet_dissolved.py` -- a dissolved subnet: dissolved unwrap and
+  mailbox reclaim recover native TAO pro-rata, alpha rails revert, an
+  untouched subnet is unaffected.
+- `test_min_stake_floor.py` -- min-stake floor handling: the wrap gate binds
+  between the chain floor and a raised vault floor, rotated-out dust is
+  consolidated by the next wrap, sub-floor rebalance moves are skipped
+  in-budget.
+- `test_dust_dos.py` -- dust lockout: rotated-out dust, a price crash, and a
+  sub-floor co-holder all refuse cheaply with designed errors while the TAO
+  exit, top-ups, and fresh deposits clear them.
+- `test_hostile_dust.py` -- third-party dust: stake planted in a user's
+  mailbox and on the vault is ignored or absorbed as a donation, never a way
+  to stop wraps or unwraps.
+- `test_min_stake_liveness.py` -- sequence liveness: two churn cycles of
+  deposits, withdrawals, and rotations plus a floor raise leave every kind of
+  small leftover, with every call staying live and nothing forfeited.
+
+Chainless unit tests for the framework itself: `test_config_smoke.py`,
+`test_substrate.py`, `test_chain_unit.py`, `test_checks_unit.py`.
+
+## The `env` fixture
+
+`env` (in `alpha_e2e/fixtures.py`, session-scoped) calls
+`bootstrap.build_environment()` once per pytest process: it creates three
+subnets, registers and stakes nine validators, deploys the contracts, and
+funds the test accounts. Every test in a scenario module that requests `env`
+shares that one build -- this is what makes running more than one scenario
+module per localnet unsupported (see the IMPORTANT note above).
