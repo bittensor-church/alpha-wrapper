@@ -41,7 +41,8 @@ jobs:
       subtensor:
         # The opentensor namespace is frozen at spec 424, which predates isSubnetDissolving;
         # the dissolution legs need the RaoFoundation package (spec 431+) to run at all.
-        image: ghcr.io/raofoundation/subtensor-localnet:devnet
+        # Pinned by digest: devnet is a moving target; bump deliberately.
+        image: ghcr.io/raofoundation/subtensor-localnet:devnet@sha256:6efc6cd88dbaad7012e3bb8872da785ed6ce9a5e6610647889b2ba4fc26f7bcb
         ports:
           - 9944:9944
           - 9945:9945
@@ -80,7 +81,7 @@ jobs:
           # breaks the other's import. cyscale is a drop-in replacement for py-scale-codec,
           # so install it last and let it serve both.
           pip uninstall -y scalecodec cyscale
-          pip install cyscale
+          pip install cyscale==0.5.0
 
       - name: Compile-check Python scripts
         run: python -m py_compile scripts/*.py e2e/*.py
