@@ -12,7 +12,7 @@ readers and the shared library they build on.
 | `get_validator_updates.py` | `ValidatorsUpdated` events |
 | `get_volumes.py` | Unit-safe alpha and TAO unwrap metrics, with optional user filter |
 | `get_vault_state.py` | Returns on-chain data about an ERC-1155 token for a subnet |
-| `common.py` | Shared web3/ABI/CSV helpers imported by the scripts above and by `../e2e/chain_ops.py` |
+| `common.py` | Shared web3/ABI/CSV helpers imported by the scripts above and by the e2e framework (`../e2e/alpha_e2e/`) |
 
 Run `forge build` first -- the Python scripts load ABIs from `out/`.
 

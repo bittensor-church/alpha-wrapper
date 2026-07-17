@@ -18,24 +18,25 @@ env:
 
 jobs:
   e2e:
-    name: Localnet E2E (${{ matrix.script }})
+    name: Localnet E2E (${{ matrix.scenario }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     strategy:
       fail-fast: false
       matrix:
-        # Each leg gets its own fresh subtensor service container, so the
+        # Each scenario gets its own fresh subtensor service container, so the
         # transfers-off run (which globally disables alpha transfers) is isolated.
-        script:
-          - localnet-e2e.sh
-          - localnet-e2e-transfers-off.sh
-          - localnet-e2e-convicted-alpha.sh
-          - localnet-e2e-subnet-dissolved.sh
-          - localnet-e2e-min-stake-floor.sh
-          - localnet-e2e-dust-dos.sh
-          - localnet-e2e-hostile-dust.sh
-          - localnet-e2e-min-stake-liveness.sh
+        scenario:
+          - tests/test_environment_builds.py
+          - tests/test_full_flow.py
+          - tests/test_transfers_off.py
+          - tests/test_convicted_alpha.py
+          - tests/test_subnet_dissolved.py
+          - tests/test_min_stake_floor.py
+          - tests/test_dust_dos.py
+          - tests/test_hostile_dust.py
+          - tests/test_min_stake_liveness.py
 
     services:
       subtensor:
@@ -74,8 +75,7 @@ jobs:
 
       - name: Install Python deps
         run: |
-          pip install bittensor-cli==9.23.2 substrate-interface
-          pip install -r requirements.txt
+          pip install -r e2e/requirements.txt
           # cyscale and py-scale-codec both claim the `scalecodec` namespace: the CLI pulls
           # cyscale, substrate-interface pulls py-scale-codec, and whichever lands second
           # breaks the other's import. cyscale is a drop-in replacement for py-scale-codec,
@@ -84,7 +84,7 @@ jobs:
           pip install cyscale==0.5.0
 
       - name: Compile-check Python scripts
-        run: python -m py_compile scripts/*.py e2e/*.py
+        run: python -m py_compile scripts/*.py e2e/*.py e2e/alpha_e2e/*.py e2e/tests/*.py
 
       - name: Wait for subtensor to be ready
         run: |
@@ -101,9 +101,8 @@ jobs:
           exit 1
 
       - name: Run E2E test
-        run: |
-          chmod +x e2e/${{ matrix.script }}
-          ./e2e/${{ matrix.script }}
+        working-directory: e2e
+        run: python -m pytest ${{ matrix.scenario }} -v -m scenario --tb=short
 
       - name: Collect subtensor logs
         if: failure()
