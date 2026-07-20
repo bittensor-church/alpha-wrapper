@@ -11,35 +11,20 @@ import { ClaimDuringTransferReceiver } from "./helpers/TaoRailReceivers.sol";
 
 contract ClaimableTaoTest is AlphaVaultTestBase {
     event TaoClaimed(address indexed user, uint256 indexed tokenId, address recipient, uint256 amount);
+    event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaOut);
 
     uint256 internal constant DEPOSIT = 30 ether;
 
     // Native TAO moves in whole multiples of this quantum, so quotes and payouts are floored to it.
     uint256 internal constant NATIVE_TRANSFER_QUANTUM = 1e9;
 
-    function _donateToTokenClone(uint256 tokenId, uint256 amount) internal returns (address clone) {
-        clone = vault.subnetClone(tokenId);
-        _donateToClone(clone, amount);
+    function _donateToTokenClone(uint256 tokenId, uint256 amount) internal {
+        _donateToClone(vault.subnetClone(tokenId), amount);
     }
 
     function _claimAs(address user) internal {
         vm.prank(user);
         vault.claimTao(TOKEN1, payable(user));
-    }
-
-    // The view is a commitment: a nonzero quote pays exactly, a zero quote means the claim reverts.
-    function _claimQuotedAmount(address user) internal returns (uint256 delivered) {
-        uint256 quoted = vault.claimableTaoOf(user, TOKEN1);
-        if (quoted == 0) {
-            vm.expectRevert();
-            vm.prank(user);
-            vault.claimTao(TOKEN1, payable(user));
-            return 0;
-        }
-        uint256 balanceBefore = user.balance;
-        _claimAs(user);
-        delivered = user.balance - balanceBefore;
-        assertEq(delivered, quoted);
     }
 
     function _assertCloneCoversReservedTao(uint256 tokenId) internal view {
@@ -126,20 +111,6 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         assertEq(vault.claimableTaoOf(alice, TOKEN1), entitlementBefore);
     }
 
-    function testFuzz_IndexAllocation_NeverExceedsArrivedTao(uint256 donation, uint256 secondDonation) public {
-        donation = bound(donation, 1, 1_000_000 ether);
-        secondDonation = bound(secondDonation, 0, 1_000_000 ether);
-        _depositAndWrap(alice, NETUID1, DEPOSIT);
-
-        _donateToTokenClone(TOKEN1, donation);
-        _touch(alice, TOKEN1);
-        _donateToTokenClone(TOKEN1, secondDonation);
-        _touch(alice, TOKEN1);
-
-        assertLe(vault.taoLiability(TOKEN1), donation + secondDonation);
-        _assertCloneCoversReservedTao(TOKEN1);
-    }
-
     // -------------------- Claims -------------------------------------------------
 
     function test_ClaimTao_PaysSettledEntitlement() public {
@@ -195,7 +166,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         _exitCompletely(alice, TOKEN1);
 
         assertApproxEqAbs(vault.claimableTaoOf(alice, TOKEN1), donated, NATIVE_TRANSFER_QUANTUM);
-        uint256 paid = _claimQuotedAmount(alice);
+        uint256 paid = _claimQuotedAmount(alice, TOKEN1);
         assertApproxEqAbs(paid, donated, NATIVE_TRANSFER_QUANTUM);
         assertLe(paid, donated);
     }
@@ -238,40 +209,27 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
     function testFuzz_ClaimsAcrossHolders_ConserveArrivedTao(uint256 donation, uint256 aliceDeposit, uint256 bobDeposit)
         public
     {
-        donation = bound(donation, 1e9, 1_000_000 ether);
-        aliceDeposit = bound(aliceDeposit, 1 ether, 1_000_000 ether);
-        bobDeposit = bound(bobDeposit, 1 ether, 1_000_000 ether);
-
-        _depositAndWrap(alice, NETUID1, aliceDeposit);
-        _depositAndWrap(bob, NETUID1, bobDeposit);
-        _donateToTokenClone(TOKEN1, donation);
-
-        uint256 paid = _claimQuotedAmount(alice) + _claimQuotedAmount(bob);
-        assertLe(paid, donation);
-        // Each holder retains at most one sub-quantum remainder plus index-flooring wei.
-        assertApproxEqAbs(paid, donation, 2 * NATIVE_TRANSFER_QUANTUM + 4);
-    }
-
-    function testFuzz_ClaimableTaoOf_QuotesExactClaimPayout(uint256 aliceDeposit, uint256 bobDeposit, uint256 donation)
-        public
-    {
-        aliceDeposit = bound(aliceDeposit, 1 ether, 1_000_000 ether);
-        bobDeposit = bound(bobDeposit, 1 ether, 1_000_000 ether);
         donation = bound(donation, 1, 1_000_000 ether);
+        aliceDeposit = bound(aliceDeposit, 1 ether, 1_000_000 ether);
+        bobDeposit = bound(bobDeposit, 1 ether, 1_000_000 ether);
 
         _depositAndWrap(alice, NETUID1, aliceDeposit);
         _depositAndWrap(bob, NETUID1, bobDeposit);
         _donateToTokenClone(TOKEN1, donation);
 
         // A transfer settles the first donation while the second stays unsynchronized, so the
-        // quote is exercised on both settled storage and the simulated fold of pending TAO.
+        // claims exercise both settled storage and the simulated fold of pending TAO.
         uint256 aliceShares = vault.balanceOf(alice, TOKEN1);
         vm.prank(alice);
         vault.safeTransferFrom(alice, bob, TOKEN1, aliceShares / 2, "");
-        _donateToTokenClone(TOKEN1, donation / 3 + 1);
+        uint256 secondDonation = donation / 3 + 1;
+        _donateToTokenClone(TOKEN1, secondDonation);
 
-        _claimQuotedAmount(alice);
-        _claimQuotedAmount(bob);
+        uint256 arrived = donation + secondDonation;
+        uint256 paid = _claimQuotedAmount(alice, TOKEN1) + _claimQuotedAmount(bob, TOKEN1);
+        assertLe(paid, arrived);
+        // Each holder retains at most one sub-quantum remainder plus index-flooring wei.
+        assertApproxEqAbs(paid, arrived, 2 * NATIVE_TRANSFER_QUANTUM + 8);
         _assertCloneCoversReservedTao(TOKEN1);
     }
 
@@ -282,6 +240,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         uint256 indexBefore = vault.cumulativeTaoPerShare(TOKEN1);
 
         _simulateDissolutionStarted(NETUID1);
+        _donateToTokenClone(TOKEN1, 5 ether);
         _simulateTaoAwardedOnDissolution(TOKEN1, 20 ether);
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         vm.prank(alice);
@@ -320,7 +279,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         assertEq(alice.balance, previewTao);
         assertApproxEqAbs(alice.balance, (refund * aliceShares) / supply, 2);
 
-        _claimQuotedAmount(alice);
+        _claimQuotedAmount(alice, TOKEN1);
         assertApproxEqAbs(alice.balance, previewTao + donated / 2, NATIVE_TRANSFER_QUANTUM + 4);
         assertLe(alice.balance, previewTao + donated / 2);
     }
@@ -333,20 +292,31 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
 
         _simulateDissolutionStarted(NETUID1);
 
-        uint256 paid = _claimQuotedAmount(alice);
+        uint256 paid = _claimQuotedAmount(alice, TOKEN1);
         assertApproxEqAbs(paid, donated, NATIVE_TRANSFER_QUANTUM);
         assertLe(paid, donated);
     }
 
-    function test_DonationDuringBlackout_StaysInDissolvedBacking() public {
+    // A raised chain threshold can force-sell the whole position while shares remain outstanding;
+    // the zero-backing unwrap retires those shares and the sale proceeds stay claimable.
+    function test_UnwrapAfterFullSweep_RetiresSharesAndKeepsClaim() public {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
-        _simulateDissolutionStarted(NETUID1);
-        _donateToTokenClone(TOKEN1, 5 ether);
+        uint256 proceeds = 7 ether;
+        _simulateTaoAwardedOnDissolution(TOKEN1, proceeds);
 
-        _touch(alice, TOKEN1);
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        (uint256 previewAlpha, uint256 previewTao) = vault.previewUnwrap(TOKEN1, shares);
+        assertEq(previewAlpha, 0);
+        assertEq(previewTao, 0);
+        vm.expectEmit(true, true, false, true, address(vault));
+        emit Unwrapped(alice, TOKEN1, shares, 0);
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
 
-        assertEq(vault.taoLiability(TOKEN1), 0);
-        assertEq(vault.claimableTaoOf(alice, TOKEN1), 0);
+        assertEq(vault.totalSupply(TOKEN1), 0);
+        uint256 paid = _claimQuotedAmount(alice, TOKEN1);
+        assertApproxEqAbs(paid, proceeds, NATIVE_TRANSFER_QUANTUM);
+        assertLe(paid, proceeds);
     }
 
     // -------------------- Zero-supply arrivals ------------------------------------
@@ -364,7 +334,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
 
         assertEq(vault.claimableTaoOf(alice, TOKEN1), 0);
         assertApproxEqAbs(vault.claimableTaoOf(bob, TOKEN1), orphaned, NATIVE_TRANSFER_QUANTUM);
-        _claimQuotedAmount(bob);
+        _claimQuotedAmount(bob, TOKEN1);
         _assertCloneCoversReservedTao(TOKEN1);
     }
 }

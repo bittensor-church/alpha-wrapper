@@ -326,6 +326,23 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         vm.deal(clone, clone.balance + amount);
     }
 
+    // The claimable-TAO quote is a commitment: a nonzero quote pays exactly, a zero quote means
+    // the claim reverts.
+    function _claimQuotedAmount(address user, uint256 tokenId) internal returns (uint256 delivered) {
+        uint256 quoted = vault.claimableTaoOf(user, tokenId);
+        if (quoted == 0) {
+            vm.expectRevert();
+            vm.prank(user);
+            vault.claimTao(tokenId, payable(user));
+            return 0;
+        }
+        uint256 balanceBefore = user.balance;
+        vm.prank(user);
+        vault.claimTao(tokenId, payable(user));
+        delivered = user.balance - balanceBefore;
+        assertEq(delivered, quoted);
+    }
+
     function _expectedTaoFor(uint256 alpha) internal view returns (uint256) {
         uint256 num = MockStaking(STAKING_PRECOMPILE).taoPerAlpha();
         uint256 denom = MockStaking(STAKING_PRECOMPILE).taoPerAlphaDenom();

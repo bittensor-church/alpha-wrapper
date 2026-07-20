@@ -50,25 +50,13 @@ contract ClaimableTaoHandler is Test {
         vault.safeTransferFrom(from, to, tokenId, amount, "");
     }
 
-    // The quote is a commitment: a claim pays exactly what the view promised and moves exactly
-    // that much out of the clone, so a payout the chain rounds down can never clear more
-    // entitlement than it delivered. A zero quote must not be claimable at all.
+    // The shared helper asserts the quote commitment; on top of it, a paid claim must move
+    // exactly its delivery out of the clone.
     function claim(uint256 actorSeed) external {
         address actor = _actor(actorSeed);
         address clone = vault.subnetClone(tokenId);
-        uint256 quoted = vault.claimableTaoOf(actor, tokenId);
-        if (quoted == 0) {
-            vm.expectRevert();
-            vm.prank(actor);
-            vault.claimTao(tokenId, payable(actor));
-            return;
-        }
         uint256 cloneBefore = clone.balance;
-        uint256 actorBefore = actor.balance;
-        vm.prank(actor);
-        vault.claimTao(tokenId, payable(actor));
-        uint256 delivered = actor.balance - actorBefore;
-        assertEq(delivered, quoted);
+        uint256 delivered = harness.claimQuotedFor(actor);
         assertEq(cloneBefore - clone.balance, delivered);
         totalClaimed += delivered;
     }
@@ -104,6 +92,10 @@ contract ClaimableTaoInvariantTest is AlphaVaultTestBase {
 
     function wrapFor(address user, uint256 amount) external {
         _depositAndWrap(user, NETUID1, amount);
+    }
+
+    function claimQuotedFor(address user) external returns (uint256 delivered) {
+        return _claimQuotedAmount(user, TOKEN1);
     }
 
     function invariant_CloneBalanceCoversReservedTao() public view {

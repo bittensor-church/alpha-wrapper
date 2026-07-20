@@ -8,12 +8,12 @@ depositors.
 
 The threshold raise clears sub-threshold nominations on EVERY subnet and
 force-sells the vault's whole (deliberately tiny) position. The test restores
-the threshold it found and then rebuilds and fully unwinds the position, so
+the threshold it found and then retires the swept position's shares, so
 sibling suites sharing the session localnet see the subnet in a normal state.
 """
 import pytest
 
-from alpha_e2e import chain, config, extrinsics
+from alpha_e2e import chain, checks, config, extrinsics
 
 # The mainnet factor: threshold = 0.002 TAO * factor / 1e6 = 0.02 TAO, far above
 # the per-validator slices the deposit below leaves on each validator.
@@ -66,8 +66,9 @@ def test_root_sweep_tao_becomes_claimable(env):
             1_500_000, "Sweep: claim failed",
             "claimTao(uint256,address)", token_id, config.WRAPPER_USER_ADDRESS,
         )
-        gas_cost = chain.receipt_gas_used(receipt) * config.LOCALNET_GAS_PRICE_WEI
-        delivered = env.user_tao_wei() - user_balance_before + gas_cost
+        delivered = checks.reconstructed_payout(
+            user_balance_before, env.user_tao_wei(), receipt, "Sweep: claim payout",
+        )
         print(f"  Claim delivered {delivered} wei")
         # The quote is a commitment: the claim delivers exactly what the view promised, and the
         # sub-RAO remainder stays reserved for the claimant below the quote's one-RAO floor.
@@ -81,9 +82,8 @@ def test_root_sweep_tao_becomes_claimable(env):
         except Exception as restore_error:  # noqa: BLE001
             print(f"  WARNING: dust threshold not restored to {previous_factor}: {restore_error}")
 
-    # The clearing pass emptied the vault's position but its shares remain outstanding; rebuild
-    # backing and unwind everything so later suites find the shared subnet in a normal state.
-    env.deposit_and_wrap(netuid, hotkey_pubkey, hotkey_ss58, deposit, 1_500_000, "Sweep: cleanup wrap failed")
+    # The clearing pass emptied the vault's position but its shares remain outstanding; the
+    # zero-backing unwrap retires them without recapitalizing the vault.
     all_shares = env.vault_shares(token_id)
     env.vault_send(
         2_500_000, "Sweep: cleanup unwrap failed",
