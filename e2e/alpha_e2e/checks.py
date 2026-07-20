@@ -65,17 +65,24 @@ def assert_tao_gain_near_quote(
     return gain
 
 
+def reconstructed_payout(
+    balance_before_wei: int, balance_after_wei: int, receipt: dict, message: str,
+) -> int:
+    """The caller's balance delta plus the gas it paid (fixed localnet gas
+    price): dust-scale payouts are smaller than gas, so the raw delta alone
+    proves nothing."""
+    gas_used = chain.receipt_gas_used(receipt)
+    assert gas_used is not None, f"{message}: could not parse gasUsed for payout reconstruction"
+    return balance_after_wei - balance_before_wei + gas_used * config.LOCALNET_GAS_PRICE_WEI
+
+
 def assert_payout_near_quote(
     balance_before_wei: int, balance_after_wei: int, receipt: dict,
     quote_rao: int, message: str,
 ) -> None:
-    """Reconstruct the exit's payout from the caller's balance delta plus the gas
-    it paid (fixed localnet gas price): dust-scale payouts are smaller than gas,
-    so the raw delta alone proves nothing. Requires the payout within a factor of
-    two of the pre-captured chain quote."""
-    gas_used = chain.receipt_gas_used(receipt)
-    assert gas_used is not None, f"{message}: could not parse gasUsed for payout reconstruction"
-    payout = balance_after_wei - balance_before_wei + gas_used * config.LOCALNET_GAS_PRICE_WEI
+    """Require the reconstructed payout within a factor of two of the
+    pre-captured chain quote."""
+    payout = reconstructed_payout(balance_before_wei, balance_after_wei, receipt, message)
     quote_wei = quote_rao * 10**9
     assert quote_wei // 2 <= payout <= 2 * quote_wei, (
         f"{message} (payout {payout} wei vs quote {quote_rao} RAO)"

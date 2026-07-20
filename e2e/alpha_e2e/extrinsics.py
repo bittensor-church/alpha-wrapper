@@ -172,6 +172,36 @@ def set_admin_freeze_window(
     return receipt.block_hash
 
 
+def get_nominator_min_required_stake(*, chain_endpoint: str = config.CHAIN_ENDPOINT) -> int:
+    """Read the global nominator dust-threshold factor."""
+    from substrateinterface import SubstrateInterface
+
+    substrate = SubstrateInterface(url=chain_endpoint)
+    result = substrate.query("SubtensorModule", "NominatorMinRequiredStake", [])
+    return int(result.value) if result is not None else 0
+
+
+def set_nominator_min_required_stake(
+    factor: int, *, chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Set the global nominator dust-threshold factor via Sudo. Raising it also
+    runs the chain's global clearing pass in the same block: every nomination
+    whose value sits below the new threshold is force-sold and the proceeds are
+    credited to its nominator coldkey. Lowering it only writes the factor."""
+    substrate, alice = _connect(chain_endpoint)
+    call = _compose_sudo_call(
+        substrate, "AdminUtils", "sudo_set_nominator_min_required_stake",
+        {"min_stake": factor},
+    )
+    block_hash = _submit(substrate, alice, call)
+    current = substrate.query("SubtensorModule", "NominatorMinRequiredStake", []).value
+    if current != factor:
+        raise ExtrinsicError(
+            f"set_nominator_min_required_stake did not reach factor={factor} (now {current})"
+        )
+    return block_hash
+
+
 def dissolve_network(
     netuid: int, *, chain_endpoint: str = config.CHAIN_ENDPOINT,
 ) -> str:

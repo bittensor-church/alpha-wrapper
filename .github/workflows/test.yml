@@ -48,7 +48,13 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Run tests and check gas snapshot
-        run: forge snapshot --check --tolerance 1 -vvv
+        # Invariant tests are excluded from the gas snapshot: their gas is not
+        # deterministic across runs, so it is not a meaningful regression signal.
+        # They still run in the dedicated invariant step below.
+        run: forge snapshot --check --tolerance 1 --no-match-contract Invariant -vvv
+
+      - name: Run invariant tests
+        run: forge test --match-contract Invariant -vvv
 
       - name: Check per-call gas snapshots have not drifted
         run: git diff --exit-code snapshots/

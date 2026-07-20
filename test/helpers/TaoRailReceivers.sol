@@ -74,3 +74,24 @@ contract ReclaimMailboxReentrantReceiver {
         }
     }
 }
+
+/// @dev On receiving shares, tries to withdraw TAO entitlement from inside the transfer
+///      acceptance callback and records whether it collected anything, so tests can assert a
+///      mid-transfer claim cannot cash out entitlement for shares just received.
+contract ClaimDuringTransferReceiver {
+    AlphaVault public immutable vault;
+    bool public claimSucceeded;
+
+    constructor(AlphaVault _vault) {
+        vault = _vault;
+    }
+
+    function onERC1155Received(address, address, uint256 id, uint256, bytes calldata) external returns (bytes4) {
+        try vault.claimTao(id, payable(address(this))) {
+            claimSucceeded = true;
+        } catch { }
+        return this.onERC1155Received.selector;
+    }
+
+    receive() external payable { }
+}
