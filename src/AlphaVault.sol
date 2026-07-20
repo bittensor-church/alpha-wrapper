@@ -85,12 +85,15 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     /// @dev `getAlphaPrice` rounds down to a multiple of this (e18 scale), so the true price is
     ///      always below the read plus one step.
     uint256 private constant ALPHA_PRICE_QUANTUM_E18 = 1e9;
-    /// @dev Claim-index scale. Far above any reachable share supply, so one synchronization's
-    ///      flooring loses less than one wei in total.
+    /// @dev Claim-index scale.
     uint256 private constant TAO_INDEX_PRECISION = 1e36;
     /// @dev Native TAO carries 9 decimals behind the 18-decimal EVM interface, so a value transfer
     ///      delivers only whole multiples of this quantum.
     uint256 private constant TAO_NATIVE_QUANTUM = 1e9;
+    /// @dev Post-mint share-supply bound. Below it a synchronization's flooring loses less than
+    ///      one native quantum and any whole-quantum arrival moves the claim index; only a
+    ///      swept-then-recapitalized position can approach it.
+    uint256 private constant SUPPLY_CAP = TAO_NATIVE_QUANTUM * TAO_INDEX_PRECISION;
 
     // -------------------- Events ------------------------------------------------
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
@@ -133,6 +136,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     error DepositTooSmall();
     error WithdrawTooSmall();
     error ClaimBelowNativePrecision();
+    error SupplyCapExceeded();
     error NetuidOutOfRange();
     error ChosenHotkeyNotInSet();
     error SlippageExceeded(uint256 amountOut);
@@ -247,6 +251,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         uint256 preStake = totalAlpha > totalDeposit ? totalAlpha - totalDeposit : 0;
         uint256 shares = _sharesFor(preStake, totalSupply(tokenId), totalDeposit);
         if (shares == 0) revert ZeroAmount();
+        // Recapitalizing a swept position multiplies supply toward the bound; retiring the swept
+        // shares through the zero-backing unwrap resets supply and lifts it.
+        if (totalSupply(tokenId) + shares > SUPPLY_CAP) revert SupplyCapExceeded();
 
         _mint(user, tokenId, shares, "");
 
@@ -804,7 +811,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     }
 
     function _sharesFor(uint256 stake, uint256 supply, uint256 assets) private pure returns (uint256) {
-        return (assets * (supply + VIRTUAL_SHARES)) / (stake + VIRTUAL_ASSETS);
+        return Math.mulDiv(assets, supply + VIRTUAL_SHARES, stake + VIRTUAL_ASSETS);
     }
 
     function _assetsFor(uint256 stake, uint256 supply, uint256 shares) private pure returns (uint256) {

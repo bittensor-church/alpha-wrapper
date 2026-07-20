@@ -319,6 +319,35 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         assertLe(paid, proceeds);
     }
 
+    // -------------------- Supply bound -------------------------------------------
+
+    // Recapitalizing a fully swept position multiplies share supply; the index must still be
+    // able to record the smallest possible native arrival at the inflated supply.
+    function test_WrapAfterFullSweep_StaysWithinClaimIndexBound() public {
+        uint256 seed = 1e10;
+        _depositAndWrap(alice, NETUID1, seed);
+        _simulateTaoAwardedOnDissolution(TOKEN1, 5 ether);
+        _depositAndWrap(bob, NETUID1, seed);
+        assertLe(vault.totalSupply(TOKEN1), 1e45);
+
+        uint256 liabilityBefore = vault.taoLiability(TOKEN1);
+        _donateToTokenClone(TOKEN1, 100 * NATIVE_TRANSFER_QUANTUM);
+        _touch(bob, TOKEN1);
+        assertGt(vault.taoLiability(TOKEN1), liabilityBefore);
+        _claimQuotedAmount(bob, TOKEN1);
+    }
+
+    function test_RevertWhen_RecapitalizationWouldBreachClaimIndexBound() public {
+        _depositAndWrap(alice, NETUID1, DEPOSIT);
+        _simulateTaoAwardedOnDissolution(TOKEN1, 5 ether);
+
+        bytes32 chosen = vault.getCurrentValidators(NETUID1)[0];
+        _simulateAlphaDeposit(bob, NETUID1, DEPOSIT);
+        vm.expectRevert(AlphaVault.SupplyCapExceeded.selector);
+        vm.prank(bob);
+        vault.wrap(bob, NETUID1, chosen);
+    }
+
     // -------------------- Zero-supply arrivals ------------------------------------
 
     // With no holders at arrival there is no one to attribute the TAO to; it accrues to whoever
