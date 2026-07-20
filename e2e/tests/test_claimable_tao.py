@@ -82,11 +82,18 @@ def test_root_sweep_tao_becomes_claimable(env):
         except Exception as restore_error:  # noqa: BLE001
             print(f"  WARNING: dust threshold not restored to {previous_factor}: {restore_error}")
 
-    # The clearing pass emptied the vault's position but its shares remain outstanding; the
-    # zero-backing unwrap retires them without recapitalizing the vault.
+    # The clearing pass empties the vault's position but its shares remain outstanding. How
+    # empty depends on the runtime build: an exactly-zero position retires shares through the
+    # zero-backing unwrap, while a sub-floor residue exits through the TAO rail's full-drain sale.
     all_shares = env.vault_shares(token_id)
-    env.vault_send(
-        2_500_000, "Sweep: cleanup unwrap failed",
-        "unwrap(uint256,uint256,bytes32)", token_id, all_shares, env.wrapper_substrate_coldkey,
-    )
+    if env.vault_total_stake(token_id) == 0:
+        env.vault_send(
+            2_500_000, "Sweep: cleanup unwrap failed",
+            "unwrap(uint256,uint256,bytes32)", token_id, all_shares, env.wrapper_substrate_coldkey,
+        )
+    else:
+        env.vault_send(
+            2_500_000, "Sweep: cleanup unwrap failed",
+            "unwrapForTao(uint256,uint256,uint256)", token_id, all_shares, 0,
+        )
     assert env.vault_total_supply(token_id) == 0, "cleanup left outstanding shares"
