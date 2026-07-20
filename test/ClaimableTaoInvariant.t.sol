@@ -108,12 +108,12 @@ contract ClaimableTaoInvariantTest is AlphaVaultTestBase {
 
     function invariant_CloneBalanceCoversReservedTao() public view {
         address clone = vault.subnetClone(TOKEN1);
-        assertGe(clone.balance, vault.taoLiability(TOKEN1) + vault.excludedTao(TOKEN1));
+        assertGe(clone.balance, vault.taoLiability(TOKEN1));
     }
 
     // Repeated debt re-baselining under these exact amounts accrues a one-wei phantom entitlement
-    // while a zero-supply donation sits quarantined; the final claim must pay only what the
-    // recorded liability backs instead of drawing on that quarantine.
+    // beyond the recorded liability; the final claim must pay only what the liability backs
+    // instead of drawing on TAO the index has not yet folded in.
     function test_PhantomEntitlement_CannotOverdrawReservedBacking() public {
         handler.donate(166020153748861866463033272813676692912666046992);
         handler.transferShares(110000000000000000000, 9555, 2827);
@@ -138,7 +138,7 @@ contract ClaimableTaoInvariantTest is AlphaVaultTestBase {
         handler.claim(3438);
 
         address clone = vault.subnetClone(TOKEN1);
-        assertGe(clone.balance, vault.taoLiability(TOKEN1) + vault.excludedTao(TOKEN1));
+        assertGe(clone.balance, vault.taoLiability(TOKEN1));
     }
 
     function invariant_LiabilityNeverExceedsDonated() public view {

@@ -33,10 +33,10 @@ import { ISubnet, SUBNET_PRECOMPILE } from "./interfaces/ISubnet.sol";
 ///     whole position through them; any consolidation failure reverts the call, so stake is never
 ///     stranded. The last-seen validator set is tracked per token.
 ///   - Per-subnet clones isolate alpha and TAO returned by dissolved subnets.
-///   - Native TAO credited to a clone while its subnet is live (forced dust sales, donations) is
-///     distributed to holders through a cumulative per-share claim index; it is never traded and
-///     never enters the live share price. Arrivals are observed lazily at the next balance change
-///     or claim; anything still unobserved when dissolution starts folds into the pro-rata refund.
+///   - Native TAO credited to a clone while its subnet is live (forced dust sales, donations) backs
+///     claims through a cumulative per-share index, never the share price. Arrivals are recorded at
+///     the next balance change or claim; whatever is still unrecorded when dissolution starts folds
+///     into the pro-rata refund.
 contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     // -------------------- Immutables --------------------------------------------
     address public immutable mailboxLogic;
@@ -64,10 +64,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     /// @notice TAO recognized for holders through the index but not yet claimed. This portion of
     ///         the clone's balance backs claims, never redemptions.
     mapping(uint256 => uint256) public taoLiability;
-
-    /// @notice TAO that arrived while no shares existed. It belongs to no holder and is excluded
-    ///         from both the index and redemptions until the owner recovers it.
-    mapping(uint256 => uint256) public excludedTao;
 
     /// @dev Index level already settled for an account's current balance; the difference to the
     ///      live index times the balance is the account's unrecorded entitlement.
@@ -120,8 +116,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     event MinStakeTaoFloorUpdated(uint256 oldValue, uint256 newValue);
     /// @notice A holder withdrew accumulated native TAO. `amount` is in EVM wei.
     event TaoClaimed(address indexed user, uint256 indexed tokenId, address recipient, uint256 amount);
-    /// @notice The owner recovered TAO that had arrived while no shares existed.
-    event ExcludedTaoRecovered(uint256 indexed tokenId, address recipient, uint256 amount);
 
     // -------------------- Errors ------------------------------------------------
     error ZeroAmount();
@@ -350,6 +344,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     /// @notice Pay out the caller's accumulated TAO entitlement for `tokenId` to `recipient`.
     /// @dev    Entitlement is settled before every balance change, so it survives transfers and
     ///         full exits and can be claimed at any time, including during and after dissolution.
+    ///         Pays in whole native-transfer quantums and keeps the sub-quantum remainder
+    ///         reserved; an entitlement below one quantum reverts `ClaimBelowNativePrecision`.
     /// @param  tokenId   Vault token id the entitlement was earned on.
     /// @param  recipient Address receiving the native TAO.
     function claimTao(uint256 tokenId, address payable recipient) external nonReentrant {
@@ -359,8 +355,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         uint256 entitlement = claimableTao[tokenId][msg.sender] + _pendingAt(msg.sender, tokenId, index);
         // Per-holder accruals floor against a ceiling-rounded allocation, so summed entitlements
         // can overstate the recorded liability by stray wei; a claim pays only what the liability
-        // backs - anything beyond it would draw on the quarantined and dissolution backing - and
-        // keeps the difference recorded instead of erasing it.
+        // backs - anything beyond it would draw on the dissolution backing - and keeps the
+        // difference recorded instead of erasing it.
         uint256 liability = taoLiability[tokenId];
         uint256 amount = entitlement > liability ? liability : entitlement;
         if (amount == 0) revert ZeroAmount();
@@ -718,28 +714,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
 
     function setURI(string calldata newUri) external onlyOwner {
         _setURI(newUri);
-    }
-
-    /// @notice Recover TAO attributable to no holder: arrivals quarantined at zero supply, plus
-    ///         any unreserved remainder once no shares are outstanding.
-    /// @dev    Holder entitlements and redemption backing are untouchable here. Synchronizes
-    ///         first: with no holders left there may have been no balance change to record an
-    ///         arrival.
-    function recoverExcludedTao(uint256 tokenId, address payable recipient) external onlyOwner nonReentrant {
-        if (recipient == address(0)) revert ZeroAddress();
-        address clone = _syncTao(tokenId);
-        if (clone == address(0)) revert ZeroAmount();
-        uint256 amount = excludedTao[tokenId];
-        // Synchronization cannot quarantine once the subnet is no longer live; with no shares
-        // outstanding the unreserved remainder is just as unattributable, so it is recoverable
-        // the same way.
-        if (totalSupply(tokenId) == 0) {
-            amount += _unreservedCloneTao(tokenId, clone);
-        }
-        if (amount == 0) revert ZeroAmount();
-        excludedTao[tokenId] = 0;
-        SubnetClone(payable(clone)).unwrapTao(recipient, amount);
-        emit ExcludedTaoRecovered(tokenId, recipient, amount);
     }
 
     /// @notice Reclaim native TAO stuck in the caller's mailbox clone after subnet deregistration.
@@ -1195,11 +1169,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         uint256 newTao = _unreservedCloneTao(tokenId, clone);
         if (newTao == 0) return clone;
         if (!_isLiveForIndexing(tokenId)) return clone;
+        // With no holders there is no one to attribute the arrival to; it stays unreserved and
+        // folds into the index once shares exist again.
         uint256 supply = totalSupply(tokenId);
-        if (supply == 0) {
-            excludedTao[tokenId] += newTao;
-            return clone;
-        }
+        if (supply == 0) return clone;
         uint256 indexIncrease = Math.mulDiv(newTao, TAO_INDEX_PRECISION, supply);
         cumulativeTaoPerShare[tokenId] += indexIncrease;
         // Rounded up so every index increase moves the liability: a floored-to-zero allocation
@@ -1213,7 +1186,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     function _unreservedCloneTao(uint256 tokenId, address clone) private view returns (uint256) {
         uint256 balance = clone.balance;
         if (balance == 0) return 0;
-        uint256 reserved = taoLiability[tokenId] + excludedTao[tokenId];
+        uint256 reserved = taoLiability[tokenId];
         return balance > reserved ? balance - reserved : 0;
     }
 
