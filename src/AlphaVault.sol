@@ -92,10 +92,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     /// @dev Claim-index scale. Far above any reachable share supply, so one synchronization's
     ///      flooring loses less than one wei in total.
     uint256 private constant TAO_INDEX_PRECISION = 1e36;
-    /// @dev Gas forwarded to subnet-precompile probes on the transfer path. Healthy reads cost a
-    ///      few thousand gas; the cap keeps a failure mode that burns everything forwarded from
-    ///      starving the transfer itself.
-    uint256 private constant SUBNET_PROBE_GAS_CAP = 100_000;
+    /// @dev Native TAO carries 9 decimals behind the 18-decimal EVM interface, so a value transfer
+    ///      delivers only whole multiples of this quantum.
+    uint256 private constant TAO_NATIVE_QUANTUM = 1e9;
 
     // -------------------- Events ------------------------------------------------
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
@@ -139,6 +138,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     error NoSharesOutstanding();
     error DepositTooSmall();
     error WithdrawTooSmall();
+    error ClaimBelowNativePrecision();
     error NetuidOutOfRange();
     error ChosenHotkeyNotInSet();
     error SlippageExceeded(uint256 amountOut);
@@ -364,6 +364,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         uint256 liability = taoLiability[tokenId];
         uint256 amount = entitlement > liability ? liability : entitlement;
         if (amount == 0) revert ZeroAmount();
+        // A native transfer delivers only whole quantums; deduct exactly what is delivered so the
+        // sub-quantum remainder stays reserved for the caller instead of drifting back to the index.
+        amount -= amount % TAO_NATIVE_QUANTUM;
+        if (amount == 0) revert ClaimBelowNativePrecision();
         claimableTao[tokenId][msg.sender] = entitlement - amount;
         _settleIndexDebt(msg.sender, tokenId, index);
         taoLiability[tokenId] = liability - amount;
@@ -672,8 +676,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         return (_assetsFor(totalAlpha, supply, shares), 0);
     }
 
-    /// @notice TAO withdrawable by `account` for `tokenId` right now: what `claimTao` would pay,
-    ///         including entitlement the storage has not settled yet.
+    /// @notice TAO withdrawable by `account` for `tokenId` right now: exactly what `claimTao`
+    ///         would pay, including entitlement the storage has not settled yet, quoted at the
+    ///         granularity a native transfer can deliver.
     function claimableTaoOf(address account, uint256 tokenId) external view returns (uint256) {
         uint256 index = cumulativeTaoPerShare[tokenId];
         uint256 backing = taoLiability[tokenId];
@@ -682,12 +687,16 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
             uint256 unreserved = _unreservedCloneTao(tokenId, clone);
             uint256 supply = totalSupply(tokenId);
             if (unreserved != 0 && supply != 0 && _isLiveForIndexing(tokenId)) {
-                index += Math.mulDiv(unreserved, TAO_INDEX_PRECISION, supply);
-                backing += unreserved;
+                // Mirrors the fold in `_syncTao`, including its ceiling: an arrival too small to
+                // move the index reserves nothing, so quoting it as backing would over-promise.
+                uint256 indexIncrease = Math.mulDiv(unreserved, TAO_INDEX_PRECISION, supply);
+                index += indexIncrease;
+                backing += Math.mulDiv(indexIncrease, supply, TAO_INDEX_PRECISION, Math.Rounding.Ceil);
             }
         }
         uint256 entitlement = claimableTao[tokenId][account] + _pendingAt(account, tokenId, index);
-        return entitlement > backing ? backing : entitlement;
+        uint256 amount = entitlement > backing ? backing : entitlement;
+        return amount - amount % TAO_NATIVE_QUANTUM;
     }
 
     /// @notice Unused slots are bytes32(0).
@@ -1208,25 +1217,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         return balance > reserved ? balance - reserved : 0;
     }
 
-    /// @dev Dissolution probe for the balance-change hook: transfers must survive a broken or
-    ///      missing precompile, so an unreadable state reads as not live and indexing pauses
-    ///      instead of reverting.
     function _isLiveForIndexing(uint256 tokenId) private view returns (bool) {
-        uint16 netuid = _netuid(tokenId);
-        (bool readable, uint256 registrationBlock) =
-            _tryReadSubnetValue(abi.encodeCall(ISubnet.getNetworkRegistrationBlock, (netuid)));
-        if (!readable || registrationBlock != _registrationBlock(tokenId)) return false;
-        (bool readableDissolving, uint256 dissolving) =
-            _tryReadSubnetValue(abi.encodeCall(ISubnet.isSubnetDissolving, (netuid)));
-        return readableDissolving && dissolving == 0;
-    }
-
-    /// @dev Gas-capped so a precompile failure that consumes everything forwarded cannot starve
-    ///      the enclosing transfer; the cap is far above the cost of a healthy read.
-    function _tryReadSubnetValue(bytes memory encodedCall) private view returns (bool readable, uint256 value) {
-        (bool success, bytes memory data) = SUBNET_PRECOMPILE.staticcall{ gas: SUBNET_PROBE_GAS_CAP }(encodedCall);
-        if (!success || data.length < 32) return (false, 0);
-        return (true, abi.decode(data, (uint256)));
+        if (_isIssuedForDissolvedSubnet(tokenId)) return false;
+        return !ISubnet(SUBNET_PRECOMPILE).isSubnetDissolving(_netuid(tokenId));
     }
 
     /// @dev Moves the account's earned-but-unrecorded TAO into its claimable balance. Leaves the

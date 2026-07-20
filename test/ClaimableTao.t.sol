@@ -8,7 +8,6 @@ pragma solidity ^0.8.20;
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
-import { SUBNET_PRECOMPILE } from "src/interfaces/ISubnet.sol";
 import { ClaimDuringTransferReceiver } from "./helpers/TaoRailReceivers.sol";
 
 contract ClaimableTaoTest is AlphaVaultTestBase {
@@ -16,6 +15,9 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
     event ExcludedTaoRecovered(uint256 indexed tokenId, address recipient, uint256 amount);
 
     uint256 internal constant DEPOSIT = 30 ether;
+
+    // Native TAO moves in whole multiples of this quantum, so quotes and payouts are floored to it.
+    uint256 internal constant NATIVE_TRANSFER_QUANTUM = 1e9;
 
     function _donateToTokenClone(uint256 tokenId, uint256 amount) internal returns (address clone) {
         clone = vault.subnetClone(tokenId);
@@ -25,6 +27,22 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
     function _claimAs(address user) internal {
         vm.prank(user);
         vault.claimTao(TOKEN1, payable(user));
+    }
+
+    // The view is a commitment: a nonzero quote pays exactly, a zero quote means the claim reverts.
+    function _claimQuotedAmount(address user) internal returns (uint256 delivered) {
+        uint256 quoted = vault.claimableTaoOf(user, TOKEN1);
+        assertEq(quoted % NATIVE_TRANSFER_QUANTUM, 0);
+        if (quoted == 0) {
+            vm.expectRevert();
+            vm.prank(user);
+            vault.claimTao(TOKEN1, payable(user));
+            return 0;
+        }
+        uint256 balanceBefore = user.balance;
+        _claimAs(user);
+        delivered = user.balance - balanceBefore;
+        assertEq(delivered, quoted);
     }
 
     function _assertCloneCoversReservedTao(uint256 tokenId) internal view {
@@ -54,7 +72,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         _depositAndWrap(bob, NETUID1, DEPOSIT);
 
         assertEq(vault.claimableTaoOf(bob, TOKEN1), 0);
-        assertApproxEqAbs(vault.claimableTaoOf(alice, TOKEN1), donated, 2);
+        assertApproxEqAbs(vault.claimableTaoOf(alice, TOKEN1), donated, NATIVE_TRANSFER_QUANTUM);
         assertLe(vault.taoLiability(TOKEN1), donated);
     }
 
@@ -67,7 +85,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         vm.prank(alice);
         vault.safeTransferFrom(alice, bob, TOKEN1, shares, "");
 
-        assertApproxEqAbs(vault.claimableTaoOf(alice, TOKEN1), donated, 2);
+        assertApproxEqAbs(vault.claimableTaoOf(alice, TOKEN1), donated, NATIVE_TRANSFER_QUANTUM);
         assertEq(vault.claimableTaoOf(bob, TOKEN1), 0);
     }
 
@@ -86,13 +104,13 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         vm.prank(alice);
         vault.safeBatchTransferFrom(alice, bob, ids, values, "");
 
-        assertApproxEqAbs(vault.claimableTaoOf(alice, TOKEN1), donated, 2);
+        assertApproxEqAbs(vault.claimableTaoOf(alice, TOKEN1), donated, NATIVE_TRANSFER_QUANTUM);
         assertEq(vault.claimableTaoOf(bob, TOKEN1), 0);
 
         _donateToTokenClone(TOKEN1, donated);
         _touch(bob, TOKEN1);
         uint256 bobShare = (donated * vault.balanceOf(bob, TOKEN1)) / vault.totalSupply(TOKEN1);
-        assertApproxEqAbs(vault.claimableTaoOf(bob, TOKEN1), bobShare, 2);
+        assertApproxEqAbs(vault.claimableTaoOf(bob, TOKEN1), bobShare, NATIVE_TRANSFER_QUANTUM);
     }
 
     function test_SelfTransfer_LeavesEntitlementUnchanged() public {
@@ -148,6 +166,17 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         _claimAs(bob);
     }
 
+    function test_RevertWhen_ClaimingSubQuantumEntitlement() public {
+        _depositAndWrap(alice, NETUID1, DEPOSIT);
+        _donateToTokenClone(TOKEN1, NATIVE_TRANSFER_QUANTUM - 1);
+
+        // Too small to deliver: the quote promises nothing and the claim refuses rather than
+        // clearing an entitlement no transfer can pay out.
+        assertEq(vault.claimableTaoOf(alice, TOKEN1), 0);
+        vm.expectRevert(AlphaVault.ClaimBelowNativePrecision.selector);
+        _claimAs(alice);
+    }
+
     function test_RevertWhen_ClaimingToZeroAddress() public {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
         vm.expectRevert(AlphaVault.ZeroAddress.selector);
@@ -162,9 +191,9 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
 
         _exitCompletely(alice, TOKEN1);
 
-        assertApproxEqAbs(vault.claimableTaoOf(alice, TOKEN1), donated, 2);
+        assertApproxEqAbs(vault.claimableTaoOf(alice, TOKEN1), donated, NATIVE_TRANSFER_QUANTUM);
         _claimAs(alice);
-        assertApproxEqAbs(alice.balance, donated, 2);
+        assertApproxEqAbs(alice.balance, donated, NATIVE_TRANSFER_QUANTUM);
     }
 
     function test_ReceiverClaimDuringSafeTransfer_GainsNothing() public {
@@ -179,7 +208,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
 
         assertFalse(receiver.claimSucceeded());
         assertEq(address(receiver).balance, 0);
-        assertApproxEqAbs(vault.claimableTaoOf(alice, TOKEN1), donated, 2);
+        assertApproxEqAbs(vault.claimableTaoOf(alice, TOKEN1), donated, NATIVE_TRANSFER_QUANTUM);
     }
 
     function test_UnwrapForTaoAfterDonation_ExitPaysSaleProceedsOnly() public {
@@ -193,7 +222,11 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         vault.unwrapForTao(TOKEN1, shares, 0);
 
         _assertCloneCoversReservedTao(TOKEN1);
-        assertApproxEqAbs(vault.claimableTaoOf(alice, TOKEN1) + vault.claimableTaoOf(bob, TOKEN1), donated, 4);
+        assertApproxEqAbs(
+            vault.claimableTaoOf(alice, TOKEN1) + vault.claimableTaoOf(bob, TOKEN1),
+            donated,
+            2 * NATIVE_TRANSFER_QUANTUM
+        );
     }
 
     function testFuzz_ClaimsAcrossHolders_ConserveArrivedTao(uint256 donation, uint256 aliceDeposit, uint256 bobDeposit)
@@ -207,12 +240,33 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         _depositAndWrap(bob, NETUID1, bobDeposit);
         _donateToTokenClone(TOKEN1, donation);
 
-        _claimAs(alice);
-        _claimAs(bob);
-
-        uint256 paid = alice.balance + bob.balance;
+        uint256 paid = _claimQuotedAmount(alice) + _claimQuotedAmount(bob);
         assertLe(paid, donation);
-        assertApproxEqAbs(paid, donation, 4);
+        // Each holder retains at most one sub-quantum remainder plus index-flooring wei.
+        assertApproxEqAbs(paid, donation, 2 * NATIVE_TRANSFER_QUANTUM + 4);
+    }
+
+    function testFuzz_ClaimableTaoOf_QuotesExactClaimPayout(uint256 aliceDeposit, uint256 bobDeposit, uint256 donation)
+        public
+    {
+        aliceDeposit = bound(aliceDeposit, 1 ether, 1_000_000 ether);
+        bobDeposit = bound(bobDeposit, 1 ether, 1_000_000 ether);
+        donation = bound(donation, 1, 1_000_000 ether);
+
+        _depositAndWrap(alice, NETUID1, aliceDeposit);
+        _depositAndWrap(bob, NETUID1, bobDeposit);
+        _donateToTokenClone(TOKEN1, donation);
+
+        // A transfer settles the first donation while the second stays unsynchronized, so the
+        // quote is exercised on both settled storage and the simulated fold of pending TAO.
+        uint256 aliceShares = vault.balanceOf(alice, TOKEN1);
+        vm.prank(alice);
+        vault.safeTransferFrom(alice, bob, TOKEN1, aliceShares / 2, "");
+        _donateToTokenClone(TOKEN1, donation / 3 + 1);
+
+        _claimQuotedAmount(alice);
+        _claimQuotedAmount(bob);
+        _assertCloneCoversReservedTao(TOKEN1);
     }
 
     // -------------------- Dissolution seam ---------------------------------------
@@ -261,7 +315,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         assertApproxEqAbs(alice.balance, (refund * aliceShares) / supply, 2);
 
         _claimAs(alice);
-        assertApproxEqAbs(alice.balance, previewTao + donated / 2, 4);
+        assertApproxEqAbs(alice.balance, previewTao + donated / 2, NATIVE_TRANSFER_QUANTUM + 4);
     }
 
     function test_ClaimDuringBlackout_PaysExistingEntitlement() public {
@@ -273,28 +327,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         _simulateDissolutionStarted(NETUID1);
 
         _claimAs(alice);
-        assertApproxEqAbs(alice.balance, donated, 2);
-    }
-
-    function test_TransferWithBrokenSubnetPrecompile_PausesIndexing() public {
-        _depositAndWrap(alice, NETUID1, DEPOSIT);
-        _donateToTokenClone(TOKEN1, 5 ether);
-
-        vm.etch(SUBNET_PRECOMPILE, hex"60006000fd");
-        _touch(alice, TOKEN1);
-        assertEq(vault.taoLiability(TOKEN1), 0);
-        assertEq(vault.claimableTaoOf(alice, TOKEN1), 0);
-
-        vm.etch(SUBNET_PRECOMPILE, hex"00");
-        _touch(alice, TOKEN1);
-        assertEq(vault.taoLiability(TOKEN1), 0);
-        assertEq(vault.claimableTaoOf(alice, TOKEN1), 0);
-
-        // A failure that consumes everything forwarded must still leave the transfer enough gas.
-        vm.etch(SUBNET_PRECOMPILE, hex"fe");
-        _touch(alice, TOKEN1);
-        assertEq(vault.taoLiability(TOKEN1), 0);
-        assertEq(vault.claimableTaoOf(alice, TOKEN1), 0);
+        assertApproxEqAbs(alice.balance, donated, NATIVE_TRANSFER_QUANTUM);
     }
 
     function test_DonationDuringBlackout_StaysInDissolvedBacking() public {

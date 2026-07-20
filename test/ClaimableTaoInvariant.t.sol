@@ -11,13 +11,15 @@ import { AlphaVault } from "src/AlphaVault.sol";
 
 contract ClaimableTaoHandler is Test {
     AlphaVault public immutable vault;
+    ClaimableTaoInvariantTest public immutable harness;
     uint256 public immutable tokenId;
     address[] public actors;
     uint256 public totalDonated;
     uint256 public totalClaimed;
 
-    constructor(AlphaVault _vault, uint256 _tokenId, address[] memory _actors) {
+    constructor(AlphaVault _vault, ClaimableTaoInvariantTest _harness, uint256 _tokenId, address[] memory _actors) {
         vault = _vault;
+        harness = _harness;
         tokenId = _tokenId;
         actors = _actors;
     }
@@ -33,6 +35,11 @@ contract ClaimableTaoHandler is Test {
         totalDonated += amount;
     }
 
+    function wrap(uint256 actorSeed, uint256 amount) external {
+        amount = bound(amount, 1 ether, 1_000 ether);
+        harness.wrapFor(_actor(actorSeed), amount);
+    }
+
     function transferShares(uint256 fromSeed, uint256 toSeed, uint256 amount) external {
         address from = _actor(fromSeed);
         address to = _actor(toSeed);
@@ -43,13 +50,27 @@ contract ClaimableTaoHandler is Test {
         vault.safeTransferFrom(from, to, tokenId, amount, "");
     }
 
+    // The quote is a commitment: a claim pays exactly what the view promised and moves exactly
+    // that much out of the clone, so a payout the chain rounds down can never clear more
+    // entitlement than it delivered. A zero quote must not be claimable at all.
     function claim(uint256 actorSeed) external {
         address actor = _actor(actorSeed);
-        uint256 balanceBefore = actor.balance;
+        address clone = vault.subnetClone(tokenId);
+        uint256 quoted = vault.claimableTaoOf(actor, tokenId);
+        if (quoted == 0) {
+            vm.expectRevert();
+            vm.prank(actor);
+            vault.claimTao(tokenId, payable(actor));
+            return;
+        }
+        uint256 cloneBefore = clone.balance;
+        uint256 actorBefore = actor.balance;
         vm.prank(actor);
-        try vault.claimTao(tokenId, payable(actor)) {
-            totalClaimed += actor.balance - balanceBefore;
-        } catch { }
+        vault.claimTao(tokenId, payable(actor));
+        uint256 delivered = actor.balance - actorBefore;
+        assertEq(delivered, quoted);
+        assertEq(cloneBefore - clone.balance, delivered);
+        totalClaimed += delivered;
     }
 
     function exitForTao(uint256 actorSeed, uint256 shareSeed) external {
@@ -77,8 +98,12 @@ contract ClaimableTaoInvariantTest is AlphaVaultTestBase {
                 ++i;
             }
         }
-        handler = new ClaimableTaoHandler(vault, TOKEN1, actors);
+        handler = new ClaimableTaoHandler(vault, this, TOKEN1, actors);
         targetContract(address(handler));
+    }
+
+    function wrapFor(address user, uint256 amount) external {
+        _depositAndWrap(user, NETUID1, amount);
     }
 
     function invariant_CloneBalanceCoversReservedTao() public view {

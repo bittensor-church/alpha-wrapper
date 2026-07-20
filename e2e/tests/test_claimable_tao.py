@@ -53,8 +53,13 @@ def test_root_sweep_tao_becomes_claimable(env):
         print(f"  Clearing pass stranded {stranded} wei on the subnet clone")
         assert stranded > 0, "expected the clearing pass to strand TAO on the clone"
 
+        # The view quotes at RAO granularity, so it can sit up to one RAO below the raw
+        # stranded amount (index flooring plus the RAO floor of the quote).
         claimable = claimable_tao()
-        assert abs(claimable - stranded) <= 4, f"claimable {claimable} != stranded {stranded}"
+        assert claimable % RAO_WEI == 0, f"claimable {claimable} is not RAO-granular"
+        assert 0 <= stranded - claimable <= RAO_WEI, (
+            f"claimable {claimable} != stranded {stranded} floored to the RAO"
+        )
 
         user_balance_before = env.user_tao_wei()
         receipt = env.vault_send(
@@ -63,17 +68,12 @@ def test_root_sweep_tao_becomes_claimable(env):
         )
         gas_cost = chain.receipt_gas_used(receipt) * config.LOCALNET_GAS_PRICE_WEI
         delivered = env.user_tao_wei() - user_balance_before + gas_cost
-        print(f"  Claim delivered {delivered} wei ({claimable - delivered} wei sub-RAO remainder)")
-        assert delivered > 0, "claim paid nothing"
-        # Native TAO delivery is RAO-granular (1e9 wei), so the wei-precise entitlement is delivered
-        # floored to the RAO; the sub-RAO remainder stays accounted in the clone, not lost.
-        assert 0 <= claimable - delivered < RAO_WEI, (
-            f"delivered {delivered} is not claimable {claimable} floored to the RAO"
-        )
-
-        # The paid claim leaves at most the sub-RAO remainder, itself below the one-RAO view floor.
+        print(f"  Claim delivered {delivered} wei")
+        # The quote is a commitment: the claim delivers exactly what the view promised, and the
+        # sub-RAO remainder stays reserved for the claimant below the quote's one-RAO floor.
+        assert delivered == claimable, f"delivered {delivered} != quoted {claimable}"
         remaining = claimable_tao()
-        assert remaining < RAO_WEI, f"entitlement not cleared after claim: {remaining}"
+        assert remaining == 0, f"quote not cleared after claim: {remaining}"
     finally:
         # A raise here would mask the test's own assertion error; report and move on instead.
         try:
