@@ -649,7 +649,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///         delivers this amount or reverts, so a sub-floor total is not deliverable here and
     ///         must be exited via unwrapForTao. That voluntary alpha-for-TAO sell is a market order
     ///         with no preview of its own: its payout is bounded by the caller's minTaoOut, not
-    ///         quoted here. `tao` is non-zero only for the dissolved-subnet payout.
+    ///         quoted here. `tao` is non-zero only for the dissolved-subnet payout. The caller's
+    ///         claimable-TAO entitlement is never part of this quote: it survives unwrapping and
+    ///         is quoted by `claimableTaoOf`.
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @param  shares  Shares being previewed.
     /// @return alpha   Alpha delivered on the live path.
