@@ -68,9 +68,10 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         // Pre-fund so the staking precompile mock can credit native TAO back to callers.
         vm.deal(STAKING_PRECOMPILE, 1_000_000 ether);
         // etch copies code, not storage, so the sell rate starts 0/0 and any un-parameterized sell
-        // panics on division; a 1:1 default keeps unrelated tests meaningful. The dust-sweep
-        // threshold is seeded to the chain's live value for the same reason.
+        // panics on division; a 1:1 default keeps unrelated tests meaningful. The min-stake floor
+        // and the dust-sweep threshold are seeded to the chain's live values for the same reason.
         MockStaking(STAKING_PRECOMPILE).setRemoveStakeRate(1, 1);
+        MockStaking(STAKING_PRECOMPILE).setChainMinStake(MIN_STAKE_FLOOR);
         MockStaking(STAKING_PRECOMPILE).setNominatorMinRequiredStake(DUST_THRESHOLD);
 
         mailboxLogic = new DepositMailbox();

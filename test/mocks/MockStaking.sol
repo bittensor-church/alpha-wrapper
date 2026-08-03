@@ -4,7 +4,9 @@ pragma solidity ^0.8.20;
 import { MockAlpha } from "./MockAlpha.sol";
 import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 
-/// @dev The simulated chain's min-stake floor; the test base aliases it so the two cannot drift.
+/// @dev The simulated chain's min-stake floor at its live value; the test base aliases it so the
+///      two cannot drift. Every suite that etches this mock must seed it, because `vm.etch` copies
+///      only code and an unseeded floor of zero silently accepts amounts the chain would reject.
 uint256 constant CHAIN_MIN_STAKE = 2e6;
 
 /// @dev The simulated chain's nominator dust threshold; aliased by the test base the same way.
@@ -17,6 +19,10 @@ contract MockStaking {
     uint256 public moveStakeRoundingLoss;
     bool public transferStakeReverts;
     bool public consumeAllGasOnFailure;
+    /// @dev The chain floors transfers and same-subnet moves below its unstake minimum and exposes
+    ///      no getter for that lower value, so the vault applies the unstake minimum to every rail.
+    ///      This models the same rule: one reported minimum, enforced everywhere.
+    uint256 private _chainMinStakeTao;
 
     function setTransferStakeReverts(bool v) external {
         transferStakeReverts = v;
@@ -56,9 +62,16 @@ contract MockStaking {
         return (amount * alphaPriceE18) / 1e18 < thresholdTao;
     }
 
-    // The chain rejects transfers and moves whose tao value is below CHAIN_MIN_STAKE.
+    function setChainMinStake(uint256 minStakeTao) external {
+        _chainMinStakeTao = minStakeTao;
+    }
+
+    function getDefaultMinStake() external view returns (uint256) {
+        return _chainMinStakeTao;
+    }
+
     function _belowMinStake(uint256 amount, uint256 netuid) private view returns (bool) {
-        return _belowTaoValue(amount, netuid, CHAIN_MIN_STAKE);
+        return _belowTaoValue(amount, netuid, _chainMinStakeTao);
     }
 
     function transferStake(
@@ -151,7 +164,7 @@ contract MockStaking {
         // credits rao * 1e9 wei. Wei-denominated payouts are asserted by the e2e run.
         uint256 taoOut = quoteTaoOut(alphaAmount);
         // As on the chain, the floor binds only when stake remains after the unstake.
-        if (alphaAmount != staked && taoOut < CHAIN_MIN_STAKE) {
+        if (alphaAmount != staked && taoOut < _chainMinStakeTao) {
             _fail("MockStaking: AmountTooLow");
         }
         uint256 remainder = staked - alphaAmount;

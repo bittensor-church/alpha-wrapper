@@ -21,8 +21,8 @@ from alpha_e2e.substrate import h160_to_ss58, h160_to_substrate_b32
 
 @pytest.mark.scenario
 def test_hostile_dust(env):
-    vault_floor = env.min_stake_tao_floor()
-    print(f"  minStakeTaoFloor = {vault_floor} RAO")
+    chain_min_stake = env.chain_min_stake_tao()
+    print(f"  chain minimum stake = {chain_min_stake} RAO")
 
     netuid = env.netuids[0]
     token_id = env.token_ids[0]
@@ -38,7 +38,7 @@ def test_hostile_dust(env):
     rotated_in_pubkey, _ = bootstrap.register_hotkey(netuid, "hk_e2e_1d")
     print(f"  Registered replacement validator {rotated_in_pubkey[:18]}... on netuid {netuid}")
 
-    _, floor_boundary_alpha = env.floor_boundary(netuid, vault_floor)
+    _, floor_boundary_alpha = env.floor_boundary(netuid, chain_min_stake)
     # 4.5x the boundary: the corrective move to B (1.35x) lands while the move to C
     # (0.9x) is floor-skipped, so C sits at zero while still in the set - a common
     # drifted split.
@@ -75,15 +75,15 @@ def test_hostile_dust(env):
         netuid, [hotkey_a_pubkey, hotkey_b_pubkey, rotated_in_pubkey], [5000, 3000, 2000],
     )
     env.crash_price_until_below(
-        netuid, hotkey_a_pubkey, hotkey_a_ss58, plant, vault_floor * 8 // 10, "Hostile dust",
+        netuid, hotkey_a_pubkey, hotkey_a_ss58, plant, chain_min_stake * 8 // 10, "Hostile dust",
     )
     plant_value = env.alpha_value_tao(netuid, env.stake(hotkey_c_pubkey, clone_coldkey, netuid))
     richest_slot_value = env.alpha_value_tao(
         netuid, env.stake(hotkey_a_pubkey, clone_coldkey, netuid),
     )
-    assert plant_value < vault_floor and richest_slot_value > vault_floor, (
+    assert plant_value < chain_min_stake and richest_slot_value > chain_min_stake, (
         f"Hostile dust: bad crash split (plant {plant_value}, richest slot "
-        f"{richest_slot_value}, floor {vault_floor})"
+        f"{richest_slot_value}, floor {chain_min_stake})"
     )
     print(f"  Rotated-out C now holds sub-floor foreign stake ({plant_value} RAO); "
           "victim's slot stays healthy")
@@ -140,7 +140,7 @@ def test_hostile_dust(env):
     # A wrap under A must ignore the mailbox stake parked under B: mailbox
     # accounting is per-hotkey.
     mailbox_plant_before = env.stake(hotkey_b_pubkey, mailbox_coldkey, netuid)
-    _, floor_boundary_alpha = env.floor_boundary(netuid, vault_floor)
+    _, floor_boundary_alpha = env.floor_boundary(netuid, chain_min_stake)
     fresh_deposit = floor_boundary_alpha * 3 // 2
     fresh_wrap_receipt = env.deposit_and_wrap(
         netuid, hotkey_a_pubkey, hotkey_a_ss58, fresh_deposit, 1_500_000,

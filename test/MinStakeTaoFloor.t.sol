@@ -5,14 +5,15 @@ import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @dev Exercises the TAO-denominated min-stake floor: the wrap/withdraw labels, the best-effort
-///      rebalance skip, exact-or-revert delivery, and the owner knob.
+///      rebalance skip, exact-or-revert delivery, and that the floor follows the chain's own value.
 contract MinStakeTaoFloorTest is AlphaVaultTestBase {
-    event MinStakeTaoFloorUpdated(uint256 oldValue, uint256 newValue);
-
     uint256 private constant PRICE_HALF = 0.5e18;
+
+    function _setChainMinStake(uint256 minStakeTao) private {
+        MockStaking(STAKING_PRECOMPILE).setChainMinStake(minStakeTao);
+    }
 
     function test_RevertWhen_WrapDepositBelowTaoFloor() public {
         _registerSubnet(99, hotkey4);
@@ -126,26 +127,87 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
         assertEq(_userStakeAcrossHotkeys(alice, NETUID1), MIN_STAKE_FLOOR, "a request worth exactly the floor delivers");
     }
 
-    // The knob's purpose: a raised floor binds the deposit gate at the new value, not the chain's.
-    function test_RevertWhen_DepositBelowRaisedFloor() public {
-        vault.setMinStakeTaoFloor(5e6);
+    // A chain upgrade that raises the minimum binds the deposit gate at the new value, with no
+    // vault-side action.
+    function test_RevertWhen_DepositBelowRaisedChainFloor() public {
+        _setChainMinStake(5e6);
         _registerSubnet(99, hotkey4);
 
-        // 3e6 tao clears the chain's 2e6 floor but not the raised vault floor.
+        // 3e6 tao cleared the chain's previous 2e6 minimum but not the raised one.
         _simulateAlphaDepositHotkey(alice, 99, 3e6, hotkey4);
         vm.prank(alice);
         vm.expectRevert(AlphaVault.DepositTooSmall.selector);
         vault.wrap(alice, 99, hotkey4);
     }
 
-    function test_RevertWhen_UnwrapBelowRaisedFloor() public {
+    function test_RevertWhen_UnwrapBelowRaisedChainFloor() public {
         _depositAndWrap(alice, NETUID1, 40e6);
-        vault.setMinStakeTaoFloor(5e6);
+        _setChainMinStake(5e6);
 
-        // A 3e6-value request cleared the deploy-time floor; the raised floor now refuses it.
+        // A 3e6-value request cleared the previous minimum; the raised one now refuses it.
         uint256 shares = _sharesForExactAssets(TOKEN1, 3e6, 40e6);
         vm.prank(alice);
         vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+    }
+
+    // The other direction: a lowered chain minimum admits a deposit the previous one refused, so
+    // the vault never over-refuses after a chain change either.
+    function test_Wrap_FollowsLoweredChainFloor() public {
+        _registerSubnet(99, hotkey4);
+        _simulateAlphaDepositHotkey(alice, 99, 1e6, hotkey4);
+
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.DepositTooSmall.selector);
+        vault.wrap(alice, 99, hotkey4);
+
+        _setChainMinStake(5e5);
+        _wrapHotkey(alice, 99, hotkey4);
+
+        assertEq(_getVaultStake(hotkey4, 99), 1e6, "deposit lands once the chain minimum drops below it");
+    }
+
+    // A chain reporting no minimum leaves the vault nothing to skip: every guard stops refusing and
+    // the chain alone decides, which is what the guards were standing in for.
+    function test_Wrap_ChainMinimumOfZeroLeavesTheGateOpen() public {
+        _setChainMinStake(0);
+        _registerSubnet(99, hotkey4);
+        _setAlphaPrice(99, 1e18);
+        _simulateAlphaDepositHotkey(alice, 99, 1, hotkey4);
+
+        _wrapHotkey(alice, 99, hotkey4);
+
+        assertEq(_getVaultStake(hotkey4, 99), 1, "a zero minimum admits a deposit of one RAO");
+    }
+
+    // The floor is a chain-side input now, so the gate has to track it at any value the chain
+    // could report, not just the one it reports today.
+    function testFuzz_Wrap_GateBindsAtTheChainMinimum(uint256 chainMinStake, uint256 deposit) public {
+        chainMinStake = bound(chainMinStake, 1, 50e6);
+        deposit = bound(deposit, 1, 100e6);
+        _setChainMinStake(chainMinStake);
+        _registerSubnet(99, hotkey4);
+        // At unit price the deposit is its own tao value, so the boundary is exactly `chainMinStake`.
+        _setAlphaPrice(99, 1e18);
+        _simulateAlphaDepositHotkey(alice, 99, deposit, hotkey4);
+
+        vm.prank(alice);
+        (bool ok,) = address(vault).call(abi.encodeCall(vault.wrap, (alice, 99, hotkey4)));
+
+        assertEq(ok, deposit >= chainMinStake, "the gate binds exactly at the chain's reported minimum");
+    }
+
+    // The gather guard reads the same chain value: a raised minimum turns a gather that used to
+    // run into an up-front refusal, while the request itself still clears the new minimum.
+    function test_RevertWhen_GatherBelowRaisedChainFloor() public {
+        _depositAndWrap(alice, NETUID1, 40e6);
+        _setVaultStakes(NETUID1, 15e6, 15e6, 10e6);
+        _setChainMinStake(20e6);
+
+        // 25e6 clears the raised minimum, but no single slot covers it and the richest holds 15e6.
+        uint256 shares = _sharesForExactAssets(TOKEN1, 25e6, 40e6);
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.GatherBelowFloor.selector);
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
     }
 
@@ -329,38 +391,6 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
         assertEq(received, previewAlpha, "delivery is exact - no shortfall above the floor");
     }
 
-    function test_SetMinStakeTaoFloor_UpdatesValueAndEmits() public {
-        vm.expectEmit(false, false, false, true, address(vault));
-        emit MinStakeTaoFloorUpdated(2e6, 5e6);
-        vault.setMinStakeTaoFloor(5e6);
-        assertEq(vault.minStakeTaoFloor(), 5e6);
-    }
-
-    function test_RevertWhen_MinStakeTaoFloorAboveCap() public {
-        vm.expectRevert(AlphaVault.MinStakeTaoFloorTooHigh.selector);
-        vault.setMinStakeTaoFloor(100e6 + 1);
-    }
-
-    function test_SetMinStakeTaoFloor_AcceptsCapBoundary() public {
-        vault.setMinStakeTaoFloor(100e6);
-        assertEq(vault.minStakeTaoFloor(), 100e6);
-    }
-
-    function test_Constructor_DefaultsFloorToChainMinimum() public view {
-        assertEq(vault.minStakeTaoFloor(), MIN_STAKE_FLOOR, "deploy default tracks the chain floor");
-    }
-
-    // No lower clamp: the owner follows the chain floor in either direction, anywhere under the
-    // cap. Keeping the value at or above the chain's live floor is an operational responsibility,
-    // not an on-chain invariant.
-    function test_SetMinStakeTaoFloor_TracksChainFloorInBothDirections() public {
-        vault.setMinStakeTaoFloor(5e5);
-        assertEq(vault.minStakeTaoFloor(), 5e5, "follows a chain-floor decrease below the deploy value");
-
-        vault.setMinStakeTaoFloor(20e6);
-        assertEq(vault.minStakeTaoFloor(), 20e6, "follows a chain-floor increase toward the cap");
-    }
-
     // Within one price quantum of the floor the label cannot prove the chain will reject, so the
     // gather falls through bare and the chain's full-precision floor decides.
     function test_RevertWhen_GatherLargestSlotWithinOneQuantumOfFloor() public {
@@ -372,12 +402,6 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
         vm.prank(alice);
         vm.expectRevert(bytes("MockStaking: AmountTooLow"));
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
-    }
-
-    function test_RevertWhen_NonOwnerSetsMinStakeTaoFloor() public {
-        vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
-        vault.setMinStakeTaoFloor(3e6);
     }
 
     function test_RevertWhen_WrapFlushFailsForNonFloorReason() public {

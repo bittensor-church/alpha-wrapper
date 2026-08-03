@@ -23,8 +23,8 @@ from alpha_e2e.substrate import h160_to_ss58, h160_to_substrate_b32
 
 @pytest.mark.scenario
 def test_rotated_out_dust_cannot_lock_the_vault(env):
-    vault_floor = env.min_stake_tao_floor()
-    print(f"  minStakeTaoFloor = {vault_floor} RAO")
+    chain_min_stake = env.chain_min_stake_tao()
+    print(f"  chain minimum stake = {chain_min_stake} RAO")
 
     netuid = env.netuids[0]
     token_id = env.token_ids[0]
@@ -38,7 +38,7 @@ def test_rotated_out_dust_cannot_lock_the_vault(env):
     replacement_pubkey, _ = bootstrap.register_hotkey(netuid, "hk_e2e_1d")
     print(f"  Registered replacement validator {replacement_pubkey[:18]}... on netuid {netuid}")
 
-    _, floor_boundary_alpha = env.floor_boundary(netuid, vault_floor)
+    _, floor_boundary_alpha = env.floor_boundary(netuid, chain_min_stake)
     # 1.5x the boundary clears the deposit floor while every corrective move toward
     # the 50/30/20 split stays below it, keeping the whole deposit on the
     # soon-rotated hotkey.
@@ -58,7 +58,7 @@ def test_rotated_out_dust_cannot_lock_the_vault(env):
         "unwrap(uint256,uint256,bytes32)", token_id, partial_burn, env.wrapper_substrate_coldkey,
     )
     dust_residue = env.stake(rotated_out_hotkey_pubkey, clone_coldkey, netuid)
-    assert env.alpha_value_tao(netuid, dust_residue) < vault_floor, (
+    assert env.alpha_value_tao(netuid, dust_residue) < chain_min_stake, (
         f"Rotated-out dust: residual {dust_residue} alpha RAO is not sub-floor"
     )
     env.set_validators(
@@ -106,7 +106,7 @@ def test_rotated_out_dust_cannot_lock_the_vault(env):
     print("  TAO exit drained the dust in full and paid out per the chain quote")
 
     # The token stays fully usable after the episode.
-    _, floor_boundary_alpha = env.floor_boundary(netuid, vault_floor)
+    _, floor_boundary_alpha = env.floor_boundary(netuid, chain_min_stake)
     retry_deposit = floor_boundary_alpha * 3 // 2
     env.deposit_and_wrap(
         netuid, kept_hotkey_b_pubkey, kept_hotkey_b_ss58, retry_deposit, 1_500_000,
@@ -122,7 +122,7 @@ def test_rotated_out_dust_cannot_lock_the_vault(env):
 
 @pytest.mark.scenario
 def test_price_crash_cannot_lock_exits(env):
-    vault_floor = env.min_stake_tao_floor()
+    chain_min_stake = env.chain_min_stake_tao()
 
     netuid = env.netuids[1]
     token_id = env.token_ids[1]
@@ -131,7 +131,7 @@ def test_price_crash_cannot_lock_exits(env):
     sell_hotkey_pubkey = env.hotkey_pubkeys[4]
     sell_hotkey_ss58 = env.hotkey_ss58s[4]
 
-    crash_price, floor_boundary_alpha = env.floor_boundary(netuid, vault_floor)
+    crash_price, floor_boundary_alpha = env.floor_boundary(netuid, chain_min_stake)
     # Just above the floor, so a sell that roughly halves the price (the crash
     # helper's reach) drops the whole position well under it.
     crash_deposit = floor_boundary_alpha * 12 // 10
@@ -145,13 +145,13 @@ def test_price_crash_cannot_lock_exits(env):
     # devalued by the market alone, with no stake moved.
     env.crash_price_until_below(
         netuid, sell_hotkey_pubkey, sell_hotkey_ss58,
-        env.vault_total_stake(token_id), vault_floor * 9 // 10, "Price crash",
+        env.vault_total_stake(token_id), chain_min_stake * 9 // 10, "Price crash",
     )
     crashed_value = env.alpha_value_tao(netuid, env.vault_total_stake(token_id))
-    assert crashed_value < vault_floor, (
-        f"Price crash: position still worth {crashed_value} RAO (floor {vault_floor})"
+    assert crashed_value < chain_min_stake, (
+        f"Price crash: position still worth {crashed_value} RAO (floor {chain_min_stake})"
     )
-    print(f"  Position devalued to {crashed_value} RAO, below the {vault_floor} RAO floor")
+    print(f"  Position devalued to {crashed_value} RAO, below the {chain_min_stake} RAO floor")
 
     crashed_shares = env.vault_shares(token_id)
     refusal_receipt = env.assert_vault_reverts_with(
@@ -182,7 +182,7 @@ def test_price_crash_cannot_lock_exits(env):
     print("  TAO exit paid out the devalued position in full")
 
     # Deposits and alpha exits keep working at the crashed price.
-    _, floor_boundary_alpha = env.floor_boundary(netuid, vault_floor)
+    _, floor_boundary_alpha = env.floor_boundary(netuid, chain_min_stake)
     retry_deposit = floor_boundary_alpha * 3 // 2
     env.deposit_and_wrap(
         netuid, position_hotkey_pubkey, position_hotkey_ss58, retry_deposit, 1_500_000,
@@ -206,7 +206,7 @@ def test_price_crash_cannot_lock_exits(env):
 
 @pytest.mark.scenario
 def test_sub_floor_co_holder_cannot_be_locked_in_or_leak_the_other_holder(env):
-    vault_floor = env.min_stake_tao_floor()
+    chain_min_stake = env.chain_min_stake_tao()
     assert chain.cast_wallet_address(config.SECOND_HOLDER_PRIVATE_KEY) == config.SECOND_HOLDER_ADDRESS, (
         "holder-2 key/address mismatch"
     )
@@ -226,7 +226,7 @@ def test_sub_floor_co_holder_cannot_be_locked_in_or_leak_the_other_holder(env):
     )
     print("  Funded holder 2 with 10 TAO for gas")
 
-    _, floor_boundary_alpha = env.floor_boundary(netuid, vault_floor)
+    _, floor_boundary_alpha = env.floor_boundary(netuid, chain_min_stake)
     # The large holder's corrective moves (3x and 2x the boundary) land, so the
     # position carries a real 50/30/20 split; the small holder sits just above
     # the floor.
@@ -243,28 +243,32 @@ def test_sub_floor_co_holder_cannot_be_locked_in_or_leak_the_other_holder(env):
     )
     print(f"  Two holders wrapped: large {large_deposit}, small {small_deposit} alpha RAO")
 
+    # Selling most of a healthy position leaves the seller holding a slice worth
+    # less than the chain will move or sell. The large co-holder's stake deepens
+    # the pool, so no market sell could devalue the slice this far - the share
+    # sale reaches the same state without touching the price.
+    small_holder_shares_before = env.vault_shares(token_id, config.SECOND_HOLDER_ADDRESS)
+    env.transfer_shares(
+        token_id, config.SECOND_HOLDER_ADDRESS, config.WRAPPER_USER_ADDRESS,
+        small_holder_shares_before * 2 // 3, "Co-holder: share sale failed",
+        private_key=config.SECOND_HOLDER_PRIVATE_KEY,
+    )
+
     small_holder_value = env.alpha_value_tao(
         netuid, env.holder_assets(token_id, config.SECOND_HOLDER_ADDRESS),
     )
     large_holder_value = env.alpha_value_tao(
         netuid, env.holder_assets(token_id, config.WRAPPER_USER_ADDRESS),
     )
-    # The large co-holder's stake deepens the pool, so a market sell can't move the
-    # price enough to devalue the small slice; raise the vault floor between the
-    # two holders instead (as the owner would to track a chain increase), which
-    # the large position dwarfs.
-    original_floor = vault_floor
-    raised_floor = small_holder_value * 3 // 2
-    assert small_holder_value + 1 <= raised_floor, (
-        "Co-holder: small slice not below the raised floor"
+    assert small_holder_value < chain_min_stake, (
+        f"Co-holder: small slice not below the floor "
+        f"({small_holder_value} RAO, floor {chain_min_stake})"
     )
-    assert raised_floor <= large_holder_value // 2 - 1, (
-        "Co-holder: split too narrow to raise the floor between the holders"
+    assert large_holder_value >= chain_min_stake * 2, (
+        f"Co-holder: large holder not clear of the floor ({large_holder_value} RAO)"
     )
-    env.set_vault_floor(raised_floor, "Co-holder: raising the vault floor failed")
-    vault_floor = raised_floor
-    print(f"  Floor raised to {raised_floor} RAO: small holder ({small_holder_value} RAO) "
-          f"sub-floor, large holder ({large_holder_value} RAO) healthy")
+    print(f"  Small holder sold down to {small_holder_value} RAO, below the "
+          f"{chain_min_stake} RAO floor; large holder healthy at {large_holder_value} RAO")
 
     # Both rails refuse the sub-floor slice: the chain cannot move or sell that
     # little, and force-selling it would sweep value out of the co-holder's backing.
@@ -292,7 +296,7 @@ def test_sub_floor_co_holder_cannot_be_locked_in_or_leak_the_other_holder(env):
     large_holder_assets_before = env.holder_assets(token_id, config.WRAPPER_USER_ADDRESS)
 
     # Escape: topping up past the floor unlocks a full exit on the alpha rail.
-    _, floor_boundary_alpha = env.floor_boundary(netuid, vault_floor)
+    _, floor_boundary_alpha = env.floor_boundary(netuid, chain_min_stake)
     top_up_deposit = floor_boundary_alpha * 2
     env.deposit_and_wrap(
         netuid, position_hotkey_pubkey, position_hotkey_ss58, top_up_deposit, 1_500_000,
@@ -342,4 +346,3 @@ def test_sub_floor_co_holder_cannot_be_locked_in_or_leak_the_other_holder(env):
         f"Co-holder: stake left behind after both holders exited ({total_leftover} RAO)"
     )
     print("  Large holder exited in full; vault position fully drained")
-    env.set_vault_floor(original_floor, "Co-holder: restoring the vault floor failed")

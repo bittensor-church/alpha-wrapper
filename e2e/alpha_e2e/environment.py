@@ -2,7 +2,7 @@
 
 Environment bundles the addresses and ids produced by
 bootstrap.build_environment() with typed on-chain getters (stakes, shares,
-prices, quotes) and scenario actions (vault sends, deposits, floor changes,
+prices, quotes) and scenario actions (vault sends, deposits, share transfers,
 validator rotations, revert assertions).
 """
 import time
@@ -108,8 +108,10 @@ class Environment:
         )
         return int(lines[0]), int(lines[1])
 
-    def min_stake_tao_floor(self) -> int:
-        return int(chain.cast_call(self.vault_address, "minStakeTaoFloor()(uint256)"))
+    def chain_min_stake_tao(self) -> int:
+        """The chain's own minimum stake, which the vault reads on every floor check.
+        A runtime constant, so it holds for the whole run."""
+        return int(chain.cast_call(config.STAKING_PRECOMPILE, "getDefaultMinStake()(uint256)"))
 
     def hotkey_in_last_seen(self, token_id: int, hotkey_pubkey: str) -> bool:
         """Whether the vault's remembered validator set still references `hotkey_pubkey`."""
@@ -249,12 +251,17 @@ class Environment:
         return receipt
 
     # --- Scenario actions -------------------------------------------------------
-    def set_vault_floor(self, floor_rao: int, message: str) -> dict:
-        """Set the vault's min-stake floor as the owner (deployer), asserting the
-        transaction lands."""
+    def transfer_shares(
+        self, token_id: int, sender: str, recipient: str, shares: int, message: str,
+        *, private_key: str,
+    ) -> dict:
+        """Move vault shares between holders, as a secondary-market sale would.
+        Share value tracks the position, so this resizes a holder's slice without
+        touching the alpha price or the vault's on-chain stake."""
         return self.vault_send(
-            200_000, message, "setMinStakeTaoFloor(uint256)", floor_rao,
-            private_key=config.DEPLOYER_PRIVATE_KEY,
+            300_000, message, "safeTransferFrom(address,address,uint256,uint256,bytes)",
+            sender, recipient, token_id, shares, "0x",
+            private_key=private_key,
         )
 
     def deposit_and_wrap(
@@ -293,7 +300,7 @@ class Environment:
         `alpha_rao` is worth less than `target_tao_rao` RAO. Chunks are capped at
         a quarter of the pool's alpha so a single sell cannot overshoot the
         target band. Alice's stake under one hotkey can move the price by about
-        half; deeper targets need a different lever (e.g. raising the vault floor)."""
+        half, so deeper targets are out of reach."""
         for _ in range(18):
             if self.alpha_value_tao(netuid, alpha_rao) < target_tao_rao:
                 return

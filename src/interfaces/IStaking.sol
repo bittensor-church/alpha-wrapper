@@ -30,6 +30,12 @@ interface IStaking {
     /// @notice Tao-denominated dust threshold: after a partial unstake, the chain force-clears any
     ///         nominator stake entry left below this spot value.
     function getNominatorMinRequiredStake() external view returns (uint256);
+
+    /// @notice Tao-denominated minimum the chain applies to a partial unstake. A runtime constant,
+    ///         so it moves only on a chain upgrade. The chain floors transfers and same-subnet
+    ///         moves lower and exposes no getter for that one, so this doubles as a safe upper
+    ///         bound for them.
+    function getDefaultMinStake() external view returns (uint256);
 }
 
 /// @dev Staking precompile address on Bittensor EVM.

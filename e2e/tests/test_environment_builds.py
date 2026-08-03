@@ -27,7 +27,7 @@ def test_environment_builds(env):
 
     # The vault deployed with a nonzero min-stake floor, and both funded accounts
     # can pay for transactions.
-    assert env.min_stake_tao_floor() > 0
+    assert env.chain_min_stake_tao() > 0
     assert chain.cast_balance_wei(config.DEPLOYER_ADDRESS) > 0
     assert chain.cast_balance_wei(config.WRAPPER_USER_ADDRESS) > 0
 

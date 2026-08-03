@@ -40,7 +40,7 @@ assertion helpers) and run with no chain at all.
 CI runs each `tests/test_*.py` scenario as its own matrix job against its own
 subtensor container. Running multiple scenario modules in a single pytest
 invocation against one long-lived localnet is not supported -- they share
-chain and contract state (netuids, token ids, vault floor) via the session
+chain and contract state (netuids, token ids, alpha price) via the session
 `env` fixture, and a later module's assumptions about that state will not
 hold if an earlier module already mutated the chain.
 
@@ -93,10 +93,9 @@ docstring in each file carries the full phase-by-phase description.
 - `test_subnet_dissolved.py` -- a dissolved subnet: dissolved unwrap and
   mailbox reclaim recover native TAO pro-rata, alpha rails revert, an
   untouched subnet is unaffected.
-- `test_min_stake_floor.py` -- min-stake floor handling: the wrap gate binds
-  between the chain floor and a raised vault floor, rotated-out dust is
-  consolidated by the next wrap, sub-floor rebalance moves are skipped
-  in-budget.
+- `test_min_stake_floor.py` -- min-stake floor handling: the wrap gate refuses
+  a sub-floor deposit in-budget, rotated-out dust is consolidated by the next
+  wrap, sub-floor rebalance moves are skipped in-budget.
 - `test_dust_dos.py` -- dust lockout: rotated-out dust, a price crash, and a
   sub-floor co-holder all refuse cheaply with designed errors while the TAO
   exit, top-ups, and fresh deposits clear them.
@@ -104,7 +103,7 @@ docstring in each file carries the full phase-by-phase description.
   mailbox and on the vault is ignored or absorbed as a donation, never a way
   to stop wraps or unwraps.
 - `test_min_stake_liveness.py` -- sequence liveness: two churn cycles of
-  deposits, withdrawals, and rotations plus a floor raise leave every kind of
+  deposits, withdrawals, and rotations plus a market fall leave every kind of
   small leftover, with every call staying live and nothing forfeited.
 
 Chainless unit tests for the framework itself: `test_config_smoke.py`,

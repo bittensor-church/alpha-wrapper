@@ -6,10 +6,9 @@ leave the vault stuck because of leftovers too small for the chain to move:
     (withdrawal remainders, skipped rebalances, sale leftovers, balances
     left on rotated-out validators): every deposit and withdrawal along the
     way keeps working at normal gas cost.
-  - The owner then raises the vault's minimum (as it would to track a chain
-    increase) above every validator slot while the position as a whole stays
-    above it: withdrawing alpha is refused cheaply with a clear error, and
-    the next deposit unlocks it.
+  - A market fall then puts every validator slot under the chain's minimum
+    while the position as a whole stays above it: withdrawing alpha is
+    refused cheaply with a clear error, and the next deposit unlocks it.
   - A closing ledger checks nothing was ever forfeited: everything the user
     put in came back out, as delivered alpha or as TAO from sales.
 """
@@ -24,11 +23,11 @@ class ChurnLedger:
     the closing-ledger accumulators (alpha RAO) and the union of every hotkey a
     delivery can land under."""
 
-    def __init__(self, env, netuid, token_id, vault_floor, union_hotkey_pubkeys):
+    def __init__(self, env, netuid, token_id, chain_min_stake, union_hotkey_pubkeys):
         self.env = env
         self.netuid = netuid
         self.token_id = token_id
-        self.vault_floor = vault_floor
+        self.chain_min_stake = chain_min_stake
         # Every hotkey a delivery can land under; rotation replacements are
         # appended as they register.
         self.union_hotkey_pubkeys = list(union_hotkey_pubkeys)
@@ -51,7 +50,7 @@ class ChurnLedger:
         )
 
     def floor_boundary_alpha(self) -> int:
-        _, boundary = self.env.floor_boundary(self.netuid, self.vault_floor)
+        _, boundary = self.env.floor_boundary(self.netuid, self.chain_min_stake)
         return boundary
 
     def deposit_step(self, label: str, hotkey_pubkey: str, hotkey_ss58: str,
@@ -151,8 +150,8 @@ class ChurnLedger:
 
 @pytest.mark.scenario
 def test_min_stake_liveness(env):
-    vault_floor = env.min_stake_tao_floor()
-    print(f"  minStakeTaoFloor = {vault_floor} RAO")
+    chain_min_stake = env.chain_min_stake_tao()
+    print(f"  chain minimum stake = {chain_min_stake} RAO")
 
     netuid = env.netuids[0]
     token_id = env.token_ids[0]
@@ -164,7 +163,7 @@ def test_min_stake_liveness(env):
     hotkey_c_ss58 = env.hotkey_ss58s[2]
 
     ledger = ChurnLedger(
-        env, netuid, token_id, vault_floor,
+        env, netuid, token_id, chain_min_stake,
         [hotkey_a_pubkey, hotkey_b_pubkey, hotkey_c_pubkey],
     )
 
@@ -183,12 +182,11 @@ def test_min_stake_liveness(env):
         cycle1_replacement_pubkey, "hk_e2e_1e",
     )
 
-    # --- A raised floor devalues every slot while the position stays above it ------
-    # Rebuild a full 50/30/20 split first, then raise the vault floor above the
-    # largest slot (as the owner would to track a chain increase): every slot is
-    # below the floor while the position as a whole stays above it - the one
-    # state where the alpha rail must refuse a position worth exiting.
-    original_floor = vault_floor
+    # --- A market fall puts every slot under the minimum, the position above it -----
+    # Rebuild a full 50/30/20 split first, then let the price fall: every slot is
+    # devalued by the same factor, so all of them land under the chain's minimum
+    # while the position as a whole stays above it - the one state where the alpha
+    # rail must refuse a position worth exiting.
     ledger.deposit_step(
         "Split devaluation", hotkey_c_pubkey, hotkey_c_ss58,
         ledger.floor_boundary_alpha() * 6,
@@ -198,17 +196,33 @@ def test_min_stake_liveness(env):
         env.stake(hotkey_c_pubkey, ledger.clone_coldkey, netuid),
         env.stake(cycle1_replacement_pubkey, ledger.clone_coldkey, netuid),
     )
-    largest_value = env.alpha_value_tao(netuid, largest_slot)
-    total_value = env.alpha_value_tao(netuid, env.vault_total_stake(token_id))
-    raised_floor = largest_value * 13 // 10
-    assert raised_floor <= total_value * 9 // 10 - 1, (
-        f"Split devaluation: split too skewed to raise the floor between largest and "
-        f"total (largest {largest_value}, total {total_value})"
+    total_alpha = env.vault_total_stake(token_id)
+    # The fall drags slot and position value down together, so the position clears
+    # the minimum afterwards only if it outweighs its largest slot. A single sell
+    # chunk can overshoot the target by about a third, so the margin has to cover
+    # that too; the sell lever itself only reaches about half the price, which caps
+    # how far above the minimum the slot may start.
+    assert total_alpha * 5 >= largest_slot * 9, (
+        f"Split devaluation: position too concentrated to survive the fall "
+        f"(largest slot {largest_slot}, total {total_alpha} alpha RAO)"
     )
-    env.set_vault_floor(raised_floor, "Split devaluation: raising the vault floor failed")
-    # The healing deposit below sizes against the raised floor, which it must clear.
-    ledger.vault_floor = raised_floor
-    print(f"  Floor raised to {raised_floor} RAO: every slot below it "
+    assert env.alpha_value_tao(netuid, largest_slot) < chain_min_stake * 2, (
+        f"Split devaluation: largest slot beyond the sell lever's reach "
+        f"({env.alpha_value_tao(netuid, largest_slot)} RAO, minimum {chain_min_stake})"
+    )
+    # Sell from the rotated-out validator holding Alice's deepest stake, never from
+    # the one the healing deposit below draws on - the crash would drain it.
+    env.crash_price_until_below(
+        netuid, hotkey_a_pubkey, hotkey_a_ss58, largest_slot, chain_min_stake,
+        "Split devaluation",
+    )
+    largest_value = env.alpha_value_tao(netuid, largest_slot)
+    total_value = env.alpha_value_tao(netuid, total_alpha)
+    assert total_value > chain_min_stake, (
+        f"Split devaluation: the fall took the whole position under the minimum "
+        f"({total_value} RAO, minimum {chain_min_stake})"
+    )
+    print(f"  Price fall put every slot under the {chain_min_stake} RAO minimum "
           f"(largest {largest_value} RAO), position worth {total_value} RAO above it")
 
     refusal_receipt = env.assert_vault_reverts_with(
@@ -229,7 +243,6 @@ def test_min_stake_liveness(env):
         ledger.floor_boundary_alpha() * 5 // 2,
     )
     ledger.unwrap_step("Split devaluation (healed)", 50)
-    env.set_vault_floor(original_floor, "Split devaluation: restoring the vault floor failed")
 
     # --- Full exit and closing ledger ------------------------------------------------
     ledger.unwrap_for_tao_step("Closing", 100)
