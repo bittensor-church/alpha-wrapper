@@ -182,20 +182,33 @@ def test_min_stake_liveness(env):
         cycle1_replacement_pubkey, "hk_e2e_1e",
     )
 
-    # --- A market fall puts every slot under the minimum, the position above it -----
-    # Rebuild a full 50/30/20 split first, then let the price fall: every slot is
-    # devalued by the same factor, so all of them land under the chain's minimum
-    # while the position as a whole stays above it - the one state where the alpha
-    # rail must refuse a position worth exiting.
+    # --- Withdrawals and a market fall put every slot under the minimum ------------
+    # Rebuild a full 50/30/20 split, withdraw the position down until its slots are
+    # near the minimum, then let the price finish the job: slot values fall together,
+    # so all of them land under the chain's minimum while the position as a whole
+    # stays above it - the one state where the alpha rail must refuse a position
+    # worth exiting.
     ledger.deposit_step(
         "Split devaluation", hotkey_c_pubkey, hotkey_c_ss58,
         ledger.floor_boundary_alpha() * 6,
     )
-    largest_slot = max(
-        env.stake(cycle2_replacement_pubkey, ledger.clone_coldkey, netuid),
-        env.stake(hotkey_c_pubkey, ledger.clone_coldkey, netuid),
-        env.stake(cycle1_replacement_pubkey, ledger.clone_coldkey, netuid),
-    )
+    slot_pubkeys = [cycle2_replacement_pubkey, hotkey_c_pubkey, cycle1_replacement_pubkey]
+
+    def largest_slot_alpha() -> int:
+        return max(env.stake(pubkey, ledger.clone_coldkey, netuid) for pubkey in slot_pubkeys)
+
+    # Churn leaves the position worth several times the minimum, far beyond what a
+    # price fall alone can devalue. Withdrawals close that gap: each one is served
+    # from the largest slot, and the re-split that follows stops moving once its own
+    # moves fall under the minimum, so the slots stay spread instead of collapsing
+    # onto one. Thirty percent is the safe step - with three slots the largest always
+    # holds at least a third, so a request this size never has to gather.
+    for _ in range(8):
+        if env.alpha_value_tao(netuid, largest_slot_alpha()) < chain_min_stake * 3 // 2:
+            break
+        ledger.unwrap_step("Split devaluation (shrinking)", 30)
+
+    largest_slot = largest_slot_alpha()
     total_alpha = env.vault_total_stake(token_id)
     # The fall drags slot and position value down together, so the position clears
     # the minimum afterwards only if it outweighs its largest slot. A single sell
@@ -222,7 +235,7 @@ def test_min_stake_liveness(env):
         f"Split devaluation: the fall took the whole position under the minimum "
         f"({total_value} RAO, minimum {chain_min_stake})"
     )
-    print(f"  Price fall put every slot under the {chain_min_stake} RAO minimum "
+    print(f"  Every slot now under the {chain_min_stake} RAO minimum "
           f"(largest {largest_value} RAO), position worth {total_value} RAO above it")
 
     refusal_receipt = env.assert_vault_reverts_with(
