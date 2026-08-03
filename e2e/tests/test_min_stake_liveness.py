@@ -203,8 +203,16 @@ def test_min_stake_liveness(env):
     # moves fall under the minimum, so the slots stay spread instead of collapsing
     # onto one. Thirty percent is the safe step - with three slots the largest always
     # holds at least a third, so a request this size never has to gather.
+    # Stop as soon as the slot is in reach: the re-split leaves the largest slot at
+    # about half the position, so aiming any lower than the lever's own limit would
+    # ask for a position too small to withdraw from before the slot ever got there.
     for _ in range(8):
-        if env.alpha_value_tao(netuid, largest_slot_alpha()) < chain_min_stake * 3 // 2:
+        if env.alpha_value_tao(netuid, largest_slot_alpha()) < chain_min_stake * 2:
+            break
+        # A request under the minimum is refused outright, so never shrink past the
+        # point where the next step would be.
+        total_value = env.alpha_value_tao(netuid, env.vault_total_stake(token_id))
+        if total_value * 30 // 100 < chain_min_stake:
             break
         ledger.unwrap_step("Split devaluation (shrinking)", 30)
 
