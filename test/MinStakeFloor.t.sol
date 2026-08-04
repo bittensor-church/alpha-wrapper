@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
-import { CHAIN_MIN_STAKE, MockStaking } from "./mocks/MockStaking.sol";
+import { CHAIN_MIN_STAKE, CHAIN_MIN_TRANSFER, MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 /// @dev Exercises the TAO-denominated min-stake floor: the wrap/withdraw labels, the best-effort
@@ -92,8 +92,9 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         assertGt(vault.balanceOf(alice, TOKEN1), 0, "wrap completed within the fixed gas budget");
     }
 
-    // Every slot is individually below the floor while the request clears it: the gather's first
-    // hop could never clear the chain's floor, so the unwrap is rejected up front.
+    // Every slot is individually below the floor while the request clears it. The vault refuses up
+    // front rather than gathering, because it cannot see the lower bar the chain would actually
+    // apply to those hops - a deliberate over-refusal, with the TAO rail left as the exit.
     function test_RevertWhen_UnwrapWithAllSlotsSubFloor() public {
         _depositAndWrap(alice, NETUID1, 4_500_000);
         _setVaultStakes(NETUID1, 1_500_000, 1_500_000, 1_500_000);
@@ -150,6 +151,68 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
     }
 
+    // The chain would move this deposit happily; the vault refuses it anyway, because the only
+    // minimum it can read is the higher one. Lowering that minimum to what the chain actually
+    // charges lets the same deposit through untouched.
+    function test_RevertWhen_WrapBetweenTheMoveAndUnstakeMinimums() public {
+        _registerSubnet(99, hotkey4);
+        _setAlphaPrice(99, 1e18);
+        uint256 deposit = (CHAIN_MIN_TRANSFER + CHAIN_MIN_STAKE) / 2;
+        _simulateAlphaDepositHotkey(alice, 99, deposit, hotkey4);
+
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.DepositTooSmall.selector);
+        vault.wrap(alice, 99, hotkey4);
+
+        _setChainMinStake(CHAIN_MIN_TRANSFER);
+        _wrapHotkey(alice, 99, hotkey4);
+
+        assertEq(_getVaultStake(hotkey4, 99), deposit, "the chain takes it once the vault stops refusing");
+    }
+
+    // Slots large enough that a tenth is served by a checked partial rather than a full drain,
+    // which is floor-exempt, and leaves a remainder clear of the dust threshold.
+    function test_UnwrapForTao_FollowsRaisedChainFloor() public {
+        _depositAndWrap(alice, NETUID1, 300e6);
+        uint256 tenth = vault.balanceOf(alice, TOKEN1) / 10;
+        uint256 balanceBefore = alice.balance;
+
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, tenth, 0);
+        assertGt(alice.balance, balanceBefore, "the partial sale clears the current minimum");
+
+        _setChainMinStake(50e6);
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
+        vault.unwrapForTao(TOKEN1, tenth, 0);
+    }
+
+    function test_Rebalance_SkipsEveryMoveBelowRaisedChainFloor() public {
+        _depositAndWrap(alice, NETUID1, 40e6);
+        _setVaultStakes(NETUID1, 20e6, 10e6, 10e6);
+        _setChainMinStake(50e6);
+
+        vm.recordLogs();
+        vault.rebalance(NETUID1);
+
+        assertEq(_countRebalancedLogs(vm.getRecordedLogs()), 0, "a raised minimum stops every corrective move");
+        assertEq(_getVaultStake(hotkey1, NETUID1), 20e6, "the split is left drifted");
+    }
+
+    function test_Rebalance_FollowsLoweredChainFloor() public {
+        _depositAndWrap(alice, NETUID1, 40e6);
+        _setAlphaPrice(NETUID1, PRICE_HALF);
+        _setVaultStakes(NETUID1, 16e6, 12e6, 12e6);
+
+        vault.rebalance(NETUID1);
+        assertEq(_getVaultStake(hotkey1, NETUID1), 16e6, "the corrective move is under the current minimum");
+
+        _setChainMinStake(5e5);
+        vault.rebalance(NETUID1);
+
+        assertLt(_getVaultStake(hotkey1, NETUID1), 16e6, "it lands once the minimum drops below it");
+    }
+
     // The other direction: the vault never over-refuses after a chain change either.
     function test_Wrap_FollowsLoweredChainFloor() public {
         _registerSubnet(99, hotkey4);
@@ -171,11 +234,11 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         _setChainMinStake(0);
         _registerSubnet(99, hotkey4);
         _setAlphaPrice(99, 1e18);
-        _simulateAlphaDepositHotkey(alice, 99, 1, hotkey4);
+        _simulateAlphaDepositHotkey(alice, 99, CHAIN_MIN_TRANSFER, hotkey4);
 
         _wrapHotkey(alice, 99, hotkey4);
 
-        assertEq(_getVaultStake(hotkey4, 99), 1, "a zero minimum admits a deposit of one RAO");
+        assertEq(_getVaultStake(hotkey4, 99), CHAIN_MIN_TRANSFER, "a zero minimum admits whatever the chain will move");
     }
 
     // The gate must track any value the chain could report, not just today's.
@@ -191,13 +254,17 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         vm.prank(alice);
         (bool ok, bytes memory ret) = address(vault).call(abi.encodeCall(vault.wrap, (alice, 99, hotkey4)));
 
-        assertEq(ok, deposit >= chainMinStake, "the gate binds exactly at the chain's reported minimum");
+        // The deposit must clear both bars to land: the vault's gate, then the chain's own minimum
+        // for moving it out of the mailbox. The gate is checked first, so it names the refusal.
+        bool clearsVaultGate = deposit >= chainMinStake;
+        bool chainWillMoveIt = deposit >= CHAIN_MIN_TRANSFER;
+        assertEq(ok, clearsVaultGate && chainWillMoveIt, "the gate binds exactly at the chain's reported minimum");
+
         if (!ok) {
-            assertEq(
-                keccak256(ret),
-                keccak256(abi.encodeWithSelector(AlphaVault.DepositTooSmall.selector)),
-                "the gate is what refused, not some other guard"
-            );
+            bytes memory expectedRefusal = clearsVaultGate
+                ? abi.encodeWithSignature("Error(string)", "MockStaking: AmountTooLow")
+                : abi.encodeWithSelector(AlphaVault.DepositTooSmall.selector);
+            assertEq(keccak256(ret), keccak256(expectedRefusal), "the refusal came from the bar that binds first");
             assertEq(_getVaultStake(hotkey4, 99), 0, "nothing staked behind the refusal");
             assertEq(vault.balanceOf(alice, vault.currentTokenId(99)), 0, "no shares minted behind the refusal");
         }
@@ -250,10 +317,9 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         assertEq(vault.totalStake(TOKEN1), total, "every attempted move cleared the chain floor");
     }
 
-    // Consolidation is a trichotomy and each arm must match the chain's own verdict: an up-front
-    // ConsolidationBelowFloor may fire only when the true price makes the roll chain-certain to
-    // fail; a bare fall-through may be chain-rejected only when the read could not prove the
-    // failure; success requires the true value to clear the floor.
+    // Three outcomes: the vault refuses up front only where the rounded-down read proves the amount
+    // is under the minimum it can see; a fall-through leaves the verdict to the chain, which refuses
+    // only under its far lower move bar; success cleared that bar.
     function testFuzz_Rebalance_ConsolidationMatchesChainFloor(uint256 dust, uint256 chainPriceE18) public {
         dust = bound(dust, 1, 1e16);
         chainPriceE18 = bound(chainPriceE18, 1, 100e18);
@@ -272,10 +338,9 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         if (ok) {
             assertEq(_getVaultStake(hotkey4, 99), 0, "rotated-out stake consolidated");
             assertEq(vault.totalStake(tokenId), dust, "pile conserved onto the current set");
-            assertGe(trueValue, CHAIN_MIN_STAKE, "chain accepted because truly at or above the floor");
+            assertGe(trueValue, CHAIN_MIN_TRANSFER, "the roll landed, so it cleared the chain's move bar");
         } else if (bytes4(ret) == AlphaVault.ConsolidationBelowFloor.selector) {
             assertLt((dust * (read + 1e9)) / 1e18, CHAIN_MIN_STAKE, "reject only fires on the provable bound");
-            assertLt(trueValue, CHAIN_MIN_STAKE, "and the reject is chain-certain");
         } else {
             assertEq(
                 keccak256(ret),
@@ -285,7 +350,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
             assertTrue(
                 read == 0 || (dust * (read + 1e9)) / 1e18 >= CHAIN_MIN_STAKE, "fell through only when unprovable"
             );
-            assertLt(trueValue, CHAIN_MIN_STAKE, "chain rejected because truly below the floor");
+            assertLt(trueValue, CHAIN_MIN_TRANSFER, "the chain refused because the roll is below its move bar");
         }
     }
 
@@ -403,17 +468,19 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         assertEq(received, previewAlpha, "delivery is exact - no shortfall above the floor");
     }
 
-    // Within one price quantum of the floor the label cannot prove the chain will reject, so the
-    // gather falls through bare and the chain's full-precision floor decides.
-    function test_RevertWhen_GatherLargestSlotWithinOneQuantumOfFloor() public {
+    // Each slot is worth 1.5e6 tao: under the unstake minimum, well over the move one. The vault
+    // cannot prove the chain will refuse, so it falls through - and the gather lands.
+    function test_Unwrap_GatherWithinOneQuantumOfFloorDelivers() public {
         _setAlphaPrice(NETUID1, 1e9);
         _depositAndWrap(alice, NETUID1, 6e15);
         _setVaultStakes(NETUID1, 1_500_000_000_000_000, 1_500_000_000_000_000, 1_500_000_000_000_000);
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
+        (uint256 previewAlpha,) = vault.previewUnwrap(TOKEN1, shares);
         vm.prank(alice);
-        vm.expectRevert(bytes("MockStaking: AmountTooLow"));
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+
+        assertEq(_userStakeAcrossHotkeys(alice, NETUID1), previewAlpha, "the gather delivered the full preview");
     }
 
     function test_RevertWhen_WrapFlushFailsForNonFloorReason() public {

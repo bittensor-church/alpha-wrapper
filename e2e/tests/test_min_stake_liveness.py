@@ -63,8 +63,9 @@ class ChurnLedger:
         )
         assert_gas_within(receipt, config.UNWRAP_GAS_BOUND, f"{label}: unwrap")
         delivered = self.delivered_alpha_total() - delivered_before
-        assert delivered >= assets_before * percent // 100 * 98 // 100, (
-            f"{label}: unwrap under-delivered ({delivered} alpha RAO)"
+        expected = assets_before * percent // 100
+        assert expected * 98 // 100 <= delivered <= expected * 110 // 100, (
+            f"{label}: unwrap delivered {delivered} alpha RAO, expected about {expected}"
         )
         print(f"  {label}: unwrapped {percent}% of shares, delivered {delivered} alpha RAO")
 

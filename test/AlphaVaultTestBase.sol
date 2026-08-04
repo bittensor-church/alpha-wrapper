@@ -6,7 +6,7 @@ import { AlphaVault } from "src/AlphaVault.sol";
 import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
 import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
-import { MockStaking, CHAIN_MIN_STAKE, CHAIN_NOMINATOR_MIN_STAKE } from "./mocks/MockStaking.sol";
+import { MockStaking, CHAIN_MIN_STAKE, CHAIN_MIN_TRANSFER, CHAIN_NOMINATOR_MIN_STAKE } from "./mocks/MockStaking.sol";
 import { MockAddressMapping } from "./mocks/MockAddressMapping.sol";
 import { MockSubnetPrecompile } from "./mocks/MockSubnetPrecompile.sol";
 import { MockAlpha } from "./mocks/MockAlpha.sol";
@@ -71,6 +71,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         // and the dust-sweep threshold are seeded to the chain's live values for the same reason.
         MockStaking(STAKING_PRECOMPILE).setRemoveStakeRate(1, 1);
         MockStaking(STAKING_PRECOMPILE).setChainMinStake(CHAIN_MIN_STAKE);
+        MockStaking(STAKING_PRECOMPILE).setChainMinTransfer(CHAIN_MIN_TRANSFER);
         MockStaking(STAKING_PRECOMPILE).setNominatorMinRequiredStake(DUST_THRESHOLD);
 
         mailboxLogic = new DepositMailbox();

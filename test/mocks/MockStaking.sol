@@ -4,10 +4,15 @@ pragma solidity ^0.8.20;
 import { MockAlpha } from "./MockAlpha.sol";
 import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 
-/// @dev The simulated chain's min-stake floor; the test base aliases it so the two cannot drift.
-///      `vm.etch` copies only code, so every suite that etches this mock must seed the floor - an
-///      unseeded zero silently accepts amounts the chain would reject.
+/// @dev The simulated chain's minimum for unstaking. `vm.etch` copies only code, so every suite
+///      that etches this mock must seed both minimums - an unseeded zero silently accepts amounts
+///      the chain would reject.
 uint256 constant CHAIN_MIN_STAKE = 2e6;
+
+/// @dev The simulated chain's minimum for shifting stake inside a subnet - twenty times lower than
+///      what it floors an unstake at. Keeping the two apart is what lets a test tell a refusal the
+///      vault chose from one the chain would really make.
+uint256 constant CHAIN_MIN_TRANSFER = 1e5;
 
 /// @dev The simulated chain's nominator dust threshold; aliased by the test base the same way.
 uint256 constant CHAIN_NOMINATOR_MIN_STAKE = 20e6;
@@ -19,12 +24,13 @@ contract MockStaking {
     uint256 public moveStakeRoundingLoss;
     bool public transferStakeReverts;
     bool public consumeAllGasOnFailure;
-    /// @dev One minimum for every rail. The chain floors moves and transfers well below what it
-    ///      floors an unstake at but exposes no getter for the lower bar, so the vault applies the
-    ///      readable one everywhere and this mirrors that. It leaves the mock stricter than the
-    ///      chain on the move and transfer rails: a rejection here shows the vault's own gate
-    ///      fired, never that the chain would have refused.
+    /// @dev Floors the unstake rail. This is the only one the chain exposes a getter for, so it is
+    ///      also the one the vault applies everywhere - deliberately over-refusing on the rails
+    ///      below, which clear a much lower bar.
     uint256 private _chainMinStakeTao;
+
+    /// @dev Floors moves and transfers within a subnet.
+    uint256 private _chainMinTransferTao;
 
     function setTransferStakeReverts(bool v) external {
         transferStakeReverts = v;
@@ -68,12 +74,16 @@ contract MockStaking {
         _chainMinStakeTao = minStakeTao;
     }
 
+    function setChainMinTransfer(uint256 minTransferTao) external {
+        _chainMinTransferTao = minTransferTao;
+    }
+
     function getDefaultMinStake() external view returns (uint256) {
         return _chainMinStakeTao;
     }
 
-    function _belowMinStake(uint256 amount, uint256 netuid) private view returns (bool) {
-        return _belowTaoValue(amount, netuid, _chainMinStakeTao);
+    function _belowMinTransfer(uint256 amount, uint256 netuid) private view returns (bool) {
+        return _belowTaoValue(amount, netuid, _chainMinTransferTao);
     }
 
     function transferStake(
@@ -86,7 +96,7 @@ contract MockStaking {
         if (transferStakeReverts) {
             _fail("MockStaking: transferStake reverted");
         }
-        if (_belowMinStake(amount, origin_netuid)) {
+        if (_belowMinTransfer(amount, origin_netuid)) {
             _fail("MockStaking: AmountTooLow");
         }
         stakes[hotkey][_senderColdkey()][origin_netuid] -= amount;
@@ -113,7 +123,7 @@ contract MockStaking {
         if (moveStakeReverts) {
             _fail("MockStaking: moveStake reverted");
         }
-        if (_belowMinStake(amount, origin_netuid)) {
+        if (_belowMinTransfer(amount, origin_netuid)) {
             _fail("MockStaking: AmountTooLow");
         }
         stakes[origin_hotkey][_senderColdkey()][origin_netuid] -= amount;

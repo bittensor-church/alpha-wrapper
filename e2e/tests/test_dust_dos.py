@@ -195,8 +195,8 @@ def test_price_crash_cannot_lock_exits(env):
         env.wrapper_substrate_coldkey, netuid,
         [position_hotkey_pubkey, sell_hotkey_pubkey, env.hotkey_pubkeys[5]],
     )
-    assert delivered >= post_crash_assets * 98 // 100, (
-        "Price crash: post-crash unwrap under-delivered"
+    assert post_crash_assets * 98 // 100 <= delivered <= post_crash_assets * 110 // 100, (
+        "Price crash: post-crash unwrap delivered off the expected amount"
     )
     print(f"  Post-crash round-trip clean: wrap accepted, unwrap delivered {delivered} alpha RAO")
 
@@ -314,8 +314,8 @@ def test_sub_floor_co_holder_cannot_be_locked_in_or_leak_the_other_holder(env):
         second_holder_coldkey, netuid,
         [position_hotkey_pubkey, sell_hotkey_pubkey, env.hotkey_pubkeys[8]],
     )
-    assert small_holder_delivered >= small_holder_assets * 98 // 100, (
-        "Co-holder: top-up exit under-delivered"
+    assert small_holder_assets * 98 // 100 <= small_holder_delivered <= small_holder_assets * 110 // 100, (
+        "Co-holder: top-up exit delivered off the expected amount"
     )
     print(f"  Top-up unlocked the alpha exit: small holder left in full "
           f"({small_holder_delivered} alpha RAO delivered)")
