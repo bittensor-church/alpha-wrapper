@@ -17,7 +17,9 @@ subnets):
 import pytest
 
 from alpha_e2e import bootstrap, chain, config
-from alpha_e2e.checks import assert_gas_within, assert_payout_near_quote, min_tao_out_for
+from alpha_e2e.checks import (
+    assert_gas_within, assert_payout_matches_emitted, assert_payout_near_quote, min_tao_out_for,
+)
 from alpha_e2e.substrate import h160_to_ss58, h160_to_substrate_b32
 
 
@@ -89,9 +91,14 @@ def test_rotated_out_dust_cannot_lock_the_vault(env):
         2_500_000, "Rotated-out dust: TAO exit failed from the dust state",
         "unwrapForTao(uint256,uint256,uint256)", token_id, remaining_shares, min_tao_out,
     )
+    balance_after = env.user_tao_wei()
     assert_payout_near_quote(
-        balance_before, env.user_tao_wei(), tao_exit_receipt, tao_exit_quote,
+        balance_before, balance_after, tao_exit_receipt, tao_exit_quote,
         "Rotated-out dust: TAO exit payout off quote",
+    )
+    assert_payout_matches_emitted(
+        balance_before, balance_after, tao_exit_receipt,
+        "Rotated-out dust: TAO exit paid less than it reported",
     )
     assert env.vault_shares(token_id) == 0, "Rotated-out dust: shares not fully burned"
     rotated_out_leftover = env.stake(rotated_out_hotkey_pubkey, clone_coldkey, netuid)
@@ -167,9 +174,14 @@ def test_price_crash_cannot_lock_exits(env):
         2_500_000, "Price crash: TAO exit failed at the crashed price",
         "unwrapForTao(uint256,uint256,uint256)", token_id, crashed_shares, min_tao_out,
     )
+    balance_after = env.user_tao_wei()
     assert_payout_near_quote(
-        balance_before, env.user_tao_wei(), tao_exit_receipt, tao_exit_quote,
+        balance_before, balance_after, tao_exit_receipt, tao_exit_quote,
         "Price crash: TAO exit payout off quote",
+    )
+    assert_payout_matches_emitted(
+        balance_before, balance_after, tao_exit_receipt,
+        "Price crash: TAO exit paid less than it reported",
     )
     assert env.vault_shares(token_id) == 0, "Price crash: shares not fully burned"
     total_leftover = env.vault_total_stake(token_id)
@@ -334,9 +346,14 @@ def test_sub_floor_co_holder_cannot_be_locked_in_or_leak_the_other_holder(env):
         "unwrapForTao(uint256,uint256,uint256)",
         token_id, env.vault_shares(token_id), min_tao_out,
     )
+    balance_after = env.user_tao_wei()
     assert_payout_near_quote(
-        balance_before, env.user_tao_wei(), large_exit_receipt, large_exit_quote,
+        balance_before, balance_after, large_exit_receipt, large_exit_quote,
         "Co-holder: large holder's payout off quote",
+    )
+    assert_payout_matches_emitted(
+        balance_before, balance_after, large_exit_receipt,
+        "Co-holder: large holder's exit paid less than it reported",
     )
     total_leftover = env.vault_total_stake(token_id)
     assert total_leftover <= config.ROUNDING_DUST_TOTAL_RAO, (

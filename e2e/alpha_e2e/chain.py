@@ -106,6 +106,22 @@ def cast_sig(signature: str) -> str:
     return run(["cast", "sig", signature]).stdout.strip()
 
 
+@lru_cache(maxsize=None)
+def cast_sig_event(signature: str) -> str:
+    return run(["cast", "sig-event", signature]).stdout.strip()
+
+
+def event_word(receipt: dict, signature: str, index: int, message: str) -> int:
+    """The `index`th non-indexed word of the first `signature` log in `receipt`."""
+    topic = cast_sig_event(signature).lower()
+    for log in receipt.get("logs") or []:
+        topics = log.get("topics") or []
+        if topics and topics[0].lower() == topic:
+            data = log["data"][2:]
+            return int(data[index * 64:(index + 1) * 64], 16)
+    raise AssertionError(f"{message}: no {signature} in the receipt's logs")
+
+
 def cast_block_number(rpc: str = config.RPC_URL) -> int:
     return int(run(["cast", "block-number", "--rpc-url", rpc]).stdout.strip())
 

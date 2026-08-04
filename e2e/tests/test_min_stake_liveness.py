@@ -9,7 +9,9 @@ checks nothing was forfeited along the way.
 import pytest
 
 from alpha_e2e import bootstrap, config
-from alpha_e2e.checks import assert_gas_within, assert_payout_near_quote, min_tao_out_for
+from alpha_e2e.checks import (
+    assert_gas_within, assert_payout_matches_emitted, assert_payout_near_quote, min_tao_out_for,
+)
 
 
 class ChurnLedger:
@@ -53,9 +55,9 @@ class ChurnLedger:
         print(f"  {label}: wrapped {amount_rao} alpha RAO")
 
     def unwrap_for_alpha_step(self, label: str, percent: int) -> None:
-        assets_before = self.env.holder_assets(self.token_id, config.WRAPPER_USER_ADDRESS)
         delivered_before = self.delivered_alpha_total()
         burn = self.env.vault_shares(self.token_id) * percent // 100
+        quoted_alpha, _ = self.env.preview_unwrap(self.token_id, burn)
         receipt = self.env.vault_send(
             2_500_000, f"{label}: unwrap failed",
             "unwrap(uint256,uint256,bytes32)",
@@ -63,9 +65,13 @@ class ChurnLedger:
         )
         assert_gas_within(receipt, config.UNWRAP_GAS_BOUND, f"{label}: unwrap")
         delivered = self.delivered_alpha_total() - delivered_before
-        expected = assets_before * percent // 100
-        assert expected * 98 // 100 <= delivered <= expected * 110 // 100, (
-            f"{label}: unwrap delivered {delivered} alpha RAO, expected about {expected}"
+        # The alpha rail promises the quote exactly, give or take chain-side share rounding, so the
+        # shortfall bound is absolute. Emissions accrue on the delivered stake, so the ceiling is not.
+        assert delivered >= quoted_alpha - config.ROUNDING_DUST_TOTAL_RAO, (
+            f"{label}: unwrap delivered {delivered} alpha RAO against a quote of {quoted_alpha}"
+        )
+        assert delivered <= quoted_alpha * 110 // 100, (
+            f"{label}: unwrap over-delivered {delivered} alpha RAO against a quote of {quoted_alpha}"
         )
         print(f"  {label}: unwrapped {percent}% of shares, delivered {delivered} alpha RAO")
 
@@ -83,9 +89,14 @@ class ChurnLedger:
             "unwrapForTao(uint256,uint256,uint256)", self.token_id, burn, min_tao_out,
         )
         assert_gas_within(receipt, config.UNWRAP_GAS_BOUND, f"{label}: TAO exit")
+        balance_after = self.env.user_tao_wei()
         assert_payout_near_quote(
-            balance_before, self.env.user_tao_wei(), receipt, quote,
+            balance_before, balance_after, receipt, quote,
             f"{label}: TAO exit payout off quote",
+        )
+        assert_payout_matches_emitted(
+            balance_before, balance_after, receipt,
+            f"{label}: TAO exit paid less than it reported",
         )
         self.sold_alpha_total += total_before - self.env.vault_total_stake(self.token_id)
         print(f"  {label}: sold {percent}% of shares for TAO")

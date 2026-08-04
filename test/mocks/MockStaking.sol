@@ -9,9 +9,8 @@ import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 ///      the chain would reject.
 uint256 constant CHAIN_MIN_STAKE = 2e6;
 
-/// @dev The simulated chain's minimum for shifting stake inside a subnet - twenty times lower than
-///      what it floors an unstake at. Keeping the two apart is what lets a test tell a refusal the
-///      vault chose from one the chain would really make.
+/// @dev The simulated chain's minimum for shifting stake inside a subnet, twenty times lower than
+///      the unstake minimum above. Apart, they let a test tell the vault's refusals from the chain's.
 uint256 constant CHAIN_MIN_TRANSFER = 1e5;
 
 /// @dev The simulated chain's nominator dust threshold; aliased by the test base the same way.
@@ -24,9 +23,7 @@ contract MockStaking {
     uint256 public moveStakeRoundingLoss;
     bool public transferStakeReverts;
     bool public consumeAllGasOnFailure;
-    /// @dev Floors the unstake rail. This is the only one the chain exposes a getter for, so it is
-    ///      also the one the vault applies everywhere - deliberately over-refusing on the rails
-    ///      below, which clear a much lower bar.
+    /// @dev Floors the unstake rail, and the only minimum the chain exposes a getter for.
     uint256 private _chainMinStakeTao;
 
     /// @dev Floors moves and transfers within a subnet.

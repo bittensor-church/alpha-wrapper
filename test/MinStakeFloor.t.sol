@@ -75,14 +75,14 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey2, NETUID1), 2e6);
     }
 
-    // The real precompile consumes all forwarded gas when it rejects a call, so a doomed rebalance
-    // move must be skipped without ever being attempted; the whole wrap fits a fixed budget only then.
+    // The 1% corrective move is worth 3e4 tao, under the chain's own bar, so the armed all-gas
+    // failure is reachable: the wrap fits its budget only if the move is skipped, never attempted.
     function test_Wrap_SkipsSubFloorRebalanceWithinGasBudget() public {
-        _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(5000, 5000));
+        _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(9900, 100));
         MockStaking(STAKING_PRECOMPILE).setConsumeAllGasOnFailure(true);
         _setAlphaPrice(NETUID1, PRICE_HALF);
 
-        // 6e6 alpha = 3e6 tao clears the deposit floor; the 3e6-alpha split move is 1.5e6 tao and does not.
+        // 6e6 alpha = 3e6 tao clears the deposit floor; the 6e4-alpha split move is 3e4 tao.
         _simulateAlphaDepositHotkey(alice, NETUID1, 6e6, hotkey1);
         vm.recordLogs();
         vm.prank(alice);
@@ -92,9 +92,8 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         assertGt(vault.balanceOf(alice, TOKEN1), 0, "wrap completed within the fixed gas budget");
     }
 
-    // Every slot is individually below the floor while the request clears it. The vault refuses up
-    // front rather than gathering, because it cannot see the lower bar the chain would actually
-    // apply to those hops - a deliberate over-refusal, with the TAO rail left as the exit.
+    // Every slot is individually below the floor while the request clears it, so no gather hop can
+    // be vouched for and the vault refuses up front.
     function test_RevertWhen_UnwrapWithAllSlotsSubFloor() public {
         _depositAndWrap(alice, NETUID1, 4_500_000);
         _setVaultStakes(NETUID1, 1_500_000, 1_500_000, 1_500_000);
@@ -151,9 +150,8 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
     }
 
-    // The chain would move this deposit happily; the vault refuses it anyway, because the only
-    // minimum it can read is the higher one. Lowering that minimum to what the chain actually
-    // charges lets the same deposit through untouched.
+    // The chain would move this deposit; the vault refuses it, because the only minimum it can
+    // read is the higher one.
     function test_RevertWhen_WrapBetweenTheMoveAndUnstakeMinimums() public {
         _registerSubnet(99, hotkey4);
         _setAlphaPrice(99, 1e18);

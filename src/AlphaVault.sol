@@ -436,9 +436,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         // overstate what a slot holds and the delivery slot is re-read after a gather runs.
         uint256 deliverable = balances[deliveryIndex];
         if (balances[deliveryIndex] < assets) {
-            // Every gather hop moves at least the largest slot's balance, so if even that provably
-            // cannot clear the chain's minimum, no hop can: reject up front instead of paying full
-            // gas for the chain to reject it.
+            // Every gather hop moves at least the largest slot's balance, so if even that cannot
+            // clear the floor, no hop can: refuse up front rather than forward a call that could
+            // burn the whole budget.
             if (_isBelowFloorAtAnyPrice(balances[deliveryIndex], alphaPriceE18)) {
                 revert GatherBelowFloor();
             }
@@ -587,11 +587,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         if (maxOver == 0 || maxUnder == 0) return false;
 
         uint256 moveAmount = maxOver < maxUnder ? maxOver : maxUnder;
-        // A move the chain rejects burns all the gas sent with it, so a doomed move is skipped,
-        // never attempted. The skip is exact: nothing on this path trades against the pool and the
-        // price read only rounds down, so a move that passes this check cannot be rejected as too
-        // small. A skipped move (including every move at a zero price read) just leaves the split
-        // drifted for a later call - harmless, since share value depends on the total, not the split.
+        // A move the chain rejects burns all the gas sent with it, so a move below the floor is
+        // skipped, never attempted. Nothing that passes can be rejected as too small: nothing here
+        // trades against the pool and the price read only rounds down. A skipped move (including
+        // every move at a zero price read) leaves the split drifted - harmless, since share value
+        // depends on the total, not the split.
         if (alphaPriceE18 == 0 || _isBelowFloorAtReadPrice(moveAmount, alphaPriceE18)) return false;
         SubnetClone(payable(clone)).moveStake(hotkeys[overIndex], hotkeys[underIndex], _netuid(tokenId), moveAmount);
         emit Rebalanced(tokenId, hotkeys[overIndex], hotkeys[underIndex], moveAmount);
@@ -838,8 +838,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     }
 
     /// @dev True only when the amount cannot clear the floor even at the highest price the
-    ///      rounded-down read could be hiding - the chain is then certain to reject it. A zero
-    ///      read carries no bound, so it never rejects here.
+    ///      rounded-down read could be hiding. A zero read carries no bound, so it never rejects.
     function _isBelowFloorAtAnyPrice(uint256 alphaAmount, uint256 alphaPriceE18) private view returns (bool) {
         return alphaPriceE18 != 0 && _taoValue(alphaAmount, alphaPriceE18 + ALPHA_PRICE_QUANTUM_E18) < _minStakeTao();
     }
