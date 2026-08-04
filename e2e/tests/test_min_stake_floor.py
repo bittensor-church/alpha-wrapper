@@ -22,9 +22,10 @@ def test_min_stake_floor(env):
     print(f"  chain minimum stake = {chain_min_stake} RAO")
 
     # --- Leg 1: the wrap gate refuses a sub-floor deposit up front ---------------
-    # Parking clears a far lower bar than staking, so a sub-minimum deposit still reaches
-    # the mailbox and the vault's gate is all that stands between it and a chain move that
-    # would burn the whole gas budget.
+    # The chain floors moving a deposit onward far below what it floors an unstake at, and exposes
+    # no getter for the lower bar, so the vault applies the readable one everywhere and refuses
+    # deposits the chain would in fact have taken. What this leg tests is that the refusal is cheap
+    # and correctly labelled - not that a doomed chain call was avoided.
     gate_netuid = env.netuids[0]
     gate_hotkey_pubkey = env.hotkey_pubkeys[0]
     gate_hotkey_ss58 = env.hotkey_ss58s[0]
@@ -151,8 +152,10 @@ def test_min_stake_floor(env):
           "remembered set refreshed to the current set")
 
     # --- Leg 3: a sub-floor rebalance move is skipped, not attempted ----------------
-    # The chain rejects a sub-floor move at full forwarded-gas cost, so the vault must skip
-    # such moves pre-call and leave the split drifted.
+    # The vault applies the same readable minimum to corrective moves, so it skips them and leaves
+    # the split drifted rather than forwarding a call it cannot prove will land - a rejected
+    # dispatch would consume the whole forwarded gas budget. The zero balances below are what
+    # prove the skip; the gas bound only shows nothing was forwarded and burned.
     skip_netuid = env.netuids[1]
     skip_token_id = env.token_ids[1]
     over_hotkey_pubkey = env.hotkey_pubkeys[3]

@@ -189,9 +189,18 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, 99, deposit, hotkey4);
 
         vm.prank(alice);
-        (bool ok,) = address(vault).call(abi.encodeCall(vault.wrap, (alice, 99, hotkey4)));
+        (bool ok, bytes memory ret) = address(vault).call(abi.encodeCall(vault.wrap, (alice, 99, hotkey4)));
 
         assertEq(ok, deposit >= chainMinStake, "the gate binds exactly at the chain's reported minimum");
+        if (!ok) {
+            assertEq(
+                keccak256(ret),
+                keccak256(abi.encodeWithSelector(AlphaVault.DepositTooSmall.selector)),
+                "the gate is what refused, not some other guard"
+            );
+            assertEq(_getVaultStake(hotkey4, 99), 0, "nothing staked behind the refusal");
+            assertEq(vault.balanceOf(alice, vault.currentTokenId(99)), 0, "no shares minted behind the refusal");
+        }
     }
 
     // The gather guard reads the same chain value: a raised minimum refuses a gather that used to
@@ -268,7 +277,11 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
             assertLt((dust * (read + 1e9)) / 1e18, CHAIN_MIN_STAKE, "reject only fires on the provable bound");
             assertLt(trueValue, CHAIN_MIN_STAKE, "and the reject is chain-certain");
         } else {
-            assertEq(bytes4(ret), bytes4(0x08c379a0), "fall-through surfaces the chain's own error");
+            assertEq(
+                keccak256(ret),
+                keccak256(abi.encodeWithSignature("Error(string)", "MockStaking: AmountTooLow")),
+                "fall-through surfaces the chain's own refusal"
+            );
             assertTrue(
                 read == 0 || (dust * (read + 1e9)) / 1e18 >= CHAIN_MIN_STAKE, "fell through only when unprovable"
             );
@@ -305,9 +318,11 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
             assertEq(vault.totalStake(TOKEN1), total - expected, "only the delivered alpha left the vault");
         } else {
             bytes4 selector = bytes4(ret);
+            bool chainRefusedTheMove =
+                keccak256(ret) == keccak256(abi.encodeWithSignature("Error(string)", "MockStaking: AmountTooLow"));
             assertTrue(
                 selector == AlphaVault.WithdrawTooSmall.selector || selector == AlphaVault.GatherBelowFloor.selector
-                    || selector == bytes4(0x08c379a0),
+                    || chainRefusedTheMove,
                 "only floor-classed reverts are legitimate"
             );
             assertEq(vault.balanceOf(alice, TOKEN1), supply, "shares intact after rollback");

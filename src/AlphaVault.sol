@@ -51,13 +51,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///      refreshed only after a clean consolidation.
     mapping(uint256 => bytes32[3]) private _lastSeenHotkeys;
 
-    /// @dev Tao floor for skipping stake operations the chain would reject as too small, read from
-    ///      the chain so a runtime change needs no redeploy. Constant between chain upgrades, so
-    ///      each entry point caches it once for the whole call. Exact for the unstake rail; the
-    ///      chain floors transfers and same-subnet moves lower but exposes no getter, so applying
-    ///      this to them also refuses moves the chain would have taken - those exit via the TAO rail.
-    uint256 private transient _minStakeTao;
-
     /// @notice Cumulative TAO credited per share over a token's lifetime, scaled by
     ///         `TAO_INDEX_PRECISION`. Grows when the clone receives TAO the vault did not pay out.
     mapping(uint256 => uint256) public cumulativeTaoPerShare;
@@ -233,7 +226,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         if (totalDeposit == 0) revert ZeroAmount();
 
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
-        _cacheMinStakeTao();
         if (alphaPriceE18 != 0 && _isBelowFloorAtReadPrice(totalDeposit, alphaPriceE18)) {
             revert DepositTooSmall();
         }
@@ -333,7 +325,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         // minimum. Round two sells checked partial amounts from what then remains, at prices the
         // earlier sells have moved; partials go last so their shrinking can never eat an amount a
         // later slot would have emptied exactly.
-        _cacheMinStakeTao();
         uint256 remaining = _sellRound(clone, netuid, hotkeys, balances, assets, dustThresholdTao, false);
         _sellRound(clone, netuid, hotkeys, balances, remaining, dustThresholdTao, true);
 
@@ -385,7 +376,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         bytes32 coldkey = _coldkeyOf(clone);
         // Nothing on this path trades against the pool, so one price read holds for the whole call.
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
-        _cacheMinStakeTao();
         _consolidateRotatedStake(tokenId, clone, coldkey, hotkeys, alphaPriceE18);
 
         // After consolidation the whole backing sits on the current validators, so these three
@@ -509,7 +499,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         (bytes32[3] memory hotkeys, uint16[3] memory weights) = _resolveValidators(nid);
         bytes32 coldkey = _coldkeyOf(clone);
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
-        _cacheMinStakeTao();
         _consolidateRotatedStake(tokenId, clone, coldkey, hotkeys, alphaPriceE18);
         _rebalance(tokenId, clone, hotkeys, weights, coldkey, alphaPriceE18);
     }
@@ -832,11 +821,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         return (alphaAmount * alphaPriceE18) / 1e18;
     }
 
-    /// @dev Every entry point that can reach a floor check must call this first: transient storage
-    ///      clears between transactions, so an unset floor reads zero and waves through amounts the
-    ///      chain rejects.
-    function _cacheMinStakeTao() private {
-        _minStakeTao = IStaking(STAKING_PRECOMPILE).getDefaultMinStake();
+    /// @dev Tao floor for skipping stake operations the chain would reject as too small, read from
+    ///      the chain so a runtime change needs no redeploy. Exact for the unstake rail; the chain
+    ///      floors transfers and same-subnet moves lower but exposes no getter, so applying this to
+    ///      them also refuses moves the chain would have taken - those exit via the TAO rail.
+    function _minStakeTao() private view returns (uint256) {
+        return IStaking(STAKING_PRECOMPILE).getDefaultMinStake();
     }
 
     /// @dev The rounded-down read can under-value the amount, so this can reject what the chain
@@ -844,14 +834,14 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///      full-balance unstake: those are floor-exempt and the only exit for sub-floor positions.
     ///      A zero read proves nothing; callers choose their own fall-through.
     function _isBelowFloorAtReadPrice(uint256 alphaAmount, uint256 alphaPriceE18) private view returns (bool) {
-        return _taoValue(alphaAmount, alphaPriceE18) < _minStakeTao;
+        return _taoValue(alphaAmount, alphaPriceE18) < _minStakeTao();
     }
 
     /// @dev True only when the amount cannot clear the floor even at the highest price the
     ///      rounded-down read could be hiding - the chain is then certain to reject it. A zero
     ///      read carries no bound, so it never rejects here.
     function _isBelowFloorAtAnyPrice(uint256 alphaAmount, uint256 alphaPriceE18) private view returns (bool) {
-        return alphaPriceE18 != 0 && _taoValue(alphaAmount, alphaPriceE18 + ALPHA_PRICE_QUANTUM_E18) < _minStakeTao;
+        return alphaPriceE18 != 0 && _taoValue(alphaAmount, alphaPriceE18 + ALPHA_PRICE_QUANTUM_E18) < _minStakeTao();
     }
 
     /// @dev One selling round over the union slots: full drains always; checked partials only
@@ -909,7 +899,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         if (_isBelowFloorAtReadPrice(chunk, alphaPriceE18)) return 0;
 
         uint256 chunkQuote = IAlpha(ALPHA_PRECOMPILE).simSwapAlphaForTao(netuid, _saturateU64(chunk));
-        if (chunkQuote < _minStakeTao) return 0;
+        if (chunkQuote < _minStakeTao()) return 0;
 
         // The chain values the leftover at the post-sale price, so it must clear the threshold on
         // its marginal quote - full-balance quote minus chunk quote, a lower bound on that value.

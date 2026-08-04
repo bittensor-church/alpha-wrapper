@@ -19,8 +19,11 @@ contract MockStaking {
     uint256 public moveStakeRoundingLoss;
     bool public transferStakeReverts;
     bool public consumeAllGasOnFailure;
-    /// @dev The vault applies the reported unstake minimum to every rail, since the chain exposes
-    ///      no getter for the lower one it floors transfers at; this models the same rule.
+    /// @dev One minimum for every rail. The chain floors moves and transfers well below what it
+    ///      floors an unstake at but exposes no getter for the lower bar, so the vault applies the
+    ///      readable one everywhere and this mirrors that. It leaves the mock stricter than the
+    ///      chain on the move and transfer rails: a rejection here shows the vault's own gate
+    ///      fired, never that the chain would have refused.
     uint256 private _chainMinStakeTao;
 
     function setTransferStakeReverts(bool v) external {
