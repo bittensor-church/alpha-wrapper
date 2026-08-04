@@ -65,13 +65,13 @@ class ChurnLedger:
         )
         assert_gas_within(receipt, config.UNWRAP_GAS_BOUND, f"{label}: unwrap")
         delivered = self.delivered_alpha_total() - delivered_before
-        # The alpha rail promises the quote exactly, give or take chain-side share rounding, so the
-        # shortfall bound is absolute. Emissions accrue on the delivered stake, so the ceiling is not.
+        # The rail promises the quote exactly, give or take chain-side share rounding, so the
+        # shortfall bound is absolute. There is no matching ceiling: this reads the user's whole
+        # stake, and everything delivered earlier is still earning emissions under the same hotkeys,
+        # so the surplus is yield rather than over-delivery. Over-delivery would show up as a
+        # co-holder losing backing, which is where test_dust_dos asserts it.
         assert delivered >= quoted_alpha - config.ROUNDING_DUST_TOTAL_RAO, (
             f"{label}: unwrap delivered {delivered} alpha RAO against a quote of {quoted_alpha}"
-        )
-        assert delivered <= quoted_alpha * 110 // 100, (
-            f"{label}: unwrap over-delivered {delivered} alpha RAO against a quote of {quoted_alpha}"
         )
         print(f"  {label}: unwrapped {percent}% of shares, delivered {delivered} alpha RAO")
 
