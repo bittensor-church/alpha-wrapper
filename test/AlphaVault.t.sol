@@ -473,7 +473,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
     }
 
-    function test_RebalanceSkipsMoveBelowMinStakeTaoFloor() public {
+    function test_RebalanceSkipsMoveBelowMinStake() public {
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(5000, 5000));
 
         // Bootstrap with a deposit that clears the min-stake floor, then overwrite balances
@@ -493,7 +493,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey2, NETUID1), 500_000);
     }
 
-    function test_RebalanceMovesAtOrAboveMinStakeTaoFloor() public {
+    function test_RebalanceMovesAtOrAboveMinStake() public {
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(5000, 5000));
 
         // Override balances to total 8e6 / 0 with target 4e6 / 4e6, so the move amount of 4e6
@@ -1713,7 +1713,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.wrap(alice, NETUID1, bytes32(0));
     }
 
-    function test_RevertWhen_WrapWhenDepositBelowMinStakeTaoFloor() public {
+    function test_RevertWhen_WrapWhenDepositBelowMinStake() public {
         // The chain min-stake floor is 2e6; stake one RAO under it.
         _simulateAlphaDepositHotkey(alice, NETUID1, 1_999_999, hotkey1);
         vm.prank(alice);
@@ -1721,7 +1721,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.wrap(alice, NETUID1, hotkey1);
     }
 
-    function test_WrapAcceptsExactlyMinStakeTaoFloorCount1() public {
+    function test_WrapAcceptsExactlyMinStakeCount1() public {
         _registerSubnet(99, hotkey4);
 
         _simulateAlphaDepositHotkey(alice, 99, 2e6, hotkey4);

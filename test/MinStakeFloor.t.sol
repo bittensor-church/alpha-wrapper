@@ -8,7 +8,7 @@ import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 /// @dev Exercises the TAO-denominated min-stake floor: the wrap/withdraw labels, the best-effort
 ///      rebalance skip, exact-or-revert delivery, and that the floor follows the chain's own value.
-contract MinStakeTaoFloorTest is AlphaVaultTestBase {
+contract MinStakeFloorTest is AlphaVaultTestBase {
     uint256 private constant PRICE_HALF = 0.5e18;
 
     function _setChainMinStake(uint256 minStakeTao) private {
