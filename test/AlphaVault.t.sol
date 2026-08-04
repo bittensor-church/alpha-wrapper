@@ -9,7 +9,7 @@ import { CloneBase } from "src/CloneBase.sol";
 import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
 import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
-import { MockStaking } from "./mocks/MockStaking.sol";
+import { CHAIN_MIN_STAKE, MockStaking } from "./mocks/MockStaking.sol";
 import { MockValidatorRegistry } from "./mocks/MockValidatorRegistry.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
@@ -353,7 +353,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     // ------------------ Virtual shares prevent inflation attack --------
 
     function test_FirstWrapperInflationAttack() public {
-        // Smallest D under default weights [3334, 3333, 3333] and MIN_STAKE_FLOOR = 2e6
+        // Smallest D under default weights [3334, 3333, 3333] and CHAIN_MIN_STAKE = 2e6
         // where every per-slot move (D * 3333 / 10000) clears the floor: D >= 6_001_801.
         _simulateAlphaDeposit(alice, NETUID1, 6_001_802);
         _wrap(alice, NETUID1);
@@ -1328,7 +1328,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         // Drop hotkey3 one RAO below the floor, then rotate it out: untransferable rotated-out stake.
         bytes32 cloneColdkey = _subnetColdkey(NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneColdkey, NETUID1, MIN_STAKE_FLOOR - 1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneColdkey, NETUID1, CHAIN_MIN_STAKE - 1);
 
         _setNetuid1Set(hotkey1, hotkey2, hotkey4);
 
@@ -1792,7 +1792,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
         uint256 hk3Before = _getVaultStake(hotkey3, NETUID1);
-        assertGt(hk3Before, MIN_STAKE_FLOOR);
+        assertGt(hk3Before, CHAIN_MIN_STAKE);
 
         _setNetuid1Set(hotkey1, hotkey2, hotkey4);
 
@@ -1841,8 +1841,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
         uint256 hk2Before = _getVaultStake(hotkey2, NETUID1);
         uint256 hk3Before = _getVaultStake(hotkey3, NETUID1);
-        assertGt(hk2Before, MIN_STAKE_FLOOR);
-        assertGt(hk3Before, MIN_STAKE_FLOOR);
+        assertGt(hk2Before, CHAIN_MIN_STAKE);
+        assertGt(hk3Before, CHAIN_MIN_STAKE);
 
         // Two rotations in a row, no rebalance in between: drop hk3 then drop hk2.
         _setNetuid1Set(hotkey1, hotkey2, hotkey4);
@@ -1992,9 +1992,9 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function testFuzz_WrapUnwrapRoundTripPreservesAlpha(uint256 d) public {
-        // Lower: MIN_STAKE_FLOOR (below this the deposit reverts and the property is moot).
+        // Lower: CHAIN_MIN_STAKE (below this the deposit reverts and the property is moot).
         // Upper: u64 max (on-chain AlphaBalance ceiling; the mailbox holds a single u64 stake entry).
-        d = bound(d, MIN_STAKE_FLOOR, type(uint64).max);
+        d = bound(d, CHAIN_MIN_STAKE, type(uint64).max);
 
         _simulateAlphaDeposit(alice, NETUID1, d);
         _wrap(alice, NETUID1);
@@ -2038,9 +2038,9 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function testFuzz_UnwrapConservesAlpha(uint256 b1, uint256 b2, uint256 b3, uint256 burnPct) public {
-        uint256 minAmt = MIN_STAKE_FLOOR;
+        uint256 minAmt = CHAIN_MIN_STAKE;
         // Each component bounded so the aggregated deposit b1+b2+b3 stays within the u64 ceiling
-        // of a single on-chain stake entry. Lower: MIN_STAKE_FLOOR (else deposit reverts).
+        // of a single on-chain stake entry. Lower: CHAIN_MIN_STAKE (else deposit reverts).
         uint256 perHotkeyMax = type(uint64).max / 3;
         b1 = bound(b1, minAmt, perHotkeyMax);
         b2 = bound(b2, minAmt, perHotkeyMax);
@@ -2061,7 +2061,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         bytes32 aliceSub = _toSubstrate(alice);
 
-        // At price 1 the alpha floor equals MIN_STAKE_FLOOR; a request below it has no
+        // At price 1 the alpha floor equals CHAIN_MIN_STAKE; a request below it has no
         // transferable slice and reverts rather than burning shares for nothing.
         if (expectedAssets < minAmt) {
             vm.prank(alice);
@@ -2083,7 +2083,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function testFuzz_WrapLandsExactlyOnTargets(uint256 d) public {
-        uint256 minAmt = MIN_STAKE_FLOOR;
+        uint256 minAmt = CHAIN_MIN_STAKE;
         // Smallest d such that the smallest weight slice clears the min-rebalance floor:
         //   d * smallestBps / BPS_BASE >= minAmt  =>  d >= ceil(minAmt * BPS_BASE / smallestBps).
         uint16 smallestBps = NETUID1_BPS_HK3;
@@ -2109,7 +2109,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         // can start from it; the roller then carries the whole pile over the floor on every hop. b3 ranges
         // down to 0, covering sub-floor and emptied rotated-out slots.
         uint256 perCap = type(uint64).max / 3;
-        b1 = bound(b1, MIN_STAKE_FLOOR, perCap);
+        b1 = bound(b1, CHAIN_MIN_STAKE, perCap);
         b2 = bound(b2, 0, perCap);
         b3 = bound(b3, 0, perCap);
 
@@ -2156,7 +2156,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _setVaultStakes(NETUID1, b1, b2, b3);
 
         uint256 preTotal = b1 + b2 + b3;
-        uint256 minAmt = MIN_STAKE_FLOOR;
+        uint256 minAmt = CHAIN_MIN_STAKE;
 
         vm.recordLogs();
         vault.rebalance(NETUID1);

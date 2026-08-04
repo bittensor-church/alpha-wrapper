@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
-import { MockStaking } from "./mocks/MockStaking.sol";
+import { CHAIN_MIN_STAKE, MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 /// @dev Exercises the TAO-denominated min-stake floor: the wrap/withdraw labels, the best-effort
@@ -119,12 +119,12 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
 
     function test_Unwrap_DeliversExactlyAtFloorValue() public {
         _depositAndWrap(alice, NETUID1, 40e6);
-        uint256 shares = _sharesForExactAssets(TOKEN1, MIN_STAKE_FLOOR, 40e6);
+        uint256 shares = _sharesForExactAssets(TOKEN1, CHAIN_MIN_STAKE, 40e6);
 
         vm.prank(alice);
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
 
-        assertEq(_userStakeAcrossHotkeys(alice, NETUID1), MIN_STAKE_FLOOR, "a request worth exactly the floor delivers");
+        assertEq(_userStakeAcrossHotkeys(alice, NETUID1), CHAIN_MIN_STAKE, "a request worth exactly the floor delivers");
     }
 
     // A chain upgrade binds the gate at its new value, with no vault-side action.
@@ -263,16 +263,16 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
         if (ok) {
             assertEq(_getVaultStake(hotkey4, 99), 0, "rotated-out stake consolidated");
             assertEq(vault.totalStake(tokenId), dust, "pile conserved onto the current set");
-            assertGe(trueValue, MIN_STAKE_FLOOR, "chain accepted because truly at or above the floor");
+            assertGe(trueValue, CHAIN_MIN_STAKE, "chain accepted because truly at or above the floor");
         } else if (bytes4(ret) == AlphaVault.ConsolidationBelowFloor.selector) {
-            assertLt((dust * (read + 1e9)) / 1e18, MIN_STAKE_FLOOR, "reject only fires on the provable bound");
-            assertLt(trueValue, MIN_STAKE_FLOOR, "and the reject is chain-certain");
+            assertLt((dust * (read + 1e9)) / 1e18, CHAIN_MIN_STAKE, "reject only fires on the provable bound");
+            assertLt(trueValue, CHAIN_MIN_STAKE, "and the reject is chain-certain");
         } else {
             assertEq(bytes4(ret), bytes4(0x08c379a0), "fall-through surfaces the chain's own error");
             assertTrue(
-                read == 0 || (dust * (read + 1e9)) / 1e18 >= MIN_STAKE_FLOOR, "fell through only when unprovable"
+                read == 0 || (dust * (read + 1e9)) / 1e18 >= CHAIN_MIN_STAKE, "fell through only when unprovable"
             );
-            assertLt(trueValue, MIN_STAKE_FLOOR, "chain rejected because truly below the floor");
+            assertLt(trueValue, CHAIN_MIN_STAKE, "chain rejected because truly below the floor");
         }
     }
 

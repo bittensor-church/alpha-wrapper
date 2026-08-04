@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
-import { MockStaking } from "./mocks/MockStaking.sol";
+import { CHAIN_MIN_STAKE, MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 /// @dev Exercises the whole-balance consolidation "roller": rotated-out stake (including sub-floor
@@ -20,7 +20,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, 99, 10 ether, hotkey4);
         _wrapHotkey(alice, 99, hotkey4);
         tokenId = vault.currentTokenId(99);
-        _setVaultStake(hotkey4, 99, MIN_STAKE_FLOOR - 1);
+        _setVaultStake(hotkey4, 99, CHAIN_MIN_STAKE - 1);
         _setValidators(99, _hotkeys(hotkey1), _weights(10_000));
     }
 
@@ -48,7 +48,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
     ///      consolidation-first order would put the sub-floor amount on the wire and revert.
     function test_Wrap_ConsolidatesRotatedOutStakeUsingFreshDeposit() public {
         uint256 tokenId = _seedDustOnlyVault();
-        uint256 dust = MIN_STAKE_FLOOR - 1;
+        uint256 dust = CHAIN_MIN_STAKE - 1;
 
         uint256 bobDeposit = 5 ether;
         _simulateAlphaDepositHotkey(bob, 99, bobDeposit, hotkey1);
@@ -135,7 +135,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
     // floor-exempt full-balance sell.
     function test_UnwrapForTao_ExitsDustOnlyVault() public {
         uint256 tokenId = _seedDustOnlyVault();
-        uint256 dust = MIN_STAKE_FLOOR - 1;
+        uint256 dust = CHAIN_MIN_STAKE - 1;
 
         uint256 shares = vault.balanceOf(alice, tokenId);
         uint256 balanceBefore = alice.balance;

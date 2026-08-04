@@ -51,8 +51,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     uint16 public constant BPS_BASE = 10_000;
 
-    // The simulated chain min-stake floor and dust threshold; aliased so they can never drift.
-    uint256 internal constant MIN_STAKE_FLOOR = CHAIN_MIN_STAKE;
+    // The simulated chain's dust threshold; aliased so the two can never drift.
     uint256 internal constant DUST_THRESHOLD = CHAIN_NOMINATOR_MIN_STAKE;
 
     uint256 public TOKEN1;
@@ -71,7 +70,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         // panics on division; a 1:1 default keeps unrelated tests meaningful. The min-stake floor
         // and the dust-sweep threshold are seeded to the chain's live values for the same reason.
         MockStaking(STAKING_PRECOMPILE).setRemoveStakeRate(1, 1);
-        MockStaking(STAKING_PRECOMPILE).setChainMinStake(MIN_STAKE_FLOOR);
+        MockStaking(STAKING_PRECOMPILE).setChainMinStake(CHAIN_MIN_STAKE);
         MockStaking(STAKING_PRECOMPILE).setNominatorMinRequiredStake(DUST_THRESHOLD);
 
         mailboxLogic = new DepositMailbox();

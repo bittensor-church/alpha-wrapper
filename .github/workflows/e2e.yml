@@ -28,7 +28,6 @@ jobs:
         # Each scenario gets its own fresh subtensor service container, so the
         # transfers-off run (which globally disables alpha transfers) is isolated.
         scenario:
-          - tests/test_environment_builds.py
           - tests/test_full_flow.py
           - tests/test_transfers_off.py
           - tests/test_convicted_alpha.py

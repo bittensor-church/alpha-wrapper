@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { MockAlpha } from "./mocks/MockAlpha.sol";
+import { CHAIN_MIN_STAKE } from "./mocks/MockStaking.sol";
 import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 import { RevertingReceiver, UnwrapForTaoReentrantReceiver } from "./helpers/TaoRailReceivers.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -89,7 +90,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         uint256 read = _alphaPriceRead(NETUID1);
         // Slack: the payout floor-div and the leftover ceil-div each cost under one RAO of
         // read-value (at most 100 at the price cap), plus one RAO of leftover headroom.
-        uint256 unsellableTailBound = DUST_THRESHOLD + MIN_STAKE_FLOOR + 201;
+        uint256 unsellableTailBound = DUST_THRESHOLD + CHAIN_MIN_STAKE + 201;
         uint256 balanceBefore = alice.balance;
 
         vm.prank(alice);
@@ -215,7 +216,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_RevertWhen_ProRataAssetsRoundsToZero() public {
         _setValidators(NETUID1, _hotkeys(hotkey1), _weights(10000));
         _setRemoveStakeRate(1, 1);
-        uint256 depositAmount = MIN_STAKE_FLOOR;
+        uint256 depositAmount = CHAIN_MIN_STAKE;
         _depositAndWrap(alice, NETUID1, depositAmount);
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         require(shares > 1, "test requires shares > 1 after deposit");
@@ -612,7 +613,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         _depositForAlice(100 ether);
         _setVaultStakes(NETUID1, 100 ether, 0, 0);
 
-        uint256 targetAssets = MIN_STAKE_FLOOR;
+        uint256 targetAssets = CHAIN_MIN_STAKE;
         uint256 burnShares = _sharesForExactAssets(TOKEN1, targetAssets, 100 ether);
 
         uint256 sharesBefore = vault.balanceOf(alice, TOKEN1);

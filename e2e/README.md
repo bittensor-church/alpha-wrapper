@@ -79,8 +79,6 @@ chain operations, kept for manual localnet work.
 One module per scenario (each expects its own fresh localnet); the module
 docstring in each file carries the full phase-by-phase description.
 
-- `test_environment_builds.py` -- smoke test: the `env` fixture builds,
-  deploys, and funds correctly (3 subnets, 9 staked validators, live vault).
 - `test_full_flow.py` -- the main flow: deposits split across 3 validators on
   3 subnets, full alpha unwraps, both TAO-rail exits, emission accrual,
   validator rotation, the TAO-exit slippage guard, and every observability
@@ -105,9 +103,12 @@ docstring in each file carries the full phase-by-phase description.
 - `test_min_stake_liveness.py` -- sequence liveness: two churn cycles of
   deposits, withdrawals, and rotations plus a market fall leave every kind of
   small leftover, with every call staying live and nothing forfeited.
+- `test_claimable_tao.py` -- a governance dust-threshold raise force-sells the
+  vault's position: the stranded native TAO is credited to the holders present
+  at that moment, withdrawable in full, and denied to later depositors.
 
-Chainless unit tests for the framework itself: `test_config_smoke.py`,
-`test_substrate.py`, `test_chain_unit.py`, `test_checks_unit.py`.
+Chainless unit tests for the framework itself: `test_substrate.py`,
+`test_chain_unit.py`, `test_checks_unit.py`.
 
 ## The `env` fixture
 
