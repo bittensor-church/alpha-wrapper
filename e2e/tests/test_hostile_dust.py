@@ -95,8 +95,8 @@ def test_hostile_dust(env):
     # forwarded-gas cost - the exact regression this leg pins.
     all_hotkeys = [hotkey_a_pubkey, hotkey_b_pubkey, hotkey_c_pubkey, rotated_in_pubkey]
     total_before = env.vault_total_stake(token_id)
-    assets_before = env.holder_assets(token_id, config.WRAPPER_USER_ADDRESS)
     unwrap_burn = env.vault_shares(token_id) * 9 // 10
+    quoted_first, _ = env.preview_unwrap(token_id, unwrap_burn)
     withdrawal_receipt = env.vault_send(
         2_500_000, "Hostile dust: withdrawal over the hostile plant failed",
         "unwrap(uint256,uint256,bytes32)", token_id, unwrap_burn, env.wrapper_substrate_coldkey,
@@ -106,9 +106,8 @@ def test_hostile_dust(env):
         "Hostile dust: withdrawal over the hostile plant",
     )
     delivered_first = env.total_stake_across(env.wrapper_substrate_coldkey, netuid, all_hotkeys)
-    expected_first = assets_before * 9 // 10
-    assert expected_first * 98 // 100 <= delivered_first <= expected_first * 110 // 100, (
-        "Hostile dust: withdrawal delivered off the expected amount"
+    assert quoted_first - config.ROUNDING_DUST_TOTAL_RAO <= delivered_first <= quoted_first * 110 // 100, (
+        f"Hostile dust: withdrawal delivered {delivered_first} against a quote of {quoted_first}"
     )
     plant_residue = env.stake(hotkey_c_pubkey, clone_coldkey, netuid)
     assert plant_residue <= config.ROUNDING_DUST_SLOT_RAO, (
@@ -187,16 +186,18 @@ def test_hostile_dust(env):
     print("  Real deposit under B absorbed the mailbox plant into the victim's position")
 
     # --- The full exit leaves nothing behind ----------------------------------------
-    assets_final = env.holder_assets(token_id, config.WRAPPER_USER_ADDRESS)
+    final_shares = env.vault_shares(token_id)
+    quoted_final, _ = env.preview_unwrap(token_id, final_shares)
     final_exit_receipt = env.vault_send(
         2_500_000, "Hostile dust: final exit failed",
         "unwrap(uint256,uint256,bytes32)",
-        token_id, env.vault_shares(token_id), env.wrapper_substrate_coldkey,
+        token_id, final_shares, env.wrapper_substrate_coldkey,
     )
     assert_gas_within(final_exit_receipt, config.UNWRAP_GAS_BOUND, "Hostile dust: final exit")
     delivered_total = env.total_stake_across(env.wrapper_substrate_coldkey, netuid, all_hotkeys)
-    assert assets_final * 98 // 100 <= delivered_total - delivered_first <= assets_final * 110 // 100, (
-        "Hostile dust: final exit delivered off the expected amount"
+    delivered_final = delivered_total - delivered_first
+    assert quoted_final - config.ROUNDING_DUST_TOTAL_RAO <= delivered_final <= quoted_final * 110 // 100, (
+        f"Hostile dust: final exit delivered {delivered_final} against a quote of {quoted_final}"
     )
     assert env.vault_shares(token_id) == 0, "Hostile dust: shares not fully burned"
     leftover_stake = env.vault_total_stake(token_id)

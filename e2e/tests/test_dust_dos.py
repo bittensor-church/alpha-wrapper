@@ -197,18 +197,19 @@ def test_price_crash_cannot_lock_exits(env):
         netuid, position_hotkey_pubkey, position_hotkey_ss58, retry_deposit, 1_500_000,
         "Price crash: post-crash wrap failed",
     )
-    post_crash_assets = env.holder_assets(token_id, config.WRAPPER_USER_ADDRESS)
+    post_crash_shares = env.vault_shares(token_id)
+    quoted_alpha, _ = env.preview_unwrap(token_id, post_crash_shares)
     env.vault_send(
         2_500_000, "Price crash: post-crash unwrap failed",
         "unwrap(uint256,uint256,bytes32)",
-        token_id, env.vault_shares(token_id), env.wrapper_substrate_coldkey,
+        token_id, post_crash_shares, env.wrapper_substrate_coldkey,
     )
     delivered = env.total_stake_across(
         env.wrapper_substrate_coldkey, netuid,
         [position_hotkey_pubkey, sell_hotkey_pubkey, env.hotkey_pubkeys[5]],
     )
-    assert post_crash_assets * 98 // 100 <= delivered <= post_crash_assets * 110 // 100, (
-        "Price crash: post-crash unwrap delivered off the expected amount"
+    assert quoted_alpha - config.ROUNDING_DUST_TOTAL_RAO <= delivered <= quoted_alpha * 110 // 100, (
+        f"Price crash: post-crash unwrap delivered {delivered} against a quote of {quoted_alpha}"
     )
     print(f"  Post-crash round-trip clean: wrap accepted, unwrap delivered {delivered} alpha RAO")
 
@@ -312,11 +313,12 @@ def test_sub_floor_co_holder_cannot_be_locked_in_or_leak_the_other_holder(env):
         "Co-holder: top-up wrap failed",
         user=config.SECOND_HOLDER_ADDRESS, private_key=config.SECOND_HOLDER_PRIVATE_KEY,
     )
-    small_holder_assets = env.holder_assets(token_id, config.SECOND_HOLDER_ADDRESS)
+    small_holder_shares = env.vault_shares(token_id, config.SECOND_HOLDER_ADDRESS)
+    small_holder_quote, _ = env.preview_unwrap(token_id, small_holder_shares)
     env.vault_send(
         2_500_000, "Co-holder: post-top-up exit failed",
         "unwrap(uint256,uint256,bytes32)",
-        token_id, env.vault_shares(token_id, config.SECOND_HOLDER_ADDRESS), second_holder_coldkey,
+        token_id, small_holder_shares, second_holder_coldkey,
         private_key=config.SECOND_HOLDER_PRIVATE_KEY,
     )
     assert env.vault_shares(token_id, config.SECOND_HOLDER_ADDRESS) == 0, (
@@ -326,8 +328,13 @@ def test_sub_floor_co_holder_cannot_be_locked_in_or_leak_the_other_holder(env):
         second_holder_coldkey, netuid,
         [position_hotkey_pubkey, sell_hotkey_pubkey, env.hotkey_pubkeys[8]],
     )
-    assert small_holder_assets * 98 // 100 <= small_holder_delivered <= small_holder_assets * 110 // 100, (
-        "Co-holder: top-up exit delivered off the expected amount"
+    assert (
+        small_holder_quote - config.ROUNDING_DUST_TOTAL_RAO
+        <= small_holder_delivered
+        <= small_holder_quote * 110 // 100
+    ), (
+        f"Co-holder: top-up exit delivered {small_holder_delivered} against a quote of "
+        f"{small_holder_quote}"
     )
     print(f"  Top-up unlocked the alpha exit: small holder left in full "
           f"({small_holder_delivered} alpha RAO delivered)")
