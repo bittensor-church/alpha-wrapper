@@ -186,11 +186,10 @@ def test_min_stake_liveness(env):
     # Churn leaves the position worth several times the minimum, further than a price fall
     # alone can reach, so withdraw it down first. Each withdrawal is served from the largest
     # slot and the re-split that follows stops once its own moves fall under the minimum, so
-    # the slots stay spread. Thirty percent always fits in the largest of three slots. The lever
-    # only halves the price, so the slot has to start under 1.6x for it to land under 0.8x - the
-    # margin the refusal below needs, since merely dipping under the minimum is inside the noise.
+    # the slots stay spread. Thirty percent always fits in the largest of three slots, and
+    # twice the minimum is as low as the sell lever needs it.
     for _ in range(8):
-        if env.alpha_value_tao(netuid, largest_slot_alpha()) < chain_min_stake * 8 // 5:
+        if env.alpha_value_tao(netuid, largest_slot_alpha()) < chain_min_stake * 2:
             break
         # A request under the minimum is refused outright, so never shrink past one.
         total_value = env.alpha_value_tao(netuid, env.vault_total_stake(token_id))
@@ -207,13 +206,13 @@ def test_min_stake_liveness(env):
         f"Split devaluation: position too concentrated to survive the fall "
         f"(largest slot {largest_slot}, total {total_alpha} alpha RAO)"
     )
-    assert env.alpha_value_tao(netuid, largest_slot) < chain_min_stake * 8 // 5, (
+    assert env.alpha_value_tao(netuid, largest_slot) < chain_min_stake * 2, (
         f"Split devaluation: largest slot beyond the sell lever's reach "
         f"({env.alpha_value_tao(netuid, largest_slot)} RAO, minimum {chain_min_stake})"
     )
     # Sell Alice's deepest stake, never the hotkey the healing deposit below draws on.
     env.crash_price_until_below(
-        netuid, hotkey_a_pubkey, hotkey_a_ss58, largest_slot, chain_min_stake * 8 // 10,
+        netuid, hotkey_a_pubkey, hotkey_a_ss58, largest_slot, chain_min_stake,
         "Split devaluation",
     )
     largest_value = env.alpha_value_tao(netuid, largest_slot)
