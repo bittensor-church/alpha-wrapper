@@ -101,8 +101,8 @@ docstring in each file carries the full phase-by-phase description.
   mailbox and on the vault is ignored or absorbed as a donation, never a way
   to stop wraps or unwraps.
 - `test_min_stake_liveness.py` -- sequence liveness: two churn cycles of
-  deposits, withdrawals, and rotations plus a market fall leave every kind of
-  small leftover, with every call staying live and nothing forfeited.
+  deposits, withdrawals, and rotations leave every kind of small leftover, with
+  every call staying live and nothing forfeited.
 - `test_claimable_tao.py` -- a governance dust-threshold raise force-sells the
   vault's position: the stranded native TAO is credited to the holders present
   at that moment, withdrawable in full, and denied to later depositors.

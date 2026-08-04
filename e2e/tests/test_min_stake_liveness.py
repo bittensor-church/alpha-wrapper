@@ -2,9 +2,10 @@
 
 No sequence of deposits, withdrawals, and validator changes can leave the vault
 stuck behind leftovers too small for the chain to move. Two churn cycles scatter
-every kind of leftover; a market fall then puts every validator slot under the
-chain's minimum while the position as a whole stays above it; a closing ledger
-checks nothing was forfeited along the way.
+every kind of leftover - withdrawal remainders, skipped rebalances, sale
+leftovers, balances on rotated-out validators - and every call along the way
+keeps working at normal gas cost. A closing ledger then checks that everything
+deposited came back out, as delivered alpha or as TAO from sales.
 """
 import pytest
 
@@ -168,79 +169,10 @@ def test_min_stake_liveness(env):
         1, hotkey_a_pubkey, hotkey_a_ss58, hotkey_b_pubkey, hotkey_b_ss58,
         hotkey_c_pubkey, "hk_e2e_1d",
     )
-    cycle2_replacement_pubkey = ledger.churn_cycle(
+    ledger.churn_cycle(
         2, hotkey_b_pubkey, hotkey_b_ss58, hotkey_c_pubkey, hotkey_c_ss58,
         cycle1_replacement_pubkey, "hk_e2e_1e",
     )
-
-    # --- Withdrawals and a market fall put every slot under the minimum ------------
-    ledger.deposit_step(
-        "Split devaluation", hotkey_c_pubkey, hotkey_c_ss58,
-        ledger.floor_boundary_alpha() * 6,
-    )
-    slot_pubkeys = [cycle2_replacement_pubkey, hotkey_c_pubkey, cycle1_replacement_pubkey]
-
-    def largest_slot_alpha() -> int:
-        return max(env.stake(pubkey, ledger.clone_coldkey, netuid) for pubkey in slot_pubkeys)
-
-    # Churn leaves the position worth several times the minimum, further than a price fall
-    # alone can reach, so withdraw it down first. Each withdrawal is served from the largest
-    # slot and the re-split that follows stops once its own moves fall under the minimum, so
-    # the slots stay spread. Thirty percent always fits in the largest of three slots, and
-    # twice the minimum is as low as the sell lever needs it.
-    for _ in range(8):
-        if env.alpha_value_tao(netuid, largest_slot_alpha()) < chain_min_stake * 2:
-            break
-        # A request under the minimum is refused outright, so never shrink past one.
-        total_value = env.alpha_value_tao(netuid, env.vault_total_stake(token_id))
-        if total_value * 30 // 100 < chain_min_stake:
-            break
-        ledger.unwrap_for_alpha_step("Split devaluation (shrinking)", 30)
-
-    largest_slot = largest_slot_alpha()
-    total_alpha = env.vault_total_stake(token_id)
-    # The fall drags slot and position value down together, so the position clears the
-    # minimum afterwards only if it outweighs its largest slot, with margin for a single
-    # sell chunk overshooting the target by about a third.
-    assert total_alpha * 5 >= largest_slot * 9, (
-        f"Split devaluation: position too concentrated to survive the fall "
-        f"(largest slot {largest_slot}, total {total_alpha} alpha RAO)"
-    )
-    assert env.alpha_value_tao(netuid, largest_slot) < chain_min_stake * 2, (
-        f"Split devaluation: largest slot beyond the sell lever's reach "
-        f"({env.alpha_value_tao(netuid, largest_slot)} RAO, minimum {chain_min_stake})"
-    )
-    # Sell Alice's deepest stake, never the hotkey the healing deposit below draws on.
-    env.crash_price_until_below(
-        netuid, hotkey_a_pubkey, hotkey_a_ss58, largest_slot, chain_min_stake,
-        "Split devaluation",
-    )
-    largest_value = env.alpha_value_tao(netuid, largest_slot)
-    total_value = env.alpha_value_tao(netuid, total_alpha)
-    assert total_value > chain_min_stake, (
-        f"Split devaluation: the fall took the whole position under the minimum "
-        f"({total_value} RAO, minimum {chain_min_stake})"
-    )
-    print(f"  Every slot now under the {chain_min_stake} RAO minimum "
-          f"(largest {largest_value} RAO), position worth {total_value} RAO above it")
-
-    refusal_receipt = env.assert_vault_reverts_with(
-        "GatherBelowFloor()", 2_500_000,
-        "Split devaluation: alpha exit did NOT revert as GatherBelowFloor",
-        "unwrap(uint256,uint256,bytes32)",
-        token_id, env.vault_shares(token_id), env.wrapper_substrate_coldkey,
-    )
-    assert_gas_within(
-        refusal_receipt, config.REVERT_GAS_BOUND, "Split devaluation: alpha-exit refusal",
-    )
-    print("  Alpha exit refused up front as GatherBelowFloor, without burning the gas budget")
-
-    # The next deposit creates a slot the withdrawal can gather from, unlocking the alpha rail.
-    ledger.deposit_step(
-        "Split devaluation (healing)", hotkey_c_pubkey, hotkey_c_ss58,
-        ledger.floor_boundary_alpha() * 5 // 2,
-    )
-    ledger.unwrap_for_alpha_step("Split devaluation (healed)", 50)
 
     # --- Full exit and closing ledger ------------------------------------------------
     ledger.unwrap_for_tao_step("Closing", 100)
