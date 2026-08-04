@@ -4,9 +4,9 @@ pragma solidity ^0.8.20;
 import { MockAlpha } from "./MockAlpha.sol";
 import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 
-/// @dev The simulated chain's min-stake floor at its live value; the test base aliases it so the
-///      two cannot drift. Every suite that etches this mock must seed it, because `vm.etch` copies
-///      only code and an unseeded floor of zero silently accepts amounts the chain would reject.
+/// @dev The simulated chain's min-stake floor; the test base aliases it so the two cannot drift.
+///      `vm.etch` copies only code, so every suite that etches this mock must seed the floor - an
+///      unseeded zero silently accepts amounts the chain would reject.
 uint256 constant CHAIN_MIN_STAKE = 2e6;
 
 /// @dev The simulated chain's nominator dust threshold; aliased by the test base the same way.
@@ -19,9 +19,8 @@ contract MockStaking {
     uint256 public moveStakeRoundingLoss;
     bool public transferStakeReverts;
     bool public consumeAllGasOnFailure;
-    /// @dev The chain floors transfers and same-subnet moves below its unstake minimum and exposes
-    ///      no getter for that lower value, so the vault applies the unstake minimum to every rail.
-    ///      This models the same rule: one reported minimum, enforced everywhere.
+    /// @dev The vault applies the reported unstake minimum to every rail, since the chain exposes
+    ///      no getter for the lower one it floors transfers at; this models the same rule.
     uint256 private _chainMinStakeTao;
 
     function setTransferStakeReverts(bool v) external {

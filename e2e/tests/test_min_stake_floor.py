@@ -1,18 +1,13 @@
 """Scenario: min-stake floor handling.
 
-Tests that the vault respects the chain's minimum-stake rule without ever
-costing users money, in three legs:
-  1. A deposit worth less than the chain's minimum stake is refused outright
-     with a clear error and without wasting gas, and the same deposit goes
-     through once it is topped up past the minimum.
-  2. Small leftovers stranded when the validator set changes are picked up
-     by the next deposit - nothing is ever forfeited.
-  3. An internal move too small for the chain to accept is skipped up front
-     rather than attempted and failed, so the transaction doesn't waste gas;
-     the imbalance is corrected by a later, larger deposit.
+Tests that the vault respects the chain's minimum-stake rule without ever costing
+users money: a deposit below the minimum is refused cheaply and goes through once
+topped up; leftovers stranded by a validator change are picked up by the next
+deposit; an internal move too small for the chain is skipped rather than attempted
+and failed, and a later, larger deposit corrects the imbalance.
 
-The legs run in order inside one test: leg 1's healthy first wrap anchors the
-gas baseline leg 3's budget is measured against.
+The legs run in order inside one test: leg 1's healthy first wrap anchors the gas
+baseline leg 3's budget is measured against.
 """
 import pytest
 
@@ -27,9 +22,9 @@ def test_min_stake_floor(env):
     print(f"  chain minimum stake = {chain_min_stake} RAO")
 
     # --- Leg 1: the wrap gate refuses a sub-floor deposit up front ---------------
-    # Parking clears a far lower bar than staking does, so a deposit worth less than
-    # the minimum stake still reaches the mailbox, and the vault's gate is the only
-    # thing standing between it and a chain move that would burn the whole gas budget.
+    # Parking clears a far lower bar than staking, so a sub-minimum deposit still reaches
+    # the mailbox and the vault's gate is all that stands between it and a chain move that
+    # would burn the whole gas budget.
     gate_netuid = env.netuids[0]
     gate_hotkey_pubkey = env.hotkey_pubkeys[0]
     gate_hotkey_ss58 = env.hotkey_ss58s[0]
@@ -64,7 +59,6 @@ def test_min_stake_floor(env):
     print("  wrap refused a deposit below the chain minimum as DepositTooSmall, "
           "without burning the gas budget")
 
-    # A second parking transfer lifts the mailbox over the boundary.
     extrinsics.transfer_stake(
         h160_to_ss58(gate_mailbox), gate_hotkey_ss58, gate_netuid, sub_floor_alpha,
     )
@@ -75,8 +69,7 @@ def test_min_stake_floor(env):
     )
     print("  wrap accepted the deposit once it cleared the minimum")
 
-    # A healthy first wrap (clone deploys + flush + skipped sub-floor moves)
-    # anchors the gas budget below.
+    # A healthy first wrap - clone deploy, flush, skipped sub-floor moves - anchors leg 3.
     wrap_gas_baseline = chain.receipt_gas_used(above_floor_wrap_receipt)
     assert wrap_gas_baseline is not None, (
         "Floor gate: could not parse gasUsed for the wrap baseline"
@@ -84,9 +77,8 @@ def test_min_stake_floor(env):
     print(f"  Healthy first-wrap gas baseline: {wrap_gas_baseline}")
 
     # --- Leg 2: rotated-out dust is consolidated by the next wrap ------------------
-    # Park sub-floor dust under a soon-rotated hotkey; the next wrap's fresh deposit
-    # starts the roller, so deposit + dust roll over the chain floor in one
-    # transaction - no keeper, no forfeiture.
+    # The next wrap's fresh deposit starts the roller, so deposit and dust roll over the
+    # chain floor in one transaction - no keeper, no forfeiture.
     dust_netuid = env.netuids[2]
     dust_token_id = env.token_ids[2]
     dust_hotkey_pubkey = env.hotkey_pubkeys[6]
@@ -95,16 +87,14 @@ def test_min_stake_floor(env):
     kept_hotkey_b_ss58 = env.hotkey_ss58s[7]
     kept_hotkey_c_pubkey = env.hotkey_pubkeys[8]
 
-    # A fresh validator to take the dust hotkey's slot after the rotation.
     rotated_in_pubkey, _ = bootstrap.register_hotkey(dust_netuid, "hk_e2e_3d")
     print(f"  Registered replacement validator {rotated_in_pubkey[:18]}... "
           f"on netuid {dust_netuid}")
 
-    # The bootstrap's 50/30/20 three-validator set is already attested, with the
-    # dust hotkey first.
+    # The bootstrap's 50/30/20 set is already attested, with the dust hotkey first.
     dust_price, dust_boundary = env.floor_boundary(dust_netuid, chain_min_stake)
-    # 1.5x the boundary clears the deposit floor while every corrective move toward
-    # the 50/30/20 split stays below it, keeping the whole deposit on the dust hotkey.
+    # 1.5x the boundary clears the deposit floor while every corrective move stays below
+    # it, keeping the whole deposit on the dust hotkey.
     dust_deposit = dust_boundary * 3 // 2
     env.deposit_and_wrap(
         dust_netuid, dust_hotkey_pubkey, dust_hotkey_ss58, dust_deposit,
@@ -114,8 +104,7 @@ def test_min_stake_floor(env):
     dust_shares = env.vault_shares(dust_token_id)
     dust_clone_coldkey = env.clone_coldkey(dust_token_id)
 
-    # Burn 5/6 of the shares: delivers ~1.25x the boundary and leaves ~0.25x the
-    # boundary (sub-floor) dust.
+    # Delivers ~1.25x the boundary and leaves ~0.25x of it behind as sub-floor dust.
     dust_burn = dust_shares * 5 // 6
     env.vault_send(
         2_500_000, "Dust consolidation: partial unwrap failed",
@@ -129,8 +118,6 @@ def test_min_stake_floor(env):
     print(f"  Left sub-floor dust of {dust_residue} alpha RAO under the "
           "soon-rotated hotkey")
 
-    # Rotate the dust hotkey out for the replacement, then wrap a fresh above-floor
-    # deposit under a surviving validator.
     env.set_validators(
         dust_netuid, [rotated_in_pubkey, kept_hotkey_b_pubkey, kept_hotkey_c_pubkey],
         [5000, 3000, 2000],
@@ -150,8 +137,6 @@ def test_min_stake_floor(env):
     print(f"  Next wrap consolidated the rotated dust: rotated-out hotkey left with "
           f"{dust_residue_after} RAO")
 
-    # The remembered set must drop the drained hotkey and the backing must fold in
-    # deposit + reclaimed dust.
     assert not env.hotkey_in_last_seen(dust_token_id, dust_hotkey_pubkey), (
         "Dust consolidation: consolidated hotkey still present in lastSeenHotkeys"
     )
@@ -166,10 +151,8 @@ def test_min_stake_floor(env):
           "remembered set refreshed to the current set")
 
     # --- Leg 3: a sub-floor rebalance move is skipped, not attempted ----------------
-    # Against a 50/30/20 three-validator split, a 1.5x-floor deposit leaves every
-    # corrective move sub-floor; the chain would reject such a move at full
-    # forwarded-gas cost, so the vault must skip them pre-call and leave the split
-    # drifted.
+    # The chain rejects a sub-floor move at full forwarded-gas cost, so the vault must skip
+    # such moves pre-call and leave the split drifted.
     skip_netuid = env.netuids[1]
     skip_token_id = env.token_ids[1]
     over_hotkey_pubkey = env.hotkey_pubkeys[3]
@@ -182,8 +165,8 @@ def test_min_stake_floor(env):
     )
 
     _, skip_boundary = env.floor_boundary(skip_netuid, chain_min_stake)
-    # 1.5x the boundary clears the deposit floor while the corrective moves (0.45x
-    # and 0.3x) stay below it.
+    # 1.5x the boundary clears the deposit floor while the corrective moves (0.45x and
+    # 0.3x) stay below it.
     skip_deposit = skip_boundary * 3 // 2
     skip_wrap_receipt = env.deposit_and_wrap(
         skip_netuid, over_hotkey_pubkey, over_hotkey_ss58, skip_deposit, 1_500_000,
@@ -209,7 +192,6 @@ def test_min_stake_floor(env):
     print(f"  Sub-floor moves skipped: wrap used {skip_gas_used} gas "
           f"(bound {skip_gas_bound}), split left drifted")
 
-    # A later above-floor deposit makes both corrective moves land and clears the drift.
     env.deposit_and_wrap(
         skip_netuid, over_hotkey_pubkey, over_hotkey_ss58, skip_boundary * 6,
         1_500_000, "Sub-floor skip: follow-up wrap failed",

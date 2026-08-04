@@ -41,9 +41,9 @@ jobs:
 
     services:
       subtensor:
-        # The opentensor namespace is frozen at spec 424, which predates isSubnetDissolving;
-        # the dissolution legs need the RaoFoundation package (spec 431+) to run at all,
-        # and the vault's chain-read min stake needs spec 438+ for getDefaultMinStake.
+        # The opentensor namespace is frozen at spec 424: the dissolution legs need the
+        # RaoFoundation package (431+ for isSubnetDissolving) and the vault's chain-read
+        # min stake needs 438+ for getDefaultMinStake.
         # Pinned by digest: devnet is a moving target; bump deliberately.
         image: ghcr.io/raofoundation/subtensor-localnet:devnet@sha256:d971edc17e291400d4b85ad4ed5c2b7f2497ef5b4094d732322526f6a548e567
         ports:

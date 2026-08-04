@@ -109,8 +109,7 @@ class Environment:
         return int(lines[0]), int(lines[1])
 
     def chain_min_stake_tao(self) -> int:
-        """The chain's own minimum stake, which the vault reads on every floor check.
-        A runtime constant, so it holds for the whole run."""
+        """The minimum the vault reads on every floor check. A runtime constant."""
         return int(chain.cast_call(config.STAKING_PRECOMPILE, "getDefaultMinStake()(uint256)"))
 
     def hotkey_in_last_seen(self, token_id: int, hotkey_pubkey: str) -> bool:
@@ -255,9 +254,8 @@ class Environment:
         self, token_id: int, sender: str, recipient: str, shares: int, message: str,
         *, private_key: str,
     ) -> dict:
-        """Move vault shares between holders, as a secondary-market sale would.
-        Share value tracks the position, so this resizes a holder's slice without
-        touching the alpha price or the vault's on-chain stake."""
+        """Move vault shares between holders, as a secondary-market sale would. Resizes
+        a holder's slice without touching the alpha price or the vault's on-chain stake."""
         return self.vault_send(
             300_000, message, "safeTransferFrom(address,address,uint256,uint256,bytes)",
             sender, recipient, token_id, shares, "0x",

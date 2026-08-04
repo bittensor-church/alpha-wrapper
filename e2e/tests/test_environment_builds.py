@@ -25,8 +25,7 @@ def test_environment_builds(env):
             stake = env.stake(hotkey_pubkey, config.ALICE_COLDKEY_PUBKEY, netuid)
             assert stake > 0, f"validator {hotkey_pubkey[:18]}... has no stake on netuid {netuid}"
 
-    # The vault deployed with a nonzero min-stake floor, and both funded accounts
-    # can pay for transactions.
+    # The chain reports a nonzero minimum stake, and both funded accounts can pay for gas.
     assert env.chain_min_stake_tao() > 0
     assert chain.cast_balance_wei(config.DEPLOYER_ADDRESS) > 0
     assert chain.cast_balance_wei(config.WRAPPER_USER_ADDRESS) > 0

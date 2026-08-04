@@ -127,8 +127,7 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
         assertEq(_userStakeAcrossHotkeys(alice, NETUID1), MIN_STAKE_FLOOR, "a request worth exactly the floor delivers");
     }
 
-    // A chain upgrade that raises the minimum binds the deposit gate at the new value, with no
-    // vault-side action.
+    // A chain upgrade binds the gate at its new value, with no vault-side action.
     function test_RevertWhen_DepositBelowRaisedChainFloor() public {
         _setChainMinStake(5e6);
         _registerSubnet(99, hotkey4);
@@ -151,8 +150,7 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
     }
 
-    // The other direction: a lowered chain minimum admits a deposit the previous one refused, so
-    // the vault never over-refuses after a chain change either.
+    // The other direction: the vault never over-refuses after a chain change either.
     function test_Wrap_FollowsLoweredChainFloor() public {
         _registerSubnet(99, hotkey4);
         _simulateAlphaDepositHotkey(alice, 99, 1e6, hotkey4);
@@ -167,8 +165,8 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey4, 99), 1e6, "deposit lands once the chain minimum drops below it");
     }
 
-    // A chain reporting no minimum leaves the vault nothing to skip: every guard stops refusing and
-    // the chain alone decides, which is what the guards were standing in for.
+    // With nothing to skip, every guard stops refusing and the chain alone decides - which is what
+    // the guards were standing in for all along.
     function test_Wrap_ChainMinimumOfZeroLeavesTheGateOpen() public {
         _setChainMinStake(0);
         _registerSubnet(99, hotkey4);
@@ -180,8 +178,7 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey4, 99), 1, "a zero minimum admits a deposit of one RAO");
     }
 
-    // The floor is a chain-side input now, so the gate has to track it at any value the chain
-    // could report, not just the one it reports today.
+    // The gate must track any value the chain could report, not just today's.
     function testFuzz_Wrap_GateBindsAtTheChainMinimum(uint256 chainMinStake, uint256 deposit) public {
         chainMinStake = bound(chainMinStake, 1, 50e6);
         deposit = bound(deposit, 1, 100e6);
@@ -197,8 +194,8 @@ contract MinStakeTaoFloorTest is AlphaVaultTestBase {
         assertEq(ok, deposit >= chainMinStake, "the gate binds exactly at the chain's reported minimum");
     }
 
-    // The gather guard reads the same chain value: a raised minimum turns a gather that used to
-    // run into an up-front refusal, while the request itself still clears the new minimum.
+    // The gather guard reads the same chain value: a raised minimum refuses a gather that used to
+    // run, even though the request itself still clears the new minimum.
     function test_RevertWhen_GatherBelowRaisedChainFloor() public {
         _depositAndWrap(alice, NETUID1, 40e6);
         _setVaultStakes(NETUID1, 15e6, 15e6, 10e6);

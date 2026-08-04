@@ -243,10 +243,10 @@ def test_sub_floor_co_holder_cannot_be_locked_in_or_leak_the_other_holder(env):
     )
     print(f"  Two holders wrapped: large {large_deposit}, small {small_deposit} alpha RAO")
 
-    # Selling most of a healthy position leaves the seller holding a slice worth
-    # less than the chain will move or sell. The large co-holder's stake deepens
-    # the pool, so no market sell could devalue the slice this far - the share
-    # sale reaches the same state without touching the price.
+    # Selling most of a healthy position leaves the seller with a slice worth less than
+    # the chain will move or sell. The large co-holder's stake deepens the pool, so a
+    # market sell could not devalue the slice this far; a share sale gets there without
+    # touching the price.
     small_holder_shares_before = env.vault_shares(token_id, config.SECOND_HOLDER_ADDRESS)
     env.transfer_shares(
         token_id, config.SECOND_HOLDER_ADDRESS, config.WRAPPER_USER_ADDRESS,

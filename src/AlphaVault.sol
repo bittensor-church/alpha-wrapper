@@ -51,13 +51,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///      refreshed only after a clean consolidation.
     mapping(uint256 => bytes32[3]) private _lastSeenHotkeys;
 
-    /// @dev Tao floor the vault uses to skip stake operations the chain would reject as too small,
-    ///      read from the chain so a runtime change takes effect without a redeploy. The chain holds
-    ///      it constant between upgrades, so each entry point caches it once for the whole call.
-    ///      Exact for the unstake rail. Transfers and same-subnet moves are floored far lower by a
-    ///      value the chain does not expose, so this never lets through an operation the chain would
-    ///      reject - but where the callers revert on it, it also refuses moves the chain would have
-    ///      taken, leaving those positions the TAO rail and its swap fee as their exit.
+    /// @dev Tao floor for skipping stake operations the chain would reject as too small, read from
+    ///      the chain so a runtime change needs no redeploy. Constant between chain upgrades, so
+    ///      each entry point caches it once for the whole call. Exact for the unstake rail; the
+    ///      chain floors transfers and same-subnet moves lower but exposes no getter, so applying
+    ///      this to them also refuses moves the chain would have taken - those exit via the TAO rail.
     uint256 private transient _minStakeTao;
 
     /// @notice Cumulative TAO credited per share over a token's lifetime, scaled by
@@ -834,9 +832,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         return (alphaAmount * alphaPriceE18) / 1e18;
     }
 
-    /// @dev Refreshes `_minStakeTao` for this call. Every entry point that can reach a floor check
-    ///      must call this first: transient storage clears between transactions, so an uncached read
-    ///      would be zero and would wave through amounts the chain rejects.
+    /// @dev Every entry point that can reach a floor check must call this first: transient storage
+    ///      clears between transactions, so an unset floor reads zero and waves through amounts the
+    ///      chain rejects.
     function _cacheMinStakeTao() private {
         _minStakeTao = IStaking(STAKING_PRECOMPILE).getDefaultMinStake();
     }
