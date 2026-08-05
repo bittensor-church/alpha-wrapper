@@ -130,7 +130,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     error SlippageExceeded(uint256 amountOut);
     error ConsolidationBelowFloor();
     error GatherBelowFloor();
-    error SoldBeyondRequest();
 
     // -------------------- Constructor -------------------------------------------
     constructor(string memory _uri, address _mailboxLogic, address _subnetLogic, address _validatorRegistry)
@@ -335,13 +334,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         if (taoOut == 0) revert WithdrawTooSmall();
         if (taoOut < minTaoOut) revert SlippageExceeded(taoOut);
 
-        // A sell the chain accepts can still fill short at the pool's price floor.
+        // A sell the chain accepts can still fill short at the pool's price floor, so the position
+        // reports what left. Selling past the request means the chain swept backing that belongs to
+        // the holders who stay; the subtraction refuses to pay it out.
         uint256 sold = total - _unionStakeTotal(hotkeys, _coldkeyOf(clone), netuid);
-        // Selling past the request means the chain swept backing belonging to the holders who stay.
-        if (sold > assets) revert SoldBeyondRequest();
-
-        SubnetClone(payable(clone)).unwrapTao(payable(msg.sender), taoOut);
-
         uint256 unsold = assets - sold;
         // The chain keeps a RAO or so of every sale; refunding that to a full exit would mint a
         // sub-floor position no rail can ever sell. A partial burn keeps it - it merges into the
@@ -350,6 +346,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
             uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
             if (alphaPriceE18 != 0 && _isBelowFloorAtReadPrice(unsold, alphaPriceE18)) unsold = 0;
         }
+
+        SubnetClone(payable(clone)).unwrapTao(payable(msg.sender), taoOut);
 
         // The mint must follow the payout: proceeds still in the clone would be folded into the
         // claim index and promised to every holder, this caller included.
