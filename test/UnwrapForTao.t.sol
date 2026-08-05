@@ -574,8 +574,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         assertApproxEqAbs(_positionValue(alice), valueBefore - 5e6, 2, "only the sold alpha left the position");
     }
 
-    // The refund keeps the unsold alpha backing the caller's own shares, so a short fill hands
-    // nothing to the holders who stayed.
+    // A short fill hands nothing to the holders who stayed.
     function test_ShortFill_LeavesRemainingHolderWhole() public {
         _setRemoveStakeRate(1, 1);
         _depositForAlice(100 ether);
@@ -592,25 +591,28 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         assertApproxEqAbs(_positionValue(alice), aliceValueBefore - 5e6, 2, "the caller kept every unsold RAO");
     }
 
-    // Whatever the slot distribution, burn size and price, a short fill moves no value from the
-    // exiting caller to the holders who stay.
+    // Whatever the distribution, burn size, price and cap, a short fill moves no value to holders who stay.
     function testFuzz_ShortFill_TransfersNothingToRemainingHolders(
         uint256 a,
         uint256 b,
         uint256 c,
         uint256 shareBps,
-        uint256 chainPriceE18
+        uint256 chainPriceE18,
+        uint256 sellCap
     ) public {
         a = bound(a, 0, 1e16);
         b = bound(b, 0, 1e16);
         c = bound(c, 1e10, 1e16);
         shareBps = bound(shareBps, 1, 10_000);
         chainPriceE18 = bound(chainPriceE18, 1, 100e18);
+        // Zero leaves the swap uncapped, so both causes of a short fill are covered.
+        sellCap = bound(sellCap, 0, 1e16);
         uint256 aliceShares = _depositForAlice(30 ether);
         _depositAndWrap(bob, NETUID1, 30 ether);
         _setAlphaPrice(NETUID1, chainPriceE18);
         _setRemoveStakeRate(chainPriceE18, 1e18);
         _setVaultStakes(NETUID1, a, b, c);
+        _setRemoveStakeCap(sellCap);
         uint256 bobValueBefore = _positionValue(bob);
 
         vm.prank(alice);
@@ -621,8 +623,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         assertApproxEqAbs(_positionValue(bob), bobValueBefore, 2, "an exit never enriches the holders who stayed");
     }
 
-    // The refund is minted only once the proceeds have left the clone, so it cannot fold the sale
-    // into the claim index: TAO donated before the call stays claimable and fully backed.
+    // Minting after the payout keeps the sale out of the claim index, so donated TAO stays backed.
     function test_ShortFillAfterDonation_LeavesClaimableTaoIntact() public {
         _setRemoveStakeRate(1, 1);
         _depositForAlice(100 ether);
@@ -640,8 +641,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         assertApproxEqAbs(claims, 8 ether, 2e9, "the donation is still owed to the holders who earned it");
     }
 
-    // The refund is a mint, so a holder whose acceptance hook refuses one cannot take a short fill:
-    // the exit reverts whole rather than leaving the unsold alpha to the remaining holders.
+    // A holder whose acceptance hook refuses the refund mint cannot take a short fill.
     function test_RevertWhen_ShortFillRefundRejectedByCaller() public {
         _setRemoveStakeRate(1, 1);
         RefundRejectingReceiver receiver = new RefundRejectingReceiver();
@@ -658,6 +658,22 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
 
         assertEq(vault.balanceOf(address(receiver), TOKEN1), sharesBefore, "the whole exit rolled back");
         assertEq(vault.totalStake(TOKEN1), total, "no alpha left the vault");
+    }
+
+    // A capped swap returns alpha counted as sold; a full burn must refund it, not strand it.
+    function test_CappedSwapOnFullBurn_RefundsTheReturnedAlpha() public {
+        _setRemoveStakeRate(1, 1);
+        uint256 shares = _depositForAlice(100 ether);
+        _setVaultStakes(NETUID1, 100 ether, 0, 0);
+        _setRemoveStakeCap(60 ether);
+
+        uint256 balanceBefore = alice.balance;
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares, 0);
+
+        assertEq(alice.balance - balanceBefore, 60 ether, "paid only for the alpha the chain swapped");
+        assertEq(vault.totalStake(TOKEN1), 40 ether, "the chain kept the unswapped alpha staked");
+        assertApproxEqAbs(_positionValue(alice), 40 ether, 2, "the caller still owns it, not the vault");
     }
 
     function test_CleanFill_BurnsEveryRequestedShare() public {
@@ -694,8 +710,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         assertLt(burned, shares, "the refund is netted out of the reported burn");
     }
 
-    // minTaoOut still lets a caller insist on the whole fill rather than settle for a refund:
-    // demanding the full assets reverts and the burn rolls back.
+    // minTaoOut still lets a caller insist on the whole fill rather than settle for a refund.
     function test_RevertWhen_ShortFillBreaksMinTaoOut() public {
         _setRemoveStakeRate(1, 1);
         _depositForAlice(100 ether);

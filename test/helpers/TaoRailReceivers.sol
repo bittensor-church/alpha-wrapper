@@ -15,8 +15,7 @@ contract RevertingReceiver {
     }
 }
 
-/// @dev Accepts ERC1155 mints until armed, so a holder can take delivery of its shares and then
-///      refuse the refund a short fill mints back.
+/// @dev Accepts ERC1155 mints until armed, then refuses the refund a short fill mints back.
 contract RefundRejectingReceiver {
     bool private rejecting;
 

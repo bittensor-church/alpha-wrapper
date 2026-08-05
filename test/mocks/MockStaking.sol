@@ -136,6 +136,8 @@ contract MockStaking {
     bool public removeStakeReverts;
     mapping(bytes32 => bool) public removeStakeRevertsFor;
     uint256 public nominatorMinRequiredStake;
+    /// @dev Most alpha one unstake can swap before the pool hits its price floor; 0 is uncapped.
+    uint256 public removeStakeCap;
 
     function setNominatorMinRequiredStake(uint256 thresholdTao) external {
         nominatorMinRequiredStake = thresholdTao;
@@ -164,6 +166,10 @@ contract MockStaking {
         removeStakeRevertsFor[hotkey] = v;
     }
 
+    function setRemoveStakeCap(uint256 maxAlpha) external {
+        removeStakeCap = maxAlpha;
+    }
+
     function removeStake(bytes32 hotkey, uint256 alphaAmount, uint256 netuid) external payable {
         if (removeStakeReverts || removeStakeRevertsFor[hotkey]) {
             _fail("MockStaking: removeStake reverted");
@@ -171,12 +177,14 @@ contract MockStaking {
         uint256 staked = stakes[hotkey][_senderColdkey()][netuid];
         // Unit seam: proceeds are credited 1:1 (rao as wei) for test readability; the real chain
         // credits rao * 1e9 wei. Wei-denominated payouts are asserted by the e2e run.
-        uint256 taoOut = quoteTaoOut(alphaAmount);
-        // As on the chain, the floor binds only when stake remains after the unstake.
-        if (alphaAmount != staked && taoOut < _chainMinStakeTao) {
+        // As on the chain, a capped swap leaves the rest of the request staked.
+        uint256 consumed = removeStakeCap != 0 && alphaAmount > removeStakeCap ? removeStakeCap : alphaAmount;
+        uint256 taoOut = quoteTaoOut(consumed);
+        // As on the chain, the floor binds only when stake remains, and is checked before the swap.
+        if (alphaAmount != staked && quoteTaoOut(alphaAmount) < _chainMinStakeTao) {
             _fail("MockStaking: AmountTooLow");
         }
-        uint256 remainder = staked - alphaAmount;
+        uint256 remainder = staked - consumed;
         // As on the chain, a remainder spot-valued below the nominator threshold is force-sold and
         // credited to the unstaker within the same call; a zero threshold disables the sweep. The
         // threshold gates first: standalone suites etch this mock alone, and only an armed sweep
