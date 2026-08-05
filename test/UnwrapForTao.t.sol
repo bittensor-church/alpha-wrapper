@@ -676,6 +676,37 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         assertApproxEqAbs(_positionValue(alice), 40 ether, 2, "the caller still owns it, not the vault");
     }
 
+    // The chain keeps a RAO or so of every sale; a full exit must not come back holding it.
+    function test_FullBurnWithChainRoundingDust_LeavesNoPosition() public {
+        _setRemoveStakeRate(1, 1);
+        uint256 shares = _depositForAlice(100 ether);
+        _setVaultStakes(NETUID1, 100 ether, 0, 0);
+        // Without the sweep the remainder survives on the slot, as it does on a live subnet.
+        _setDustThreshold(0);
+        _setRemoveStakeCap(100 ether - 1);
+
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares, 0);
+
+        assertEq(vault.totalStake(TOKEN1), 1, "the chain kept a RAO back");
+        assertEq(vault.balanceOf(alice, TOKEN1), 0, "sub-floor dust mints no position");
+        assertEq(vault.totalSupply(TOKEN1), 0, "the position is fully retired");
+    }
+
+    // The same remainder on a partial burn is refunded: it merges into the balance already held.
+    function test_PartialBurnWithChainRoundingDust_RefundsIt() public {
+        _setRemoveStakeRate(1, 1);
+        uint256 shares = _depositForAlice(100 ether);
+        _setVaultStakes(NETUID1, 100 ether, 0, 0);
+        uint256 half = shares / 2;
+        _setRemoveStakeCap(50 ether - 1);
+
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, half, 0);
+
+        assertGt(vault.balanceOf(alice, TOKEN1), shares - half, "the RAO the chain kept came back");
+    }
+
     function test_CleanFill_BurnsEveryRequestedShare() public {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);

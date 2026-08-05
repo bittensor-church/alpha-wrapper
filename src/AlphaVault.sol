@@ -289,7 +289,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///         withheld - the only exit for a sub-floor position. On a partial burn the remainder
     ///         is sold only when the chain is sure to take it cleanly - to within one RAO of quote
     ///         rounding; whatever stays staked is refunded as shares, so a short fill costs the
-    ///         caller nothing but the retry.
+    ///         caller nothing but the retry. A full burn drops a sub-floor remainder rather than
+    ///         mint a position that would need exiting again.
     ///         `minTaoOut` guards the caller against a fill smaller than they will accept;
     ///         `WithdrawTooSmall` fires when nothing sells. It is also the exit to use when the
     ///         subnet's alpha price reads zero on EVM: there the alpha rail can revert at full gas
@@ -341,9 +342,18 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
 
         SubnetClone(payable(clone)).unwrapTao(payable(msg.sender), taoOut);
 
+        uint256 unsold = assets - sold;
+        // The chain keeps a RAO or so of every sale; refunding that to a full exit would mint a
+        // sub-floor position no rail can ever sell. A partial burn keeps it - it merges into the
+        // balance already held.
+        if (unsold != 0 && shares == supply) {
+            uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
+            if (alphaPriceE18 != 0 && _isBelowFloorAtReadPrice(unsold, alphaPriceE18)) unsold = 0;
+        }
+
         // The mint must follow the payout: proceeds still in the clone would be folded into the
         // claim index and promised to every holder, this caller included.
-        uint256 refundShares = _sharesFor(total - assets, supply - shares, assets - sold);
+        uint256 refundShares = _sharesFor(total - assets, supply - shares, unsold);
         if (refundShares != 0) _mint(msg.sender, tokenId, refundShares, "");
 
         emit UnwrappedForTao(msg.sender, tokenId, shares - refundShares, sold, taoOut);
