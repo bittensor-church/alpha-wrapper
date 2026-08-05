@@ -241,7 +241,8 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(alice.balance - balanceBefore, 5e6, "only the full-drain slot sold; partial tail waits");
         assertEq(_getVaultStake(hotkey1, NETUID1), 0, "full drain sold");
         assertEq(_getVaultStake(hotkey3, NETUID1), 40 ether, "partial remainder left in the pool at price 0");
-        assertGt(vault.balanceOf(alice, TOKEN1), sharesBefore - shares, "the waiting tail came back as shares");
+        (uint256 refundValue,) = vault.previewUnwrap(TOKEN1, vault.balanceOf(alice, TOKEN1) - (sharesBefore - shares));
+        assertApproxEqAbs(refundValue, 1e6, 1, "the waiting tail came back as shares worth exactly it");
     }
 
     /// @dev A zero-price (sub-1e-9) vault still exits fully via floor-exempt full-balance sells.

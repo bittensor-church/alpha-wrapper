@@ -287,9 +287,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///         A full burn claims the exact backing, so every slot drains fully and nothing is
     ///         withheld - the only exit for a sub-floor position. On a partial burn the remainder
     ///         is sold only when the chain is sure to take it cleanly - to within one RAO of quote
-    ///         rounding; whatever stays staked is refunded as shares, so a short fill costs the
-    ///         caller nothing but the retry. A full burn drops a sub-floor remainder rather than
-    ///         mint a position that would need exiting again.
+    ///         rounding; whatever stays staked is refunded as shares, so selling less than the
+    ///         request costs the caller nothing but the retry. A full burn drops a sub-floor
+    ///         remainder rather than mint a position that would need exiting again.
     ///         `minTaoOut` guards the caller against a fill smaller than they will accept;
     ///         `WithdrawTooSmall` fires when nothing sells. It is also the exit to use when the
     ///         subnet's alpha price reads zero on EVM: there the alpha rail can revert at full gas
