@@ -32,7 +32,7 @@ def test_root_sweep_tao_becomes_claimable(env):
 
     # A deposit sized so every per-validator slice sits far below the raised
     # threshold, but comfortably above the deposit floor.
-    _, floor_boundary_alpha = env.floor_boundary(netuid, env.min_stake_tao_floor())
+    _, floor_boundary_alpha = env.floor_boundary(netuid, env.chain_min_stake_tao())
     deposit = floor_boundary_alpha * 3 // 2
     env.deposit_and_wrap(netuid, hotkey_pubkey, hotkey_ss58, deposit, 1_500_000, "Sweep: wrap failed")
     print(f"  Wrapped {deposit} alpha RAO on netuid {netuid}")

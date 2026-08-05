@@ -4,8 +4,14 @@ pragma solidity ^0.8.20;
 import { MockAlpha } from "./MockAlpha.sol";
 import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 
-/// @dev The simulated chain's min-stake floor; the test base aliases it so the two cannot drift.
+/// @dev The simulated chain's minimum for unstaking. `vm.etch` copies only code, so every suite
+///      that etches this mock must seed both minimums - an unseeded zero silently accepts amounts
+///      the chain would reject.
 uint256 constant CHAIN_MIN_STAKE = 2e6;
+
+/// @dev The simulated chain's minimum for shifting stake inside a subnet, twenty times lower than
+///      the unstake minimum above. Apart, they let a test tell the vault's refusals from the chain's.
+uint256 constant CHAIN_MIN_TRANSFER = 1e5;
 
 /// @dev The simulated chain's nominator dust threshold; aliased by the test base the same way.
 uint256 constant CHAIN_NOMINATOR_MIN_STAKE = 20e6;
@@ -17,6 +23,11 @@ contract MockStaking {
     uint256 public moveStakeRoundingLoss;
     bool public transferStakeReverts;
     bool public consumeAllGasOnFailure;
+    /// @dev Floors the unstake rail, and the only minimum the chain exposes a getter for.
+    uint256 private _chainMinStakeTao;
+
+    /// @dev Floors moves and transfers within a subnet.
+    uint256 private _chainMinTransferTao;
 
     function setTransferStakeReverts(bool v) external {
         transferStakeReverts = v;
@@ -56,9 +67,20 @@ contract MockStaking {
         return (amount * alphaPriceE18) / 1e18 < thresholdTao;
     }
 
-    // The chain rejects transfers and moves whose tao value is below CHAIN_MIN_STAKE.
-    function _belowMinStake(uint256 amount, uint256 netuid) private view returns (bool) {
-        return _belowTaoValue(amount, netuid, CHAIN_MIN_STAKE);
+    function setChainMinStake(uint256 minStakeTao) external {
+        _chainMinStakeTao = minStakeTao;
+    }
+
+    function setChainMinTransfer(uint256 minTransferTao) external {
+        _chainMinTransferTao = minTransferTao;
+    }
+
+    function getDefaultMinStake() external view returns (uint256) {
+        return _chainMinStakeTao;
+    }
+
+    function _belowMinTransfer(uint256 amount, uint256 netuid) private view returns (bool) {
+        return _belowTaoValue(amount, netuid, _chainMinTransferTao);
     }
 
     function transferStake(
@@ -71,7 +93,7 @@ contract MockStaking {
         if (transferStakeReverts) {
             _fail("MockStaking: transferStake reverted");
         }
-        if (_belowMinStake(amount, origin_netuid)) {
+        if (_belowMinTransfer(amount, origin_netuid)) {
             _fail("MockStaking: AmountTooLow");
         }
         stakes[hotkey][_senderColdkey()][origin_netuid] -= amount;
@@ -98,7 +120,7 @@ contract MockStaking {
         if (moveStakeReverts) {
             _fail("MockStaking: moveStake reverted");
         }
-        if (_belowMinStake(amount, origin_netuid)) {
+        if (_belowMinTransfer(amount, origin_netuid)) {
             _fail("MockStaking: AmountTooLow");
         }
         stakes[origin_hotkey][_senderColdkey()][origin_netuid] -= amount;
@@ -151,7 +173,7 @@ contract MockStaking {
         // credits rao * 1e9 wei. Wei-denominated payouts are asserted by the e2e run.
         uint256 taoOut = quoteTaoOut(alphaAmount);
         // As on the chain, the floor binds only when stake remains after the unstake.
-        if (alphaAmount != staked && taoOut < CHAIN_MIN_STAKE) {
+        if (alphaAmount != staked && taoOut < _chainMinStakeTao) {
             _fail("MockStaking: AmountTooLow");
         }
         uint256 remainder = staked - alphaAmount;

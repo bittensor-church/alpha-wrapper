@@ -1,97 +1,85 @@
 """Scenario: min-stake floor handling.
 
-Tests that the vault respects the chain's minimum-stake rule without ever
-costing users money, in three legs:
-  1. A deposit below the vault's minimum is refused outright with a clear
-     error, and a deposit above it goes through. (The vault's minimum is
-     raised above the chain's for this leg, because the chain itself blocks
-     anything smaller before the vault ever sees it.)
-  2. Small leftovers stranded when the validator set changes are picked up
-     by the next deposit - nothing is ever forfeited.
-  3. An internal move too small for the chain to accept is skipped up front
-     rather than attempted and failed, so the transaction doesn't waste gas;
-     the imbalance is corrected by a later, larger deposit.
+Tests that the vault respects the chain's minimum-stake rule without ever costing
+users money: a deposit below the minimum is refused cheaply and goes through once
+topped up; leftovers stranded by a validator change are picked up by the next
+deposit; an internal move too small for the chain is skipped rather than attempted
+and failed, and a later, larger deposit corrects the imbalance.
 
-The legs run in order inside one test: leg 1's healthy first wrap anchors the
-gas baseline leg 3's budget is measured against.
+The legs run in order inside one test: leg 1's healthy first wrap anchors the gas
+baseline leg 3's budget is measured against.
 """
 import pytest
 
 from alpha_e2e import bootstrap, chain, config, extrinsics
+from alpha_e2e.checks import assert_gas_within
 from alpha_e2e.substrate import h160_to_ss58
 
 
 @pytest.mark.scenario
 def test_min_stake_floor(env):
-    vault_floor = env.min_stake_tao_floor()
-    print(f"  minStakeTaoFloor = {vault_floor} RAO")
+    chain_min_stake = env.chain_min_stake_tao()
+    print(f"  chain minimum stake = {chain_min_stake} RAO")
 
-    # --- Leg 1: the wrap gate binds at the raised vault floor --------------------
-    # A sub-chain-floor deposit cannot even park, so exercise the vault's gate by
-    # raising its floor to 2x the chain's: a between-floors deposit must be
-    # refused, a top-up past the raised floor must wrap.
+    # --- Leg 1: the wrap gate refuses a sub-floor deposit up front ---------------
+    # The chain floors moving a deposit onward far below what it floors an unstake at, and exposes
+    # no getter for the lower bar, so the vault applies the readable one everywhere and refuses
+    # deposits the chain would in fact have taken. What this leg tests is that the refusal is cheap
+    # and correctly labelled - not that a doomed chain call was avoided.
     gate_netuid = env.netuids[0]
     gate_hotkey_pubkey = env.hotkey_pubkeys[0]
     gate_hotkey_ss58 = env.hotkey_ss58s[0]
-    raised_floor = vault_floor * 2
-    env.set_vault_floor(raised_floor, "Floor gate: raising the vault floor failed")
 
-    gate_price, gate_boundary = env.floor_boundary(gate_netuid, vault_floor)
-    between_floors_alpha = gate_boundary * 3 // 2
-    print(f"  Alpha price={gate_price} -> chain-floor boundary={gate_boundary} alpha RAO, "
-          f"parking {between_floors_alpha}")
+    gate_price, gate_boundary = env.floor_boundary(gate_netuid, chain_min_stake)
+    # Two of these park below the boundary individually but clear it together.
+    sub_floor_alpha = gate_boundary * 2 // 3
+    print(f"  Alpha price={gate_price} -> floor boundary={gate_boundary} alpha RAO, "
+          f"parking {sub_floor_alpha}")
 
     gate_mailbox = env.mailbox_address(gate_netuid)
-    # 1.5x the boundary clears the chain's transfer floor only while the chain's
-    # minimum stake matches the vault's deploy floor; fail with context if the
-    # localnet image drifts.
     try:
         extrinsics.transfer_stake(
-            h160_to_ss58(gate_mailbox), gate_hotkey_ss58, gate_netuid, between_floors_alpha,
+            h160_to_ss58(gate_mailbox), gate_hotkey_ss58, gate_netuid, sub_floor_alpha,
         )
     except extrinsics.ExtrinsicError as error:
         raise AssertionError(
-            "Floor gate: parking transfer refused - has the chain's minimum stake moved "
-            f"past this test's sizing ({between_floors_alpha} alpha = 1.5x the vault "
-            "deploy floor)?"
+            "Floor gate: parking transfer refused - the deposit must sit between the "
+            f"chain's parking bar and its minimum stake ({sub_floor_alpha} alpha = 2/3 "
+            "of the boundary); has either moved past this test's sizing?"
         ) from error
 
-    env.assert_vault_reverts_with(
+    gate_refusal_receipt = env.assert_vault_reverts_with(
         "DepositTooSmall()", 1_500_000,
-        "Floor gate: between-floors wrap did NOT revert as DepositTooSmall",
+        "Floor gate: sub-floor wrap did NOT revert as DepositTooSmall",
         "wrap(address,uint256,bytes32)",
         config.WRAPPER_USER_ADDRESS, gate_netuid, gate_hotkey_pubkey,
     )
-    print("  wrap refused a deposit between the chain floor and the raised vault floor "
-          "as DepositTooSmall")
+    assert_gas_within(
+        gate_refusal_receipt, config.REVERT_GAS_BOUND, "Floor gate: sub-floor wrap refusal",
+    )
+    print("  wrap refused a deposit below the chain minimum as DepositTooSmall, "
+          "without burning the gas budget")
 
-    # A second parking transfer doubles the mailbox to ~3x the chain floor, above
-    # the raised floor.
     extrinsics.transfer_stake(
-        h160_to_ss58(gate_mailbox), gate_hotkey_ss58, gate_netuid, between_floors_alpha,
+        h160_to_ss58(gate_mailbox), gate_hotkey_ss58, gate_netuid, sub_floor_alpha,
     )
     above_floor_wrap_receipt = env.vault_send(
         1_500_000, "Floor gate: above-floor wrap failed",
         "wrap(address,uint256,bytes32)",
         config.WRAPPER_USER_ADDRESS, gate_netuid, gate_hotkey_pubkey,
     )
-    print("  wrap accepted the deposit once it cleared the raised floor")
+    print("  wrap accepted the deposit once it cleared the minimum")
 
-    # A healthy first wrap (clone deploys + flush + skipped sub-floor moves)
-    # anchors the gas budget below.
+    # A healthy first wrap - clone deploy, flush, skipped sub-floor moves - anchors leg 3.
     wrap_gas_baseline = chain.receipt_gas_used(above_floor_wrap_receipt)
     assert wrap_gas_baseline is not None, (
         "Floor gate: could not parse gasUsed for the wrap baseline"
     )
     print(f"  Healthy first-wrap gas baseline: {wrap_gas_baseline}")
 
-    # Restore the deploy-time floor for the remaining legs.
-    env.set_vault_floor(vault_floor, "Floor gate: restoring the vault floor failed")
-
     # --- Leg 2: rotated-out dust is consolidated by the next wrap ------------------
-    # Park sub-floor dust under a soon-rotated hotkey; the next wrap's fresh deposit
-    # starts the roller, so deposit + dust roll over the chain floor in one
-    # transaction - no keeper, no forfeiture.
+    # The next wrap's fresh deposit starts the roller, so deposit and dust roll over the
+    # chain floor in one transaction - no keeper, no forfeiture.
     dust_netuid = env.netuids[2]
     dust_token_id = env.token_ids[2]
     dust_hotkey_pubkey = env.hotkey_pubkeys[6]
@@ -100,16 +88,14 @@ def test_min_stake_floor(env):
     kept_hotkey_b_ss58 = env.hotkey_ss58s[7]
     kept_hotkey_c_pubkey = env.hotkey_pubkeys[8]
 
-    # A fresh validator to take the dust hotkey's slot after the rotation.
     rotated_in_pubkey, _ = bootstrap.register_hotkey(dust_netuid, "hk_e2e_3d")
     print(f"  Registered replacement validator {rotated_in_pubkey[:18]}... "
           f"on netuid {dust_netuid}")
 
-    # The bootstrap's 50/30/20 three-validator set is already attested, with the
-    # dust hotkey first.
-    dust_price, dust_boundary = env.floor_boundary(dust_netuid, vault_floor)
-    # 1.5x the boundary clears the deposit floor while every corrective move toward
-    # the 50/30/20 split stays below it, keeping the whole deposit on the dust hotkey.
+    # The bootstrap's 50/30/20 set is already attested, with the dust hotkey first.
+    dust_price, dust_boundary = env.floor_boundary(dust_netuid, chain_min_stake)
+    # 1.5x the boundary clears the deposit floor while every corrective move stays below
+    # it, keeping the whole deposit on the dust hotkey.
     dust_deposit = dust_boundary * 3 // 2
     env.deposit_and_wrap(
         dust_netuid, dust_hotkey_pubkey, dust_hotkey_ss58, dust_deposit,
@@ -119,8 +105,7 @@ def test_min_stake_floor(env):
     dust_shares = env.vault_shares(dust_token_id)
     dust_clone_coldkey = env.clone_coldkey(dust_token_id)
 
-    # Burn 5/6 of the shares: delivers ~1.25x the boundary and leaves ~0.25x the
-    # boundary (sub-floor) dust.
+    # Delivers ~1.25x the boundary and leaves ~0.25x of it behind as sub-floor dust.
     dust_burn = dust_shares * 5 // 6
     env.vault_send(
         2_500_000, "Dust consolidation: partial unwrap failed",
@@ -128,14 +113,12 @@ def test_min_stake_floor(env):
         dust_token_id, dust_burn, env.wrapper_substrate_coldkey,
     )
     dust_residue = env.stake(dust_hotkey_pubkey, dust_clone_coldkey, dust_netuid)
-    assert dust_residue * dust_price // 10**18 < vault_floor, (
+    assert dust_residue * dust_price // 10**18 < chain_min_stake, (
         f"Dust consolidation: residual {dust_residue} is not sub-floor (price {dust_price})"
     )
     print(f"  Left sub-floor dust of {dust_residue} alpha RAO under the "
           "soon-rotated hotkey")
 
-    # Rotate the dust hotkey out for the replacement, then wrap a fresh above-floor
-    # deposit under a surviving validator.
     env.set_validators(
         dust_netuid, [rotated_in_pubkey, kept_hotkey_b_pubkey, kept_hotkey_c_pubkey],
         [5000, 3000, 2000],
@@ -155,8 +138,6 @@ def test_min_stake_floor(env):
     print(f"  Next wrap consolidated the rotated dust: rotated-out hotkey left with "
           f"{dust_residue_after} RAO")
 
-    # The remembered set must drop the drained hotkey and the backing must fold in
-    # deposit + reclaimed dust.
     assert not env.hotkey_in_last_seen(dust_token_id, dust_hotkey_pubkey), (
         "Dust consolidation: consolidated hotkey still present in lastSeenHotkeys"
     )
@@ -171,10 +152,10 @@ def test_min_stake_floor(env):
           "remembered set refreshed to the current set")
 
     # --- Leg 3: a sub-floor rebalance move is skipped, not attempted ----------------
-    # Against a 50/30/20 three-validator split, a 1.5x-floor deposit leaves every
-    # corrective move sub-floor; the chain would reject such a move at full
-    # forwarded-gas cost, so the vault must skip them pre-call and leave the split
-    # drifted.
+    # The vault applies the same readable minimum to corrective moves, so it skips them and leaves
+    # the split drifted rather than forwarding a call it cannot prove will land - a rejected
+    # dispatch would consume the whole forwarded gas budget. The zero balances below are what
+    # prove the skip; the gas bound only shows nothing was forwarded and burned.
     skip_netuid = env.netuids[1]
     skip_token_id = env.token_ids[1]
     over_hotkey_pubkey = env.hotkey_pubkeys[3]
@@ -186,9 +167,9 @@ def test_min_stake_floor(env):
         [5000, 3000, 2000],
     )
 
-    _, skip_boundary = env.floor_boundary(skip_netuid, vault_floor)
-    # 1.5x the boundary clears the deposit floor while the corrective moves (0.45x
-    # and 0.3x) stay below it.
+    _, skip_boundary = env.floor_boundary(skip_netuid, chain_min_stake)
+    # 1.5x the boundary clears the deposit floor while the corrective moves (0.45x and
+    # 0.3x) stay below it.
     skip_deposit = skip_boundary * 3 // 2
     skip_wrap_receipt = env.deposit_and_wrap(
         skip_netuid, over_hotkey_pubkey, over_hotkey_ss58, skip_deposit, 1_500_000,
@@ -214,7 +195,6 @@ def test_min_stake_floor(env):
     print(f"  Sub-floor moves skipped: wrap used {skip_gas_used} gas "
           f"(bound {skip_gas_bound}), split left drifted")
 
-    # A later above-floor deposit makes both corrective moves land and clears the drift.
     env.deposit_and_wrap(
         skip_netuid, over_hotkey_pubkey, over_hotkey_ss58, skip_boundary * 6,
         1_500_000, "Sub-floor skip: follow-up wrap failed",

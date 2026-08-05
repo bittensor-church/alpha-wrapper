@@ -28,18 +28,18 @@ contract AlphaVaultOwnershipTest is AlphaVaultTestBase {
         // Before acceptance: the old owner still controls onlyOwner functions, the pending one doesn't.
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
-        vault.setMinStakeTaoFloor(123);
-        vault.setMinStakeTaoFloor(123);
-        assertEq(vault.minStakeTaoFloor(), 123, "old owner must retain control before acceptance");
+        vault.setURI("ipfs://before");
+        vault.setURI("ipfs://before");
+        assertEq(vault.uri(TOKEN1), "ipfs://before", "old owner must retain control before acceptance");
 
         vm.prank(alice);
         vault.acceptOwnership();
 
         // After acceptance: control flips - old owner is locked out, new owner is in.
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, owner));
-        vault.setMinStakeTaoFloor(456);
+        vault.setURI("ipfs://after");
         vm.prank(alice);
-        vault.setMinStakeTaoFloor(456);
-        assertEq(vault.minStakeTaoFloor(), 456, "new owner must control after acceptance");
+        vault.setURI("ipfs://after");
+        assertEq(vault.uri(TOKEN1), "ipfs://after", "new owner must control after acceptance");
     }
 }

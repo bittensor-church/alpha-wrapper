@@ -6,7 +6,7 @@ import { AlphaVault } from "src/AlphaVault.sol";
 import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
 import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
-import { MockStaking, CHAIN_MIN_STAKE, CHAIN_NOMINATOR_MIN_STAKE } from "./mocks/MockStaking.sol";
+import { MockStaking, CHAIN_MIN_STAKE, CHAIN_MIN_TRANSFER, CHAIN_NOMINATOR_MIN_STAKE } from "./mocks/MockStaking.sol";
 import { MockAddressMapping } from "./mocks/MockAddressMapping.sol";
 import { MockSubnetPrecompile } from "./mocks/MockSubnetPrecompile.sol";
 import { MockAlpha } from "./mocks/MockAlpha.sol";
@@ -51,8 +51,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     uint16 public constant BPS_BASE = 10_000;
 
-    // The simulated chain min-stake floor and dust threshold; aliased so they can never drift.
-    uint256 internal constant MIN_STAKE_FLOOR = CHAIN_MIN_STAKE;
+    // The simulated chain's dust threshold; aliased so the two can never drift.
     uint256 internal constant DUST_THRESHOLD = CHAIN_NOMINATOR_MIN_STAKE;
 
     uint256 public TOKEN1;
@@ -68,9 +67,11 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         // Pre-fund so the staking precompile mock can credit native TAO back to callers.
         vm.deal(STAKING_PRECOMPILE, 1_000_000 ether);
         // etch copies code, not storage, so the sell rate starts 0/0 and any un-parameterized sell
-        // panics on division; a 1:1 default keeps unrelated tests meaningful. The dust-sweep
-        // threshold is seeded to the chain's live value for the same reason.
+        // panics on division; a 1:1 default keeps unrelated tests meaningful. The min-stake floor
+        // and the dust-sweep threshold are seeded to the chain's live values for the same reason.
         MockStaking(STAKING_PRECOMPILE).setRemoveStakeRate(1, 1);
+        MockStaking(STAKING_PRECOMPILE).setChainMinStake(CHAIN_MIN_STAKE);
+        MockStaking(STAKING_PRECOMPILE).setChainMinTransfer(CHAIN_MIN_TRANSFER);
         MockStaking(STAKING_PRECOMPILE).setNominatorMinRequiredStake(DUST_THRESHOLD);
 
         mailboxLogic = new DepositMailbox();

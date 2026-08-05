@@ -1,7 +1,7 @@
 """Chainless unit tests for alpha_e2e.checks assertion helpers."""
 import pytest
 
-from alpha_e2e import checks, config
+from alpha_e2e import chain, checks, config
 
 CSV_TEXT = (
     "token_id,user,amount\n"
@@ -94,3 +94,36 @@ def test_assert_payout_near_quote_reconstructs_gas():
         checks.assert_payout_near_quote(0, quote_wei * 3 - gas_cost_wei, receipt, quote_rao, "ctx")
     with pytest.raises(AssertionError, match="could not parse gasUsed"):
         checks.assert_payout_near_quote(0, quote_wei, {}, quote_rao, "ctx")
+
+
+def _tao_exit_receipt(gas_used: int, emitted_wei: int) -> dict:
+    topic = chain.cast_sig_event(checks.UNWRAPPED_FOR_TAO)
+    data = "0x" + "".join(f"{word:064x}" for word in (0, 0, emitted_wei))
+    return {"gasUsed": gas_used, "logs": [{"topics": [topic], "data": data}]}
+
+
+def test_assert_payout_matches_emitted_accepts_the_reported_amount():
+    emitted = 5 * checks.RAO_WEI
+    gas_cost = 100_000 * config.LOCALNET_GAS_PRICE_WEI
+    receipt = _tao_exit_receipt(100_000, emitted)
+    checks.assert_payout_matches_emitted(0, emitted - gas_cost, receipt, "ctx")
+
+
+def test_assert_payout_matches_emitted_tolerates_the_sub_rao_remainder():
+    emitted = 5 * checks.RAO_WEI + 7
+    gas_cost = 100_000 * config.LOCALNET_GAS_PRICE_WEI
+    receipt = _tao_exit_receipt(100_000, emitted)
+    checks.assert_payout_matches_emitted(0, emitted - 7 - gas_cost, receipt, "ctx")
+
+
+def test_assert_payout_matches_emitted_rejects_a_shortfall():
+    emitted = 5 * checks.RAO_WEI
+    gas_cost = 100_000 * config.LOCALNET_GAS_PRICE_WEI
+    receipt = _tao_exit_receipt(100_000, emitted)
+    with pytest.raises(AssertionError, match="emitted"):
+        checks.assert_payout_matches_emitted(0, emitted // 2 - gas_cost, receipt, "ctx")
+
+
+def test_assert_payout_matches_emitted_rejects_a_receipt_without_the_event():
+    with pytest.raises(AssertionError, match="UnwrappedForTao"):
+        checks.assert_payout_matches_emitted(0, 0, {"gasUsed": 1, "logs": []}, "ctx")

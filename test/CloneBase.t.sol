@@ -5,7 +5,7 @@ import { Test } from "forge-std/Test.sol";
 import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
 import { CloneBase } from "src/CloneBase.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
-import { MockStaking } from "./mocks/MockStaking.sol";
+import { CHAIN_MIN_STAKE, CHAIN_MIN_TRANSFER, MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 contract CloneBaseSellAlphaTest is Test {
@@ -18,6 +18,8 @@ contract CloneBaseSellAlphaTest is Test {
         vm.etch(STAKING_PRECOMPILE, address(new MockStaking()).code);
         vm.deal(STAKING_PRECOMPILE, 1000 ether);
         MockStaking(STAKING_PRECOMPILE).setRemoveStakeRate(1, 1);
+        MockStaking(STAKING_PRECOMPILE).setChainMinStake(CHAIN_MIN_STAKE);
+        MockStaking(STAKING_PRECOMPILE).setChainMinTransfer(CHAIN_MIN_TRANSFER);
 
         SubnetClone impl = new SubnetClone();
         clone = SubnetClone(payable(Clones.clone(address(impl))));

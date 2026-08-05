@@ -62,6 +62,9 @@ LOCALNET_GAS_PRICE_WEI = 10**10
 WRAP_GAS_BOUND = 1_000_000
 UNWRAP_GAS_BOUND = 1_700_000
 REVERT_GAS_BOUND = 500_000
+# Editing one bound without the others can invert the order and make every gas
+# assertion vacuous, so the ordering is enforced at import.
+assert REVERT_GAS_BOUND < WRAP_GAS_BOUND < UNWRAP_GAS_BOUND
 
 # --- Rounding dust ---------------------------------------------------------------
 # The chain's share arithmetic can leave about one RAO behind on every entry a move

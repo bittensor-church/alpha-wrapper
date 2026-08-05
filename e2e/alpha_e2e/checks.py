@@ -76,6 +76,24 @@ def reconstructed_payout(
     return balance_after_wei - balance_before_wei + gas_used * config.LOCALNET_GAS_PRICE_WEI
 
 
+UNWRAPPED_FOR_TAO = "UnwrappedForTao(address,uint256,uint256,uint256,uint256)"
+
+# Native delivery is RAO-granular, so the sub-RAO remainder of what the vault reports stays behind.
+RAO_WEI = 10**9
+
+
+def assert_payout_matches_emitted(
+    balance_before_wei: int, balance_after_wei: int, receipt: dict, message: str,
+) -> None:
+    """Assert the caller actually received what the TAO exit reported paying, to the RAO. The event
+    is the vault's own claim; the balance delta is the chain's, so the two are independent."""
+    payout = reconstructed_payout(balance_before_wei, balance_after_wei, receipt, message)
+    emitted = chain.event_word(receipt, UNWRAPPED_FOR_TAO, 2, message)
+    assert 0 <= emitted - payout < RAO_WEI, (
+        f"{message} (emitted {emitted} wei, received {payout} wei)"
+    )
+
+
 def assert_payout_near_quote(
     balance_before_wei: int, balance_after_wei: int, receipt: dict,
     quote_rao: int, message: str,
