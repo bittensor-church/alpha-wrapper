@@ -25,8 +25,8 @@ def build_volume_row(
     tao_unwrap_logs: Sequence[EventLog],
     dissolved_unwrap_logs: Sequence[EventLog],
 ) -> dict[str, int | str]:
-    """Aggregate events without combining alpha RAO, TAO wei, or nominal and actual exits."""
-    alpha_requested = _sum(tao_unwrap_logs, "alphaRequested")
+    """Aggregate events without combining alpha RAO and TAO wei."""
+    alpha_sold = _sum(tao_unwrap_logs, "alphaSold")
     tao_from_alpha_sales = _sum(tao_unwrap_logs, "taoOut")
     tao_from_dissolutions = _sum(dissolved_unwrap_logs, "taoOut")
     unwrap_count = len(alpha_unwrap_logs) + len(tao_unwrap_logs) + len(dissolved_unwrap_logs)
@@ -47,7 +47,7 @@ def build_volume_row(
         "alpha_unwrapped_rao": _sum(alpha_unwrap_logs, "alphaOut"),
         "tao_unwrap_count": len(tao_unwrap_logs),
         "tao_unwrap_shares_burned": _sum(tao_unwrap_logs, "shares"),
-        "alpha_requested_for_tao_rao": alpha_requested,
+        "alpha_sold_for_tao_rao": alpha_sold,
         "tao_from_alpha_sales_wei": tao_from_alpha_sales,
         "dissolved_unwrap_count": len(dissolved_unwrap_logs),
         "dissolved_unwrap_shares_burned": _sum(dissolved_unwrap_logs, "shares"),
