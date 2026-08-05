@@ -15,6 +15,22 @@ contract RevertingReceiver {
     }
 }
 
+/// @dev Accepts ERC1155 mints until armed, then refuses the refund an exit mints back.
+contract RefundRejectingReceiver {
+    bool private rejecting;
+
+    function rejectMints() external {
+        rejecting = true;
+    }
+
+    function onERC1155Received(address, address, uint256, uint256, bytes calldata) external view returns (bytes4) {
+        require(!rejecting, "no mints");
+        return this.onERC1155Received.selector;
+    }
+
+    receive() external payable { }
+}
+
 /// @dev On receiving TAO, re-enters `unwrapForTao` and captures the revert (instead of
 ///      propagating it) so the outer call completes and the test can assert the reentrancy guard
 ///      specifically rejected the re-entry. Holds ERC1155 shares so it needs the acceptance hook.

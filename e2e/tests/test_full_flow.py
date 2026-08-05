@@ -312,7 +312,7 @@ def test_full_flow(env):
             "tao_from_dissolutions_wei": "0",
         },
         column_positive=[
-            "alpha_requested_for_tao_rao", "tao_from_alpha_sales_wei", "tao_received_wei",
+            "alpha_sold_for_tao_rao", "tao_from_alpha_sales_wei", "tao_received_wei",
         ],
     )
 

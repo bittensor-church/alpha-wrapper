@@ -305,6 +305,16 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         MockStaking(STAKING_PRECOMPILE).setRemoveStakeRate(num, denom);
     }
 
+    /// @dev Caps what one sell can swap; the rest of the request stays staked.
+    function _setRemoveStakeCap(uint256 maxAlpha) internal {
+        MockStaking(STAKING_PRECOMPILE).setRemoveStakeCap(maxAlpha);
+    }
+
+    /// @dev Zero disables the chain's force-sweep of a sub-threshold remainder.
+    function _setDustThreshold(uint256 thresholdTao) internal {
+        MockStaking(STAKING_PRECOMPILE).setNominatorMinRequiredStake(thresholdTao);
+    }
+
     function _depositAndWrap(address user, uint256 netuid, uint256 amount) internal returns (uint256 shares) {
         _simulateAlphaDeposit(user, netuid, amount);
         _wrap(user, netuid);
