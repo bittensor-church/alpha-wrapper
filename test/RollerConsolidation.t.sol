@@ -223,13 +223,14 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
     }
 
     /// @dev Oracle-soft unwrapForTao: at a zero price read the partial-tail floor check is skipped,
-    ///      so only the exempt full-drain slot sells and the tail waits as bounded dust.
+    ///      so only the exempt full-drain slot sells and the tail comes back to the caller as shares.
     function test_UnwrapForTao_TailWaitsWhenPriceReadsZero() public {
         _setRemoveStakeRate(1, 1);
         _depositAndWrap(alice, NETUID1, 100 ether);
         // hotkey1 full-drains (floor-exempt); the remainder on hotkey3 would be a partial slice.
         uint256 total = _setVaultStakes(NETUID1, 5e6, 0, 40 ether);
         uint256 shares = _sharesForExactAssets(TOKEN1, 5e6 + 1e6, total);
+        uint256 sharesBefore = vault.balanceOf(alice, TOKEN1);
 
         _setAlphaPriceReadsZero(NETUID1);
 
@@ -240,6 +241,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(alice.balance - balanceBefore, 5e6, "only the full-drain slot sold; partial tail waits");
         assertEq(_getVaultStake(hotkey1, NETUID1), 0, "full drain sold");
         assertEq(_getVaultStake(hotkey3, NETUID1), 40 ether, "partial remainder left in the pool at price 0");
+        assertGt(vault.balanceOf(alice, TOKEN1), sharesBefore - shares, "the waiting tail came back as shares");
     }
 
     /// @dev A zero-price (sub-1e-9) vault still exits fully via floor-exempt full-balance sells.

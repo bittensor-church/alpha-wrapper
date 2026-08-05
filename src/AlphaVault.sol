@@ -97,10 +97,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///         stake moves.
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
-    /// @notice A live-subnet unwrap paid by selling the alpha. `alphaRequested` is the nominal
-    ///         alpha entitlement in RAO; `taoOut` is the actual native TAO payout in EVM wei.
+    /// @notice A live-subnet unwrap paid by selling the alpha. `shares` and `alphaSold` are net of
+    ///         the refund a partial fill returns, so both count only what left the vault; `taoOut`
+    ///         is the native TAO payout in EVM wei.
     event UnwrappedForTao(
-        address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaRequested, uint256 taoOut
+        address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaSold, uint256 taoOut
     );
     event MailboxAlphaSoldForTao(
         address indexed user, uint256 indexed netuid, bytes32 indexed hotkey, uint256 alpha, uint256 taoOut
@@ -287,12 +288,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///         A full burn claims the exact backing, so every slot drains fully and nothing is
     ///         withheld - the only exit for a sub-floor position. On a partial burn the remainder
     ///         is sold only when the chain is sure to take it cleanly - to within one RAO of quote
-    ///         rounding; what cannot be sold cleanly stays staked, so realized TAO may fall short
-    ///         of the burned assets by bounded dust.
-    ///         `minTaoOut` guards the caller against every shortfall; `WithdrawTooSmall`
-    ///         fires when nothing sells. It is also the exit to use when the subnet's alpha price
-    ///         reads zero on EVM: there the alpha rail can revert at full gas while consolidating
-    ///         rotated-out dust, and only a full burn here still exits - while the pool can sell it.
+    ///         rounding; what cannot be sold cleanly stays staked and the caller is minted back the
+    ///         shares backing it, so a short fill costs the caller nothing but the retry.
+    ///         `minTaoOut` guards the caller against a fill smaller than they will accept;
+    ///         `WithdrawTooSmall` fires when nothing sells. It is also the exit to use when the
+    ///         subnet's alpha price reads zero on EVM: there the alpha rail can revert at full gas
+    ///         while consolidating rotated-out dust, and only a full burn here still exits - while
+    ///         the pool can sell it.
     ///         Reverts `SubnetInDissolutionBlackoutPeriod` while the subnet is being dissolved.
     /// @param  tokenId    Vault token id.
     /// @param  shares     Shares to burn.
@@ -325,15 +327,26 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         // minimum. Round two sells checked partial amounts from what then remains, at prices the
         // earlier sells have moved; partials go last so their shrinking can never eat an amount a
         // later slot would have emptied exactly.
-        uint256 remaining = _sellRound(clone, netuid, hotkeys, balances, assets, dustThresholdTao, false);
-        _sellRound(clone, netuid, hotkeys, balances, remaining, dustThresholdTao, true);
+        uint256 unsold = _sellRound(clone, netuid, hotkeys, balances, assets, dustThresholdTao, false);
+        unsold = _sellRound(clone, netuid, hotkeys, balances, unsold, dustThresholdTao, true);
 
         uint256 taoOut = clone.balance - balanceBefore;
         if (taoOut == 0) revert WithdrawTooSmall();
         if (taoOut < minTaoOut) revert SlippageExceeded(taoOut);
 
         SubnetClone(payable(clone)).unwrapTao(payable(msg.sender), taoOut);
-        emit UnwrappedForTao(msg.sender, tokenId, shares, assets, taoOut);
+
+        // Alpha no round could sell cleanly stays staked, so the caller keeps the shares backing
+        // it, priced against the position the sale left behind exactly as a deposit of that alpha
+        // would be. The refund has to follow the payout: while the proceeds still sit in the clone
+        // a mint would fold them into the claim index and promise them to every holder, this
+        // caller included, leaving the liability above what the clone holds. Something always
+        // sold, so the refund is strictly smaller than the burn and supply only falls - the
+        // post-mint bound `wrap` enforces cannot be approached from here.
+        uint256 refundShares = _sharesFor(total - assets, supply - shares, unsold);
+        if (refundShares != 0) _mint(msg.sender, tokenId, refundShares, "");
+
+        emit UnwrappedForTao(msg.sender, tokenId, shares - refundShares, assets - unsold, taoOut);
     }
 
     /// @notice Pay out the caller's accumulated TAO entitlement for `tokenId` to `recipient`.
