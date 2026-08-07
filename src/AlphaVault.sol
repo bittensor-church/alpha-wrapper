@@ -3,8 +3,6 @@ pragma solidity ^0.8.20;
 
 import { ERC1155 } from "@openzeppelin/contracts/token/ERC1155/ERC1155.sol";
 import { ERC1155Supply } from "@openzeppelin/contracts/token/ERC1155/extensions/ERC1155Supply.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
-import { Ownable2Step } from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -37,7 +35,7 @@ import { ISubnet, SUBNET_PRECOMPILE } from "./interfaces/ISubnet.sol";
 ///     claims through a cumulative per-share index, never the share price. Arrivals are recorded at
 ///     the next balance change or claim; whatever is still unrecorded when dissolution starts folds
 ///     into the pro-rata refund.
-contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
+contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     // -------------------- Immutables --------------------------------------------
     address public immutable mailboxLogic;
     address public immutable subnetLogic;
@@ -134,7 +132,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     // -------------------- Constructor -------------------------------------------
     constructor(string memory _uri, address _mailboxLogic, address _subnetLogic, address _validatorRegistry)
         ERC1155(_uri)
-        Ownable(msg.sender)
     {
         if (_mailboxLogic == address(0) || _subnetLogic == address(0) || _validatorRegistry == address(0)) {
             revert ZeroAddress();
@@ -195,7 +192,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///         Reverts `SubnetInDissolutionBlackoutPeriod` while a dissolving subnet still has a
     ///         registration block, then `SubnetNotRegistered` once cleanup has removed it.
     function wrap(address user, uint256 netuid, bytes32 chosenHotkey) external nonReentrant {
-        if (msg.sender != user && msg.sender != owner()) revert UnauthorizedCaller();
+        if (msg.sender != user) revert UnauthorizedCaller();
         if (chosenHotkey == bytes32(0)) revert ZeroHotkey();
 
         uint256 tokenId = currentTokenId(netuid);
@@ -719,11 +716,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         return hotkeys;
     }
 
-    // -------------------- Admin -------------------------------------------------
-
-    function setURI(string calldata newUri) external onlyOwner {
-        _setURI(newUri);
-    }
+    // -------------------- Mailbox Recovery --------------------------------------
 
     /// @notice Reclaim native TAO stuck in the caller's mailbox clone after subnet deregistration.
     /// @dev    Deploys the mailbox clone lazily if it was never materialized, so the TAO refund

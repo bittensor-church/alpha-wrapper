@@ -26,7 +26,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     SubnetClone public subnetLogic;
     ValidatorRegistry public registry;
 
-    address public owner = address(this);
+    address public deployer = address(this);
     address public alice = makeAddr("alice");
     address public bob = makeAddr("bob");
 

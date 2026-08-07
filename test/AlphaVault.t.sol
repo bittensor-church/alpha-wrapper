@@ -3,7 +3,6 @@ pragma solidity ^0.8.20;
 
 import { Vm } from "forge-std/Test.sol";
 import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { CloneBase } from "src/CloneBase.sol";
 import { DepositMailbox } from "src/DepositMailbox.sol";
@@ -324,8 +323,11 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     function test_WrapUnauthorized() public {
         _simulateAlphaDeposit(alice, NETUID1, 10 ether);
 
-        // Bob (not alice, not owner) should revert
         vm.prank(bob);
+        vm.expectRevert(AlphaVault.UnauthorizedCaller.selector);
+        vault.wrap(alice, NETUID1, hotkey1);
+
+        vm.prank(deployer);
         vm.expectRevert(AlphaVault.UnauthorizedCaller.selector);
         vault.wrap(alice, NETUID1, hotkey1);
     }
@@ -548,19 +550,6 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     function test_ValidatorRegistry_SetAtConstruction() public view {
         assertEq(address(vault.validatorRegistry()), address(registry));
-    }
-
-    // ------------------ setURI -------------------------------------------
-
-    function test_SetURI() public {
-        vault.setURI("https://new-uri.io/{id}.json");
-        assertEq(vault.uri(0), "https://new-uri.io/{id}.json");
-    }
-
-    function test_SetURIOnlyOwner() public {
-        vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
-        vault.setURI("https://malicious.io/{id}.json");
     }
 
     function test_RevertWhen_MailboxInitializeForeignWrapper() public {
