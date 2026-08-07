@@ -2,32 +2,34 @@
 
 ## Who can do what
 
-The vault runs ownerless: its code and registry address are final at
-deployment, and every function is either open to everyone or acts only
-on the caller's own balance and mailbox.
+The vault has no owner, no admin, no pauser and no upgrade path. Its
+registry address is set at deployment and immutable. Every vault function
+is either open to everyone or acts only on the caller's own balance and
+mailbox.
 
 The only privileged parties live in `ValidatorRegistry`:
 
 - The signers, threshold-of-N, choose validator sets and weights per
   subnet by co-signing attestations
   ([attester-guide.md](attester-guide.md)).
-- The registry admin rotates the signer set and threshold; the role
-  administers itself, so an admin can also add or remove admins. Those
-  two levers are its full reach.
+- The registry admin rotates the signer set and threshold. The role
+  administers itself, so an admin can also add or remove admins; it has
+  no other power.
 
-## The boundary of registry control
+## What the privileged parties cannot do
 
-Registry control steers where stake is delegated, and that is its full
-extent. The signers - or an admin who replaces them all with its own
-keys - can point the vault's stake at validators of their choosing, and
-bad choices cost holders emissions. Stake transfers out of the vault,
-share mints and burns, mailbox withdrawals and every vault parameter
-stay beyond their reach.
+Registry control steers where stake is delegated, nothing else. The
+signers - or an admin who replaces them all with its own keys - can point
+the vault's stake at validators of their choosing, and bad choices cost
+holders emissions. They cannot transfer stake out of the vault, mint or
+burn shares, touch mailboxes, or change any vault code or parameter.
 
 A hostile validator set can break wrapping and the alpha exit, since
-deposits must name a listed hotkey and stake moves only onto validators
-the chain accepts. Holders can still leave with TAO: the TAO exit sells
-from wherever the stake actually sits, if need be over several sales.
+deposits must name a listed hotkey and stake cannot be moved onto
+validators that do not exist. It cannot lock funds in: the TAO
+exit never moves stake between validators, it sells from wherever the
+stake actually sits, so holders can still leave with TAO, if need be
+over several sales.
 
 ## What holders trust
 
@@ -42,14 +44,14 @@ from wherever the stake actually sits, if need be over several sales.
 ## Design safeguards
 
 - Per-subnet isolation. Each position's alpha sits under its own clone
-  coldkey, so a subnet's dissolution or misbehavior stays contained to
-  its own position.
+  coldkey; one subnet's dissolution or misbehavior cannot touch another
+  position's backing.
 - Clones obey only the vault. Every mailbox and subnet-clone function
   reverts for other callers, and initialization is one-shot, vault-only.
   The one thing outsiders can do is send a clone TAO, which the claim
   index absorbs ([edge-cases.md](edge-cases.md)).
-- `wrap` credits only the caller's own mailbox, so each deposit stays
-  claimable by its owner alone.
+- `wrap` credits only the caller's own mailbox, so nobody can claim
+  someone else's deposit.
 - Every entry point that moves stake or native TAO is `nonReentrant`,
   and payouts come after burns.
 - First-depositor share-price inflation is blunted with virtual shares
@@ -65,4 +67,5 @@ from wherever the stake actually sits, if need be over several sales.
 - Amounts below the chain's minimum stake size can leave the stake split
   drifted from target weights; share value is unaffected.
 - A partial `unwrapForTao` can fill short and refund the unsold part as
-  shares; callers bound the damage with `minTaoOut`.
+  shares instead of reverting; callers bound the damage with
+  `minTaoOut`.

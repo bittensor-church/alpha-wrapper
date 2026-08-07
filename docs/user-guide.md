@@ -51,7 +51,7 @@ gone.
 burns the shares and transfers your pro-rata alpha to `yourColdkey` in a
 single transfer. The alpha arrives still staked on the subnet, under one
 of the current validators; unstake it yourself if you want liquid TAO.
-Delivery is exact: you receive the full quote, to within a few
+Delivery is all-or-nothing: you receive the full quote, to within a few
 RAO of chain-side rounding, or the call reverts. A request below the
 chain's minimum stake size reverts (`WithdrawTooSmall`); see the TAO exit
 below for the way out. Double-check the coldkey argument - the chain

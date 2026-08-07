@@ -76,9 +76,9 @@ deposit first, then exits the same way.
 After a partial unstake, the chain force-sells any stake entry left below
 a dust threshold, folding the proceeds into that unstake's payout. A
 partial `unwrapForTao` is sized to keep the remaining holders' backing
-whole: from each slot the vault sells at most the amount whose leftover
-clears the threshold, and sells less, or skips the slot, where the sweep
-would bite. Whatever stays staked comes back to the caller as shares, except
+whole: the vault will not sell a chunk whose leftover the chain would
+sweep, and sells less, or nothing, from that slot instead. Whatever
+stays staked comes back to the caller as shares, except
 on a burn of the entire supply, which drops a leftover below the chain's
 minimum.
 
