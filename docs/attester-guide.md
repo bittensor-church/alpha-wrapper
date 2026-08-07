@@ -1,10 +1,9 @@
 # Attester guide
 
 The vault stakes each subnet's alpha under the validators listed in
-`ValidatorRegistry`. Those lists are not set by an on-chain owner; they
-are set by attestations - EIP-712 messages signed off-chain by a quorum
-of registry signers. This guide is for the people producing those
-signatures.
+`ValidatorRegistry`. Those lists are set by attestations - EIP-712
+messages signed off-chain by a quorum of registry signers. This guide is
+for the people producing those signatures.
 
 ## What you are signing
 
@@ -24,7 +23,7 @@ The registry enforces at submission time:
 - Every weight non-zero; weights sum to exactly 10000.
 - netuid fits in 16 bits.
 - nonce equals `nonces(netuid) + 1`. Nonces count per subnet.
-- The deadline has not passed.
+- The deadline is still in the future.
 
 The EIP-712 domain:
 
@@ -55,28 +54,26 @@ weights)`.
 The vault picks up the new set on its next deposit, alpha exit or
 `rebalance` for that subnet; the TAO exit ignores the weights and sells
 from wherever the stake sits. If a validator was dropped, the next such
-call first rolls the vault's stake off it onto the current set. Nothing
-forces an immediate move; whoever wants the stake realigned right away
-can call the vault's `rebalance(netuid)`.
+call first rolls the vault's stake off it onto the current set; whoever
+wants the stake realigned right away can call the vault's
+`rebalance(netuid)`.
 
-Dropping a hotkey does not strand user deposits parked under it: `wrap`
-refuses out-of-set hotkeys up front, and stake already sitting in a
-mailbox under a dropped hotkey stays reclaimable by its owner.
+Deposits parked under a dropped hotkey stay recoverable: `wrap` refuses
+out-of-set hotkeys up front, and stake already sitting in a mailbox
+under one stays reclaimable by its owner.
 
 ## Practical notes
 
 - A signature is bound to one (netuid, nonce) pair on one registry on one
-  chain. Once the update lands, the signatures are spent; there is no
-  replay across subnets, nonces or chains.
+  chain; once the update lands, the signatures are spent.
 - Pick deadlines long enough to collect the quorum, short enough that a
   leaked but unsubmitted signature set goes stale.
-- Weights steer where the stake sits, not how much the vault holds.
-  Wrong weights cost holders emissions, and a list with a bad hotkey
-  does worse: deposits and the alpha exit only work against hotkeys the
-  chain accepts, so both can stall until a corrected attestation lands.
-  Funds still cannot be moved out of the vault, and the TAO exit keeps
-  working. See [security-model.md](security-model.md) for the exact
-  boundary.
+- Weights steer where the stake sits. Wrong weights cost holders
+  emissions, and a list with a bad hotkey does worse: deposits and the
+  alpha exit only work against hotkeys the chain accepts, so both can
+  stall until a corrected attestation lands. Funds stay in the vault
+  throughout, and the TAO exit keeps working. See
+  [security-model.md](security-model.md) for the exact boundary.
 
 ## Signer set changes
 

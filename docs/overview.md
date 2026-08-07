@@ -14,8 +14,8 @@ admin and no upgrade path.
 
 Each subnet position gets its own `SubnetClone`, a minimal proxy whose EVM
 address maps to a substrate coldkey. All alpha backing a token id is staked
-under that one coldkey, so positions on different subnets can never mix.
-Only the vault can drive a clone.
+under that one coldkey, so each position's backing stays isolated. Only
+the vault can drive a clone.
 
 Each (user, subnet) pair gets a `DepositMailbox` at a deterministic
 address. You deposit by transferring staked alpha to the mailbox's coldkey
@@ -25,9 +25,8 @@ your own mailbox.
 
 `ValidatorRegistry` says which validators the vault should stake under,
 per subnet, and in what proportions. Its entries are set by a threshold of
-off-chain signers (see [attester-guide.md](attester-guide.md)). The vault
-reads the registry and nothing else; there is no fallback source of
-validator sets.
+off-chain signers (see [attester-guide.md](attester-guide.md)), and the
+vault takes its validator sets from the registry alone.
 
 ## Token ids
 
@@ -37,20 +36,19 @@ are the netuid, the bits above are the block the subnet was registered at.
 
 If a subnet is dissolved and its netuid later reused, the new subnet gets
 a new token id. Old shares keep pointing at the old position and its TAO
-refund; they do not carry over.
+refund.
 
-No setup is required: the first `wrap` on a subnet deploys the clone and
-opens the position. `createSubnetProxy(netuid)` merely deploys it ahead
-of time.
+The first `wrap` on a subnet deploys the clone and opens the position;
+`createSubnetProxy(netuid)` deploys it ahead of time.
 
 ## Share price
 
 Shares are priced by the ratio of staked alpha to share supply.
 `sharePrice(tokenId)` returns alpha per share, scaled by 1e18. Staking
 emissions accrue to the clone's stake, so the price rises over time and
-later depositors mint fewer shares per alpha. Native TAO sitting on the
-clone is never part of this price; it is owed to specific holders and
-tracked separately (see [edge-cases.md](edge-cases.md)).
+later depositors mint fewer shares per alpha. The price counts staked
+alpha only; native TAO sitting on the clone is owed to specific holders
+and tracked separately (see [edge-cases.md](edge-cases.md)).
 
 ## Where the stake sits
 
@@ -58,12 +56,12 @@ The registry lists up to three validator hotkeys per subnet, with weights
 in basis points. Deposits and alpha exits rebalance the clone's stake
 toward those weights as a side effect, and anyone may call
 `rebalance(netuid)` to realign immediately, for example right after the
-registry changes; the TAO exit moves nothing and sells from wherever the
-stake sits. Moves the chain would reject as too small are skipped; a
-drifted split is harmless because share value depends on the total stake,
-not on how it is split.
+registry changes; the TAO exit sells from wherever the stake sits.
+Moves the chain would reject as too small are skipped; a
+drifted split is harmless because share value depends on the total stake
+alone.
 
 When the registry drops a validator, the next deposit, alpha exit or
 `rebalance` first rolls the stake off it onto the current set. The vault
-remembers which hotkeys it last used (`lastSeenHotkeys`), so backing is
-never forgotten on a rotated-out validator.
+remembers which hotkeys it last used (`lastSeenHotkeys`), so the roll
+finds stake on validators the registry no longer lists.

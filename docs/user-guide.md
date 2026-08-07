@@ -8,9 +8,8 @@ already staked on the subnet you want to wrap. Read
 
 1. Check the validator set: `getCurrentValidators(netuid)` returns up to
    three hotkeys. The vault only accepts deposits sitting under one of
-   them. A coldkey-to-coldkey transfer cannot change the hotkey, so if
-   your stake is delegated elsewhere, move it under one of these first
-   (the chain's move_stake call).
+   them; if your stake is delegated elsewhere, first move it under one
+   of these with the chain's move_stake call.
 2. Get your deposit address: `getDepositAddress(you, netuid)`. This is an
    EVM address controlled by the vault, unique to you and the subnet.
 3. Convert that address to a substrate coldkey. On-chain, the
@@ -60,15 +59,15 @@ delivers to whatever key you name.
 
 `unwrapForTao(tokenId, shares, minTaoOut)` sells your share of the backing
 into the subnet's pool and pays you native TAO on your EVM address. This
-is a market order: the payout depends on pool depth and fees, and there is
-no preview, so protect yourself with `minTaoOut`. Mind the units: native
+is a market order: the payout depends on pool depth and fees at
+execution, and `minTaoOut` is your only protection. Mind the units: native
 TAO amounts, `minTaoOut` included, are 18-decimal EVM wei, while alpha
 amounts use the chain's 9 decimals - a floor quoted in alpha units is a
 billion times too low and protects nothing. If the chain will not take
 part of the sale cleanly, that part stays staked and comes back to you as
 shares, so you only burn what actually sold. The exception is a burn of
-the token's entire supply, which drops a leftover too small to ever sell
-instead of leaving an unexitable position behind.
+the token's entire supply, which drops a leftover too small to ever
+sell.
 
 This is also the exit for positions too small for `unwrap`: a burn of
 the token's entire supply is exempt from the chain's minimum, so the
@@ -83,16 +82,17 @@ argument is unused there. See [edge-cases.md](edge-cases.md) for the
 dissolution timeline.
 
 `previewUnwrap(tokenId, shares)` quotes the alpha exit on a live subnet
-and the TAO payout on a dissolved one. It never quotes `unwrapForTao`.
+and the TAO payout on a dissolved one; the TAO market order is priced
+only at execution, bounded by your `minTaoOut`.
 
 ## Claimable TAO
 
-The vault's clone can receive native TAO that is not part of any exit -
-the chain force-selling dust, or a plain donation. That TAO is credited
-pro-rata to the holders of the token at that moment and does not move the
-share price. `claimableTaoOf(you, tokenId)` shows your balance;
+The vault's clone can receive native TAO outside any exit - the chain
+force-selling dust, or a plain donation. That TAO is credited pro-rata
+to the holders of the token at that moment and leaves the share price
+untouched. `claimableTaoOf(you, tokenId)` shows your balance;
 `claimTao(tokenId, recipient)` pays it out. The entitlement survives
-transfers and full exits, so unwrapping does not forfeit it.
+transfers and full exits.
 
 ## Fixing mistakes
 

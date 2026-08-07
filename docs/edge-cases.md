@@ -1,7 +1,7 @@
 # Edge cases
 
-The chain can do things to a subnet that the vault has no say in. This
-page lists them and what the vault does about each.
+Subtensor can change a subnet out from under the vault. This page lists
+those events and what the vault does about each.
 
 ## Subnet dissolution
 
@@ -27,12 +27,11 @@ nothing to pay: `unwrap` reverts `NothingToUnwrap` and `previewUnwrap`
 reverts `SubnetDissolved` until the refund lands. `claimTao` works
 throughout.
 
-The blackout is scoped by netuid because the chain does not identify
-which registration generation is dissolving. An old, already-dissolved
+The blackout is scoped by netuid because the chain reports dissolution
+by netuid alone. An old, already-dissolved
 position on a reused netuid is therefore also frozen while its successor
 dissolves, and resumes when that cleanup completes. This is a deliberate
-availability tradeoff; the alternative was per-generation finalization
-storage paid for on every unwrap.
+availability tradeoff.
 
 A dissolution refund can also land on your deposit mailbox if stake was
 still parked there; `reclaimTaoFromMailbox(netuid)` recovers it.
@@ -65,10 +64,9 @@ full gas. The checks:
   refuse internal moves that provably cannot clear it.
 - A rebalance move under the floor is silently skipped. The split
   drifts from target until a later operation produces a movable amount;
-  share value is unaffected because it depends on the total, not the
-  split.
+  share value is unaffected because it depends on the total alone.
 
-No position is stuck for good. A burn of the token's entire supply via
+Every position keeps an exit. A burn of the token's entire supply via
 `unwrapForTao` is exempt from the floor, so the last holder can always
 sell - at worst the pool fills short and hands part back as shares for
 another try. A sub-floor position with co-holders takes one top-up
@@ -82,10 +80,9 @@ partial `unwrapForTao` is sized so this cannot eat the remaining holders'
 backing: the vault will not sell a chunk whose leftover the chain would
 sweep, and sells less, or nothing, from that slot instead. Whatever did
 not sell comes back to the caller as shares, except on a burn of the
-entire supply, which drops a leftover too small to ever sell instead of
-leaving an unexitable position behind.
+entire supply, which drops a leftover too small to ever sell.
 
-## TAO the vault did not ask for
+## Stray TAO
 
 Native TAO can arrive on a clone outside any exit: the chain force-sold
 dust into it, or someone simply sent TAO there. Folding it into the share
@@ -116,8 +113,8 @@ entire supply via `unwrapForTao` still exits.
 ## Third-party dust
 
 Anyone can stake to the vault's or a mailbox's coldkey without asking.
-It buys them nothing. The vault only counts stake under validators it
-tracks, `wrap` only credits your own mailbox's balance under the hotkey
-you chose, and stake planted on the vault's own slots just raises the
-backing for existing holders. Nothing a third party parks can block a
-wrap or an exit.
+The vault only counts stake under validators it tracks, `wrap` only
+credits your own mailbox's balance under the hotkey you chose, and stake
+planted on the vault's own slots just raises the backing for existing
+holders. Wraps and exits proceed regardless of what a third party
+parks.

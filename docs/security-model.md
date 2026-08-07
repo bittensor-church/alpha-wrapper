@@ -61,8 +61,6 @@ over several sales.
 
 ## Known tradeoffs
 
-Accepted and documented rather than engineered away:
-
 - The netuid-scoped dissolution blackout can temporarily freeze an old
   position while a successor subnet on the same netuid dissolves
   ([edge-cases.md](edge-cases.md)).
