@@ -59,19 +59,6 @@ Deposits parked under a dropped hotkey stay recoverable: `wrap` refuses
 out-of-set hotkeys up front, and stake already sitting in a mailbox
 under one stays reclaimable by its owner.
 
-## Practical notes
-
-- A signature is bound to one (netuid, nonce) pair on one registry on one
-  chain; once the update lands, the signatures are spent.
-- Pick deadlines long enough to collect the quorum, short enough that a
-  leaked but unsubmitted signature set goes stale.
-- Weights steer where the stake sits. Wrong weights cost holders
-  emissions, and a list with a bad hotkey does worse: deposits and the
-  alpha exit only work against hotkeys the chain accepts, so both can
-  stall until a corrected attestation lands. Funds stay in the vault
-  throughout, and the TAO exit keeps working. See
-  [security-model.md](security-model.md) for the exact boundary.
-
 ## Signer set changes
 
 The registry admin replaces the signer set with
