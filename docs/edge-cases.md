@@ -17,15 +17,14 @@ or with `SubnetNotRegistered` for `wrap` and `rebalance` late in cleanup,
 once the chain has deleted the subnet's registration. Pricing mid-refund
 would distribute an incomplete amount.
 
-Once cleanup completes the position is permanently dissolved: the token
-id's registration block no longer matches the netuid. From then on
-`unwrap` pays native TAO pro-rata from the clone's refund balance,
-`previewUnwrap` quotes that payout, and `sharePrice` and `previewWrap`
-revert with `SubnetDissolved`. While the clone holds no refund - none
-arrived yet, or all of its TAO is already reserved for claims - there is
-nothing to pay: `unwrap` reverts `NothingToUnwrap` and `previewUnwrap`
-reverts `SubnetDissolved` until the refund lands. `claimTao` works
-throughout.
+Once cleanup completes the position is permanently dissolved: the
+netuid's current registration block differs from the token id's. From
+then on `unwrap` pays native TAO pro-rata from the clone's refund
+balance, `previewUnwrap` quotes that payout, and `sharePrice` and
+`previewWrap` revert with `SubnetDissolved`. Both payouts start once the
+refund sits on the clone: until it arrives - or while all of the clone's
+TAO is reserved for claims - `unwrap` reverts `NothingToUnwrap` and
+`previewUnwrap` reverts `SubnetDissolved`. `claimTao` works throughout.
 
 The blackout is scoped by netuid because the chain reports dissolution
 by netuid alone. An old, already-dissolved
@@ -54,14 +53,14 @@ readable on the EVM is the higher one, so the vault applies that as one
 conservative floor to every operation - it can refuse a deposit the
 chain itself would still move. When the subnet's alpha price is
 readable, the vault checks sizes before calling the chain; at a zero
-price read no check can run and a too-small call fails chain-side, at
-full gas. The checks:
+price read the call goes straight to the chain, and a too-small one
+fails there at full gas. The checks:
 
 - A deposit under the floor reverts `DepositTooSmall`; top the mailbox
   up and wrap once.
 - An alpha-exit request under the floor reverts `WithdrawTooSmall`,
   and the related guards (`GatherBelowFloor`, `ConsolidationBelowFloor`)
-  refuse internal moves that provably cannot clear it.
+  refuse internal moves that are provably below it.
 - A rebalance move under the floor is silently skipped. The split
   drifts from target until a later operation produces a movable amount;
   share value is unaffected because it depends on the total alone.
@@ -76,11 +75,12 @@ deposit first, then exits the same way.
 
 After a partial unstake, the chain force-sells any stake entry left below
 a dust threshold, folding the proceeds into that unstake's payout. A
-partial `unwrapForTao` is sized so this cannot eat the remaining holders'
-backing: the vault will not sell a chunk whose leftover the chain would
-sweep, and sells less, or nothing, from that slot instead. Whatever did
-not sell comes back to the caller as shares, except on a burn of the
-entire supply, which drops a leftover too small to ever sell.
+partial `unwrapForTao` is sized to keep the remaining holders' backing
+whole: from each slot the vault sells at most the amount whose leftover
+clears the threshold, and sells less, or skips the slot, where the sweep
+would bite. Whatever stays staked comes back to the caller as shares, except
+on a burn of the entire supply, which drops a leftover below the chain's
+minimum.
 
 ## Stray TAO
 
@@ -95,7 +95,7 @@ next balance change or claim on that token. `claimableTaoOf` and
 - Claims pay in whole native quantums - the chain moves TAO in 1e9-wei
   steps - and the sub-quantum remainder stays reserved for you.
 - Entitlements survive transfers and full exits.
-- TAO arriving while nobody holds shares stays unassigned until shares
+- TAO arriving at zero share supply stays unassigned until shares
   exist again. TAO arriving during or after dissolution is refund
   backing and goes through the dissolved unwrap instead.
 
@@ -104,8 +104,8 @@ next balance change or claim on that token. `claimableTaoOf` and
 When the registry drops a validator, the vault must roll its stake onto
 the current set, and the chain's minimum can block that roll for a dust
 position. At a readable price the call refuses cheaply with
-`ConsolidationBelowFloor`; when the EVM price read is zero the guard
-cannot run, and the chain's rejection burns the call's gas. Either way
+`ConsolidationBelowFloor`; at a zero EVM price read the roll goes
+straight to the chain, whose rejection burns the call's gas. Either way
 the position self-heals: the next deposit lands before the roll and
 carries the rotated-out dust with it. Until then, burning the token's
 entire supply via `unwrapForTao` still exits.

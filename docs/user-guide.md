@@ -51,7 +51,7 @@ gone.
 burns the shares and transfers your pro-rata alpha to `yourColdkey` in a
 single transfer. The alpha arrives still staked on the subnet, under one
 of the current validators; unstake it yourself if you want liquid TAO.
-Delivery is all-or-nothing: you receive the full quote, to within a few
+Delivery is exact: you receive the full quote, to within a few
 RAO of chain-side rounding, or the call reverts. A request below the
 chain's minimum stake size reverts (`WithdrawTooSmall`); see the TAO exit
 below for the way out. Double-check the coldkey argument - the chain
@@ -63,11 +63,10 @@ is a market order: the payout depends on pool depth and fees at
 execution, and `minTaoOut` is your only protection. Mind the units: native
 TAO amounts, `minTaoOut` included, are 18-decimal EVM wei, while alpha
 amounts use the chain's 9 decimals - a floor quoted in alpha units is a
-billion times too low and protects nothing. If the chain will not take
-part of the sale cleanly, that part stays staked and comes back to you as
-shares, so you only burn what actually sold. The exception is a burn of
-the token's entire supply, which drops a leftover too small to ever
-sell.
+billion times too low. Whatever the chain leaves unsold stays staked and
+comes back to you as shares, so you only burn what actually sold. The
+exception is a burn of the token's entire supply, which drops a leftover
+below the chain's minimum.
 
 This is also the exit for positions too small for `unwrap`: a burn of
 the token's entire supply is exempt from the chain's minimum, so the

@@ -9,8 +9,8 @@ alpha or for its TAO value.
 ## The contracts
 
 `AlphaVault` is the only contract users talk to. It is an ERC-1155 with one
-token id per subnet position and holds all the logic. It has no owner, no
-admin and no upgrade path.
+token id per subnet position and holds all the logic, ownerless and
+immutable.
 
 Each subnet position gets its own `SubnetClone`, a minimal proxy whose EVM
 address maps to a substrate coldkey. All alpha backing a token id is staked
@@ -64,4 +64,4 @@ alone.
 When the registry drops a validator, the next deposit, alpha exit or
 `rebalance` first rolls the stake off it onto the current set. The vault
 remembers which hotkeys it last used (`lastSeenHotkeys`), so the roll
-finds stake on validators the registry no longer lists.
+finds stake on validators the registry has since dropped.
