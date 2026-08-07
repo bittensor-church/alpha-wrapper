@@ -14,9 +14,8 @@ already staked on the subnet you want to wrap. Read
    EVM address controlled by the vault, unique to you and the subnet.
 3. Convert that address to a substrate coldkey. On-chain, the
    address-mapping precompile at 0x0000...080C returns it via
-   `addressMapping(address)`. Off-chain it is Frontier's
-   HashedAddressMapping; `e2e/alpha_e2e/substrate.py` has a reference
-   implementation.
+   `addressMapping(address)`; off-chain it is Frontier's
+   HashedAddressMapping.
 4. Transfer your staked alpha to that coldkey with a substrate
    transfer_stake call, same subnet. The stake stays under its hotkey,
    which is why that hotkey must be one of the validators from step 1.

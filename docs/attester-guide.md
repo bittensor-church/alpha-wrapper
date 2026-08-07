@@ -32,9 +32,6 @@ The EIP-712 domain:
     chainId:           the chain the registry is deployed on
     verifyingContract: the registry address
 
-`e2e/alpha_e2e/validators.py` builds and signs exactly this payload; use
-it to check an implementation against.
-
 ## Submitting
 
 Anyone can submit - the signatures are the authorization, the sender only
