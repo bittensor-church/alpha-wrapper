@@ -2,10 +2,10 @@
 
 ## Who can do what
 
-The vault has no owner, no admin, no pauser and no upgrade path. Its
-registry address is set at deployment and immutable. Every vault function
-is either open to everyone or acts only on the caller's own balance and
-mailbox.
+The vault is permissionless: it has no privileged roles, and every
+function is either open to everyone or acts only on the caller's own
+balance and mailbox. Its code and registry address are final at
+deployment.
 
 The only privileged parties live in `ValidatorRegistry`:
 
