@@ -1,0 +1,106 @@
+# Edge cases
+
+The chain can do things to a subnet that the vault has no say in. This
+page lists them and what the vault does about each.
+
+## Subnet dissolution
+
+Subtensor dissolves subnets asynchronously. Chain-side cleanup burns the
+subnet's alpha, converts the pool to TAO and refunds holders pro-rata,
+the vault's clone included.
+
+While cleanup runs (`isSubnetDissolving(netuid)` is true) the vault
+freezes every share-priced operation on that netuid: `wrap`, both
+unwraps, `rebalance`, `sharePrice` and the previews all revert with
+`SubnetInDissolutionBlackoutPeriod`. Pricing mid-refund would distribute
+an incomplete amount.
+
+Once cleanup completes the position is permanently dissolved: the token
+id's registration block no longer matches the netuid. From then on
+`unwrap` pays native TAO pro-rata from the clone's refund balance,
+`previewUnwrap` quotes that payout, and `sharePrice` and `previewWrap`
+revert with `SubnetDissolved`. `claimTao` works throughout.
+
+The blackout is scoped by netuid because the chain does not identify
+which registration generation is dissolving. An old, already-dissolved
+position on a reused netuid is therefore also frozen while its successor
+dissolves, and resumes when that cleanup completes. This is a deliberate
+availability tradeoff; the alternative was per-generation finalization
+storage paid for on every unwrap.
+
+A dissolution refund can also land on your deposit mailbox if stake was
+still parked there; `reclaimTaoFromMailbox(netuid)` recovers it.
+
+## Subnet owner disables alpha transfers
+
+A subnet owner can turn off alpha transfers at any time. Wrapping and the
+alpha exit both transfer stake between coldkeys, so both revert on such a
+subnet, with shares intact. The TAO exits (`unwrapForTao`,
+`reclaimMailboxAlphaAsTao`) unstake rather than transfer and keep
+working.
+
+## The chain's minimum stake size
+
+Subtensor rejects stake operations below a TAO-denominated minimum, and
+its rejection burns all gas sent with the call. The vault therefore
+checks sizes before calling the chain:
+
+- A deposit under the minimum reverts `DepositTooSmall`; top the mailbox
+  up and wrap once.
+- An alpha-exit request under the minimum reverts `WithdrawTooSmall`,
+  and the related guards (`GatherBelowFloor`, `ConsolidationBelowFloor`)
+  refuse internal moves that provably cannot clear it.
+- A rebalance move under the minimum is silently skipped. The split
+  drifts from target until a later operation produces a movable amount;
+  share value is unaffected because it depends on the total, not the
+  split.
+
+None of this can trap a position. A full-balance `unwrapForTao` drains
+every slot completely, and the chain exempts full drains from the
+minimum, so even the smallest dust position has an exit.
+
+## The chain's dust sweep
+
+After a partial unstake, the chain force-sells any stake entry left below
+a dust threshold, folding the proceeds into that unstake's payout. A
+partial `unwrapForTao` is sized so this cannot eat the remaining holders'
+backing: the vault will not sell a chunk whose leftover the chain would
+sweep, and sells less, or nothing, from that slot instead. Whatever did
+not sell comes back to the caller as shares.
+
+## TAO the vault did not ask for
+
+Native TAO can arrive on a clone outside any exit: the chain force-sold
+dust into it, or someone simply sent TAO there. Folding it into the share
+price would gift it to future depositors, so it is instead credited
+pro-rata to the holders of the token at the moment the arrival is
+recorded, through a cumulative per-share index. Recording happens at the
+next balance change or claim on that token. `claimableTaoOf` and
+`claimTao` pay it out. The fine print:
+
+- Claims pay in whole native quantums - the chain moves TAO in 1e9-wei
+  steps - and the sub-quantum remainder stays reserved for you.
+- Entitlements survive transfers and full exits.
+- TAO arriving while nobody holds shares stays unassigned until shares
+  exist again. TAO arriving during or after dissolution is refund
+  backing and goes through the dissolved unwrap instead.
+
+## Validator rotation leftovers
+
+When the registry drops a validator, the vault must roll its stake onto
+the current set, and the chain's minimum can block that roll for a dust
+position. At a readable price the call refuses cheaply with
+`ConsolidationBelowFloor`; when the EVM price read is zero the guard
+cannot run, and the chain's rejection burns the call's gas. Either way
+the position self-heals: the next deposit lands before the roll and
+carries the rotated-out dust with it. Until then, a full-balance
+`unwrapForTao` still exits.
+
+## Third-party dust
+
+Anyone can stake to the vault's or a mailbox's coldkey without asking.
+It buys them nothing. The vault only counts stake under validators it
+tracks, `wrap` only credits your own mailbox's balance under the hotkey
+you chose, and stake planted on the vault's own slots just raises the
+backing for existing holders. Nothing a third party parks can block a
+wrap or an exit.

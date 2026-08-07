@@ -3,25 +3,28 @@
 Bittensor alpha-token wrapper (ERC-1155 vault + staking precompile integration).
 
 ## Contents
-- `src/AlphaVault.sol` — ERC-1155 vault that wraps staked alpha
-- `src/DepositMailbox.sol` — minimal-proxy mailbox for per-user deposits
-- `src/SubnetClone.sol` — minimal-proxy stake holder for a single subnet
-- `src/ValidatorRegistry.sol` — registry of target validator weights per subnet, attested by a threshold of signers whose membership the admin manages
-- `src/interfaces/` — Bittensor precompile interfaces (IStaking, IMetagraph, IAddressMapping) + IValidatorRegistry
-- `test/` — Foundry tests + mocks for the precompiles
+- `src/AlphaVault.sol` - ERC-1155 vault that wraps staked alpha
+- `src/DepositMailbox.sol` - minimal-proxy mailbox for per-user deposits
+- `src/SubnetClone.sol` - minimal-proxy stake holder for a single subnet
+- `src/ValidatorRegistry.sol` - registry of target validator weights per subnet, attested by a threshold of signers whose membership the admin manages
+- `src/interfaces/` - Bittensor precompile interfaces (IStaking, IAlpha, ISubnet, IAddressMapping) + IValidatorRegistry
+- `test/` - Foundry tests + mocks for the precompiles
 
-## Subnet dissolution
+## Documentation
 
-Subtensor dissolves subnets asynchronously. While cleanup is in progress, the
-vault temporarily freezes share-priced operations for the affected netuid so
-they cannot price or distribute an incomplete TAO refund.
+- [How it works](docs/overview.md) - the mental model: mailboxes, clones,
+  token ids, share price, the validator registry
+- [User guide](docs/user-guide.md) - wrapping, exiting, fixing mistakes
+- [Attester guide](docs/attester-guide.md) - producing and submitting
+  validator-weight attestations
+- [Edge cases](docs/edge-cases.md) - dissolution, disabled transfers, the
+  chain's minimums, stray TAO
+- [Security model](docs/security-model.md) - roles, trust boundaries,
+  safeguards
 
-The blackout is scoped by netuid because Subtensor's precompile does not
-identify the registration generation being dissolved. As a result, an older,
-already-dissolved position can also be temporarily non-redeemable while a
-successor on the same netuid is dissolving. Redemption resumes when that
-cleanup completes. This conservative availability tradeoff avoids adding
-per-generation finalization storage and its gas cost to every unwrap.
+Tooling docs: [`scripts/README.md`](scripts/README.md) for the on-chain
+observability scripts, [`e2e/README.md`](e2e/README.md) for the end-to-end
+suite.
 
 ## Build
 ```bash
