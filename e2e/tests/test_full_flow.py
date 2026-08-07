@@ -58,8 +58,7 @@ def test_full_flow(env):
         for hotkey_pubkey in env.subnet_hotkey_pubkeys(subnet_index):
             env.vault_send(
                 1_000_000, f"wrap for netuid {netuid}, hotkey {hotkey_pubkey[:18]}... failed",
-                "wrap(address,uint256,bytes32)",
-                config.WRAPPER_USER_ADDRESS, netuid, hotkey_pubkey,
+                "wrap(uint256,bytes32)", netuid, hotkey_pubkey,
             )
 
     # --- Phase 8: verify deposits ----------------------------------------------

@@ -3,7 +3,6 @@ pragma solidity ^0.8.20;
 
 import { Vm } from "forge-std/Test.sol";
 import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { CloneBase } from "src/CloneBase.sol";
 import { DepositMailbox } from "src/DepositMailbox.sol";
@@ -21,17 +20,21 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     function test_RevertWhen_ConstructorZeroMailboxLogic() public {
         vm.expectRevert(AlphaVault.ZeroAddress.selector);
-        new AlphaVault("https://api.tao20.io/{id}.json", address(0), address(subnetLogic), address(registry));
+        new AlphaVault(VAULT_URI, address(0), address(subnetLogic), address(registry));
     }
 
     function test_RevertWhen_ConstructorZeroSubnetLogic() public {
         vm.expectRevert(AlphaVault.ZeroAddress.selector);
-        new AlphaVault("https://api.tao20.io/{id}.json", address(mailboxLogic), address(0), address(registry));
+        new AlphaVault(VAULT_URI, address(mailboxLogic), address(0), address(registry));
     }
 
     function test_RevertWhen_ConstructorZeroValidatorRegistry() public {
         vm.expectRevert(AlphaVault.ZeroAddress.selector);
-        new AlphaVault("https://api.tao20.io/{id}.json", address(mailboxLogic), address(subnetLogic), address(0));
+        new AlphaVault(VAULT_URI, address(mailboxLogic), address(subnetLogic), address(0));
+    }
+
+    function test_Uri_ReturnsConstructorValue() public view {
+        assertEq(vault.uri(TOKEN1), VAULT_URI);
     }
 
     // ------------------ Best Validator Selection -----------------------------
@@ -105,7 +108,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     function test_RevertWhen_WrapZero() public {
         vm.prank(alice);
         vm.expectRevert(AlphaVault.ZeroAmount.selector);
-        vault.wrap(alice, NETUID1, hotkey1);
+        vault.wrap(NETUID1, hotkey1);
     }
 
     // ------------------ Share Price ------------------------------------------
@@ -244,6 +247,12 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         CloneBase(payable(clone)).initialize(address(0xdead));
     }
 
+    function test_RevertWhen_MailboxInitializeForeignWrapper() public {
+        address clone = Clones.clone(address(mailboxLogic));
+        vm.expectRevert(CloneBase.UnauthorizedInitializer.selector);
+        CloneBase(payable(clone)).initialize(address(0xbeef));
+    }
+
     // ------------------ Preview ----------------------------------------------
 
     function testFuzz_PreviewWrapScalesLinearlyOnEmptyVault(uint256 assets) public view {
@@ -317,17 +326,6 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, bobShares, bobSub);
         assertEq(vault.balanceOf(bob, TOKEN1), 0);
         assertEq(vault.totalStake(TOKEN1), 0);
-    }
-
-    // ------------------ wrap unauthorized ---------------------
-
-    function test_WrapUnauthorized() public {
-        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
-
-        // Bob (not alice, not owner) should revert
-        vm.prank(bob);
-        vm.expectRevert(AlphaVault.UnauthorizedCaller.selector);
-        vault.wrap(alice, NETUID1, hotkey1);
     }
 
     function test_SubnetIsolation() public {
@@ -548,25 +546,6 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     function test_ValidatorRegistry_SetAtConstruction() public view {
         assertEq(address(vault.validatorRegistry()), address(registry));
-    }
-
-    // ------------------ setURI -------------------------------------------
-
-    function test_SetURI() public {
-        vault.setURI("https://new-uri.io/{id}.json");
-        assertEq(vault.uri(0), "https://new-uri.io/{id}.json");
-    }
-
-    function test_SetURIOnlyOwner() public {
-        vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
-        vault.setURI("https://malicious.io/{id}.json");
-    }
-
-    function test_RevertWhen_MailboxInitializeForeignWrapper() public {
-        address clone = Clones.clone(address(mailboxLogic));
-        vm.expectRevert(CloneBase.UnauthorizedInitializer.selector);
-        CloneBase(payable(clone)).initialize(address(0xbeef));
     }
 
     function test_RevertWhen_RegistryWhenNoValidatorsSet() public {
@@ -817,7 +796,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(AlphaVault.ChosenHotkeyNotInSet.selector);
-        vault.wrap(alice, NETUID1, hotkey4);
+        vault.wrap(NETUID1, hotkey4);
 
         bytes32 aliceSub = _toSubstrate(alice);
         vm.prank(alice);
@@ -948,7 +927,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     function test_RevertWhen_WrapSubnetNotRegistered() public {
         vm.prank(alice);
         vm.expectRevert(AlphaVault.SubnetNotRegistered.selector);
-        vault.wrap(alice, 42, hotkey1);
+        vault.wrap(42, hotkey1);
     }
 
     function test_WrapAfterRecycleDeploysNewCloneAndIsolatesOldShares() public {
@@ -1140,7 +1119,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(AlphaVault.SubnetInDissolutionBlackoutPeriod.selector);
-        vault.wrap(alice, NETUID1, hotkey1);
+        vault.wrap(NETUID1, hotkey1);
     }
 
     function test_RevertWhen_UnwrapDuringEarlyBlackout() public {
@@ -1224,7 +1203,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(AlphaVault.SubnetNotRegistered.selector);
-        vault.wrap(alice, NETUID1, hotkey1);
+        vault.wrap(NETUID1, hotkey1);
     }
 
     function test_RevertWhen_RebalanceDuringLateBlackout() public {
@@ -1693,7 +1672,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, NETUID1, 30 ether, hotkey4);
         vm.prank(alice);
         vm.expectRevert(AlphaVault.ChosenHotkeyNotInSet.selector);
-        vault.wrap(alice, NETUID1, hotkey4);
+        vault.wrap(NETUID1, hotkey4);
     }
 
     function test_WrapCount1ChosenIsValidatorNoMoves() public {
@@ -1710,7 +1689,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     function test_RevertWhen_WrapZeroChosenHotkey() public {
         vm.prank(alice);
         vm.expectRevert(AlphaVault.ZeroHotkey.selector);
-        vault.wrap(alice, NETUID1, bytes32(0));
+        vault.wrap(NETUID1, bytes32(0));
     }
 
     function test_RevertWhen_WrapWhenDepositBelowMinStake() public {
@@ -1718,7 +1697,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, NETUID1, 1_999_999, hotkey1);
         vm.prank(alice);
         vm.expectRevert(AlphaVault.DepositTooSmall.selector);
-        vault.wrap(alice, NETUID1, hotkey1);
+        vault.wrap(NETUID1, hotkey1);
     }
 
     function test_WrapAcceptsExactlyMinStakeCount1() public {
@@ -1734,7 +1713,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, NETUID1, 10 ether, hotkey1);
         vm.prank(alice);
         vm.expectRevert(AlphaVault.ZeroAmount.selector);
-        vault.wrap(alice, NETUID1, hotkey2);
+        vault.wrap(NETUID1, hotkey2);
     }
 
     function test_WrapDerivesMailboxColdkeyFromUserClone() public {

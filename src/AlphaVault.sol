@@ -3,8 +3,6 @@ pragma solidity ^0.8.20;
 
 import { ERC1155 } from "@openzeppelin/contracts/token/ERC1155/ERC1155.sol";
 import { ERC1155Supply } from "@openzeppelin/contracts/token/ERC1155/extensions/ERC1155Supply.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
-import { Ownable2Step } from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -26,6 +24,8 @@ import { ISubnet, SUBNET_PRECOMPILE } from "./interfaces/ISubnet.sol";
 ///     Integrators should read `sharePrice`, which also reverts during dissolution.
 ///   - EIP-1167 clones serve as deterministic "Mailbox" deposit addresses per (user, netuid).
 ///   - Validators + weights are read exclusively from ValidatorRegistry (no on-chain fallback).
+///     Its address is immutable and the vault has no admin; weights are attested by a threshold of
+///     registry signers, whose membership the registry admin rotates - the one privileged role left.
 ///   - Deposits and unwraps rebalance toward the attested weights (up to N-1 pre-checked
 ///     `moveStake`s; sub-floor and zero-price moves are skipped).
 ///   - Explicit `rebalance(netuid)` is still callable if rebalancing is desired immediately.
@@ -37,7 +37,7 @@ import { ISubnet, SUBNET_PRECOMPILE } from "./interfaces/ISubnet.sol";
 ///     claims through a cumulative per-share index, never the share price. Arrivals are recorded at
 ///     the next balance change or claim; whatever is still unrecorded when dissolution starts folds
 ///     into the pro-rata refund.
-contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
+contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     // -------------------- Immutables --------------------------------------------
     address public immutable mailboxLogic;
     address public immutable subnetLogic;
@@ -115,7 +115,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     error ZeroColdkey();
     error InsufficientShares();
     error NoValidatorFound();
-    error UnauthorizedCaller();
     error SubnetNotRegistered();
     error SubnetInDissolutionBlackoutPeriod();
     error SubnetDissolved();
@@ -132,9 +131,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     error GatherBelowFloor();
 
     // -------------------- Constructor -------------------------------------------
+    /// @param _uri ERC1155 metadata URI template, fixed for the contract's lifetime.
     constructor(string memory _uri, address _mailboxLogic, address _subnetLogic, address _validatorRegistry)
         ERC1155(_uri)
-        Ownable(msg.sender)
     {
         if (_mailboxLogic == address(0) || _subnetLogic == address(0) || _validatorRegistry == address(0)) {
             revert ZeroAddress();
@@ -177,9 +176,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         return Clones.predictDeterministicAddress(mailboxLogic, salt, address(this));
     }
 
-    /// @notice Flush the user's mailbox stake under `chosenHotkey` to the subnet clone and
+    /// @notice Flush the caller's mailbox stake under `chosenHotkey` to the subnet clone and
     ///         rebalance the position to the attested BPS weights.
-    /// @dev    Caller-restriction prevents an attacker flushing the mailbox before the user is ready.
+    /// @dev    Shares mint to the caller; no account can flush another account's mailbox.
     ///         The call flushes only the mailbox balance recorded under `chosenHotkey`; a mailbox
     ///         holding stake under multiple hotkeys requires one `wrap` per hotkey.
     ///         `chosenHotkey` must be in the current attested validator set; reverts with
@@ -194,8 +193,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
     ///         produces a movable residual.
     ///         Reverts `SubnetInDissolutionBlackoutPeriod` while a dissolving subnet still has a
     ///         registration block, then `SubnetNotRegistered` once cleanup has removed it.
-    function wrap(address user, uint256 netuid, bytes32 chosenHotkey) external nonReentrant {
-        if (msg.sender != user && msg.sender != owner()) revert UnauthorizedCaller();
+    function wrap(uint256 netuid, bytes32 chosenHotkey) external nonReentrant {
         if (chosenHotkey == bytes32(0)) revert ZeroHotkey();
 
         uint256 tokenId = currentTokenId(netuid);
@@ -219,7 +217,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         address clone = subnetClone[tokenId];
         if (clone == address(0)) clone = _deploySubnetClone(tokenId);
 
-        address userClone = _ensureMailboxClone(user, netuid);
+        address userClone = _ensureMailboxClone(msg.sender, netuid);
         bytes32 destColdkey = _coldkeyOf(clone);
 
         uint256 totalDeposit = IStaking(STAKING_PRECOMPILE).getStake(chosenHotkey, _coldkeyOf(userClone), netuid);
@@ -243,9 +241,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         // shares through the zero-backing unwrap resets supply and lifts it.
         if (totalSupply(tokenId) + shares > SUPPLY_CAP) revert SupplyCapExceeded();
 
-        _mint(user, tokenId, shares, "");
+        _mint(msg.sender, tokenId, shares, "");
 
-        emit Deposited(user, tokenId, totalDeposit, shares);
+        emit Deposited(msg.sender, tokenId, totalDeposit, shares);
     }
 
     // -------------------- Unwrap Flow -----------------------------------------
@@ -719,11 +717,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, Ownable2Step, ReentrancyGuard {
         return hotkeys;
     }
 
-    // -------------------- Admin -------------------------------------------------
-
-    function setURI(string calldata newUri) external onlyOwner {
-        _setURI(newUri);
-    }
+    // -------------------- Mailbox Recovery --------------------------------------
 
     /// @notice Reclaim native TAO stuck in the caller's mailbox clone after subnet deregistration.
     /// @dev    Deploys the mailbox clone lazily if it was never materialized, so the TAO refund
