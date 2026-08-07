@@ -10,11 +10,11 @@ for the people producing those signatures.
 One attestation sets the complete validator list for one subnet:
 
     struct WeightAttestation {
-        uint256   netuid;
-        bytes32[] hotkeys;   // the 32-byte key an SS58 address decodes to
-        uint256[] weights;   // basis points
-        uint256   nonce;
-        uint256   deadline;  // unix timestamp
+        uint256   netuid;    // subnet whose validator list this sets
+        bytes32[] hotkeys;   // validators the vault stakes this subnet's alpha under
+        uint256[] weights;   // each validator's share of the stake, in basis points
+        uint256   nonce;     // orders this subnet's updates
+        uint256   deadline;  // submission cutoff, unix seconds
     }
 
 The registry enforces at submission time:
