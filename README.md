@@ -6,6 +6,7 @@ Bittensor alpha-token wrapper (ERC-1155 vault + staking precompile integration).
 - `src/AlphaVault.sol` - ERC-1155 vault that wraps staked alpha
 - `src/DepositMailbox.sol` - minimal-proxy mailbox for per-user deposits
 - `src/SubnetClone.sol` - minimal-proxy stake holder for a single subnet
+- `src/CloneBase.sol` - shared base of both clones: vault-only access, one-shot initialization
 - `src/ValidatorRegistry.sol` - registry of target validator weights per subnet, attested by a threshold of signers whose membership the admin manages
 - `src/interfaces/` - Bittensor precompile interfaces (IStaking, IAlpha, ISubnet, IAddressMapping) + IValidatorRegistry
 - `test/` - Foundry tests + mocks for the precompiles
@@ -27,9 +28,11 @@ observability scripts, [`e2e/README.md`](e2e/README.md) for the end-to-end
 suite.
 
 ## Build
+
+Dependencies are vendored as git submodules:
+
 ```bash
-forge install foundry-rs/forge-std --no-commit
-forge install OpenZeppelin/openzeppelin-contracts --no-commit
+git submodule update --init --recursive
 forge build
 forge test
 ```

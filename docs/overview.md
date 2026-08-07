@@ -39,8 +39,9 @@ If a subnet is dissolved and its netuid later reused, the new subnet gets
 a new token id. Old shares keep pointing at the old position and its TAO
 refund; they do not carry over.
 
-There is no setup call. The first `wrap` on a subnet deploys the clone and
-opens the position.
+No setup is required: the first `wrap` on a subnet deploys the clone and
+opens the position. `createSubnetProxy(netuid)` merely deploys it ahead
+of time.
 
 ## Share price
 
@@ -54,14 +55,15 @@ tracked separately (see [edge-cases.md](edge-cases.md)).
 ## Where the stake sits
 
 The registry lists up to three validator hotkeys per subnet, with weights
-in basis points. Deposits and withdrawals rebalance the clone's stake
+in basis points. Deposits and alpha exits rebalance the clone's stake
 toward those weights as a side effect, and anyone may call
 `rebalance(netuid)` to realign immediately, for example right after the
-registry changes. Moves the chain would reject as too small are skipped;
-a drifted split is harmless because share value depends on the total
-stake, not on how it is split.
+registry changes; the TAO exit moves nothing and sells from wherever the
+stake sits. Moves the chain would reject as too small are skipped; a
+drifted split is harmless because share value depends on the total stake,
+not on how it is split.
 
-When the registry drops a validator, the next state-changing call first
-rolls the stake off it onto the current set. The vault remembers which
-hotkeys it last used (`lastSeenHotkeys`), so backing is never forgotten on
-a rotated-out validator.
+When the registry drops a validator, the next deposit, alpha exit or
+`rebalance` first rolls the stake off it onto the current set. The vault
+remembers which hotkeys it last used (`lastSeenHotkeys`), so backing is
+never forgotten on a rotated-out validator.

@@ -7,8 +7,10 @@ already staked on the subnet you want to wrap. Read
 ## Wrapping
 
 1. Check the validator set: `getCurrentValidators(netuid)` returns up to
-   three hotkeys. Pick one; the deposit must sit under a hotkey from this
-   set or `wrap` refuses it.
+   three hotkeys. The vault only accepts deposits sitting under one of
+   them. A coldkey-to-coldkey transfer cannot change the hotkey, so if
+   your stake is delegated elsewhere, move it under one of these first
+   (the chain's move_stake call).
 2. Get your deposit address: `getDepositAddress(you, netuid)`. This is an
    EVM address controlled by the vault, unique to you and the subnet.
 3. Convert that address to a substrate coldkey. On-chain, the
@@ -17,11 +19,12 @@ already staked on the subnet you want to wrap. Read
    HashedAddressMapping; `e2e/alpha_e2e/substrate.py` has a reference
    implementation.
 4. Transfer your staked alpha to that coldkey with a substrate
-   transfer_stake call, same subnet, keeping it under the hotkey you
-   picked.
-5. Call `wrap(netuid, chosenHotkey)` from the same EVM account you used in
-   step 2. The vault collects the mailbox balance under that hotkey and
-   mints shares to you.
+   transfer_stake call, same subnet. The stake stays under its hotkey,
+   which is why that hotkey must be one of the validators from step 1.
+5. Call `wrap(netuid, chosenHotkey)` from the same EVM account you used
+   in step 2, naming the hotkey your deposit sits under. The vault
+   collects the mailbox balance under that hotkey and mints shares to
+   you.
 
 One `wrap` collects one hotkey's balance, so stake parked under several
 hotkeys takes one call each. A deposit whose TAO value is below the
@@ -49,18 +52,27 @@ single transfer. The alpha arrives still staked on the subnet, under one
 of the current validators; unstake it yourself if you want liquid TAO.
 Delivery is all-or-nothing: you receive the full quote, to within a few
 RAO of chain-side rounding, or the call reverts. A request below the
-chain's minimum stake size reverts (`WithdrawTooSmall`); use the TAO exit
-for those. Double-check the coldkey argument - the chain delivers to
-whatever key you name.
+chain's minimum stake size reverts (`WithdrawTooSmall`); see the TAO exit
+below for the way out. Double-check the coldkey argument - the chain
+delivers to whatever key you name.
 
 `unwrapForTao(tokenId, shares, minTaoOut)` sells your share of the backing
 into the subnet's pool and pays you native TAO on your EVM address. This
 is a market order: the payout depends on pool depth and fees, and there is
-no preview, so protect yourself with `minTaoOut`. If the chain will not
-take part of the sale cleanly, that part stays staked and comes back to
-you as shares; you only burn what actually sold. This exit also works for
-positions too small for `unwrap`: a burn of your full balance drains every
-slot completely, and the chain exempts full drains from its minimum.
+no preview, so protect yourself with `minTaoOut`. Mind the units: native
+TAO amounts, `minTaoOut` included, are 18-decimal EVM wei, while alpha
+amounts use the chain's 9 decimals - a floor quoted in alpha units is a
+billion times too low and protects nothing. If the chain will not take
+part of the sale cleanly, that part stays staked and comes back to you as
+shares, so you only burn what actually sold. The exception is a burn of
+the token's entire supply, which drops a leftover too small to ever sell
+instead of leaving an unexitable position behind.
+
+This is also the exit for positions too small for `unwrap`. If you hold
+the entire supply, burning it all drains every slot completely, and the
+chain exempts full drains from its minimum. With other holders in the
+token a sub-minimum burn is refused (`WithdrawTooSmall`); top your
+position up with one more deposit, then exit the whole thing in one call.
 
 After a subnet dissolves, `unwrap(tokenId, shares, anything)` pays your
 pro-rata part of the subnet's TAO refund in native TAO; the coldkey
@@ -86,7 +98,10 @@ on request:
 
 - `reclaimAlphaFromMailbox(netuid, hotkey, destColdkey)` transfers it to
   any coldkey. Use this if you parked stake under a hotkey outside the
-  validator set, or changed your mind before wrapping.
+  validator set, or changed your mind before wrapping. It moves stake
+  between coldkeys, so it reverts while the subnet owner has alpha
+  transfers disabled ([edge-cases.md](edge-cases.md)); the TAO variant
+  below keeps working.
 - `reclaimMailboxAlphaAsTao(netuid, hotkey, minTaoOut)` sells it and pays
   you native TAO instead.
 - `reclaimTaoFromMailbox(netuid)` recovers native TAO sitting on the
