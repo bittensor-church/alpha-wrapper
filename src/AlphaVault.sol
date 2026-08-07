@@ -178,7 +178,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
     /// @notice Flush the caller's mailbox stake under `chosenHotkey` to the subnet clone and
     ///         rebalance the position to the attested BPS weights.
-    /// @dev    The caller's own mailbox is the only one this drains, and the shares mint to it.
+    /// @dev    Shares mint to the caller; no account can flush another account's mailbox.
     ///         The call flushes only the mailbox balance recorded under `chosenHotkey`; a mailbox
     ///         holding stake under multiple hotkeys requires one `wrap` per hotkey.
     ///         `chosenHotkey` must be in the current attested validator set; reverts with
