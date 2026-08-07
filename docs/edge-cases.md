@@ -48,27 +48,31 @@ working.
 
 ## The chain's minimum stake size
 
-Subtensor rejects stake operations below a TAO-denominated minimum, and
-its rejection burns all gas sent with the call. When the subnet's alpha
-price is readable on the EVM, the vault checks sizes before calling the
-chain; at a zero price read no check can run and a too-small call fails
-chain-side, at full gas. The checks:
+Subtensor rejects stake operations below TAO-denominated minimums: a
+higher one for unstakes, a lower one for transfers and moves. Its
+rejection burns all gas sent with the call, and the only minimum
+readable on the EVM is the higher one, so the vault applies that as one
+conservative floor to every operation - it can refuse a deposit the
+chain itself would still move. When the subnet's alpha price is
+readable, the vault checks sizes before calling the chain; at a zero
+price read no check can run and a too-small call fails chain-side, at
+full gas. The checks:
 
-- A deposit under the minimum reverts `DepositTooSmall`; top the mailbox
+- A deposit under the floor reverts `DepositTooSmall`; top the mailbox
   up and wrap once.
-- An alpha-exit request under the minimum reverts `WithdrawTooSmall`,
+- An alpha-exit request under the floor reverts `WithdrawTooSmall`,
   and the related guards (`GatherBelowFloor`, `ConsolidationBelowFloor`)
   refuse internal moves that provably cannot clear it.
-- A rebalance move under the minimum is silently skipped. The split
+- A rebalance move under the floor is silently skipped. The split
   drifts from target until a later operation produces a movable amount;
   share value is unaffected because it depends on the total, not the
   split.
 
 No position is stuck for good. A burn of the token's entire supply via
-`unwrapForTao` drains every slot completely, and the chain exempts full
-drains from the minimum, so the last holder always has an exit. A
-sub-minimum position with co-holders takes one top-up deposit first,
-then exits in a single call.
+`unwrapForTao` is exempt from the floor, so the last holder can always
+sell - at worst the pool fills short and hands part back as shares for
+another try. A sub-floor position with co-holders takes one top-up
+deposit first, then exits the same way.
 
 ## The chain's dust sweep
 

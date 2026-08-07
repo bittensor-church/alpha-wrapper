@@ -28,7 +28,8 @@ A hostile validator set can break wrapping and the alpha exit, since
 deposits must name a listed hotkey and stake cannot be moved onto
 validators that do not exist. It cannot lock funds in: the TAO
 exit never moves stake between validators, it sells from wherever the
-stake actually sits, so holders can always leave with TAO.
+stake actually sits, so holders can still leave with TAO, if need be
+over several sales.
 
 ## What holders trust
 

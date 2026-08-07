@@ -36,7 +36,9 @@ beforehand.
 
 Shares are ERC-1155 balances under `currentTokenId(netuid)`. They transfer
 like any ERC-1155 token. `sharePrice(tokenId)` gives alpha per share
-(1e18-scaled), so your alpha is `balance * sharePrice / 1e18`. Keep note
+(1e18-scaled), so `balance * sharePrice / 1e18` estimates your alpha; the
+exact quote for a given burn comes from `previewUnwrap`, whose rounding
+differs a little. Keep note
 of your token id (it is indexed in the `Deposited` event): if the subnet
 is ever dissolved you will need it, because `currentTokenId` only answers
 for live subnets.
@@ -68,11 +70,12 @@ shares, so you only burn what actually sold. The exception is a burn of
 the token's entire supply, which drops a leftover too small to ever sell
 instead of leaving an unexitable position behind.
 
-This is also the exit for positions too small for `unwrap`. If you hold
-the entire supply, burning it all drains every slot completely, and the
-chain exempts full drains from its minimum. With other holders in the
-token a sub-minimum burn is refused (`WithdrawTooSmall`); top your
-position up with one more deposit, then exit the whole thing in one call.
+This is also the exit for positions too small for `unwrap`: a burn of
+the token's entire supply is exempt from the chain's minimum, so the
+last holder can always sell - at worst the pool fills short and part
+comes back as shares for another try. With other holders in the token a
+sub-minimum burn is refused (`WithdrawTooSmall`); top your position up
+with one more deposit, then exit.
 
 After a subnet dissolves, `unwrap(tokenId, shares, anything)` pays your
 pro-rata part of the subnet's TAO refund in native TAO; the coldkey

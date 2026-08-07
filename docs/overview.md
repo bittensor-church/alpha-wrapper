@@ -3,7 +3,7 @@
 The wrapper turns staked alpha on a Bittensor subnet into ERC-1155 tokens
 on the same chain's EVM. You hand it alpha that is already staked; it keeps
 that alpha staked under its own coldkeys and mints you shares. Shares are
-fungible and transferable, and can be redeemed at any time for the staked
+fungible and transferable, and can normally be redeemed for the staked
 alpha or for its TAO value.
 
 ## The contracts
