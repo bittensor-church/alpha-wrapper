@@ -10,7 +10,7 @@ for the people producing those signatures.
 One attestation sets the complete validator list for one subnet:
 
     struct WeightAttestation {
-        uint256   netuid;    // subnet whose validator list this sets
+        uint256   netuid;    // the subnet the attestation applies to
         bytes32[] hotkeys;   // validators the vault stakes this subnet's alpha under
         uint256[] weights;   // each validator's share of the stake, in basis points
         uint256   nonce;     // orders this subnet's updates
