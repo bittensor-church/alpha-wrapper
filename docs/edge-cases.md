@@ -10,13 +10,9 @@ Subtensor dissolves subnets asynchronously. Chain-side cleanup burns the
 subnet's alpha, converts the pool to TAO and refunds holders pro-rata,
 the vault's clone included.
 
-While cleanup runs (the subnet precompile reports
-`isSubnetDissolving(netuid)`) the vault freezes every share-priced
-operation on that netuid: `wrap`, both unwraps, `rebalance`, `sharePrice`
-and the previews all revert - with `SubnetInDissolutionBlackoutPeriod`,
-or with `SubnetNotRegistered` for `wrap` and `rebalance` late in cleanup,
-once the chain has deleted the subnet's registration. Pricing mid-refund
-would distribute an incomplete amount.
+While cleanup runs the vault freezes every share-priced operation on
+that netuid; the calls revert with `SubnetInDissolutionBlackoutPeriod`.
+Pricing mid-refund would distribute an incomplete amount.
 
 Once cleanup completes the position is permanently dissolved: the
 netuid's current registration block differs from the token id's. From
