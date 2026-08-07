@@ -1,7 +1,8 @@
 # Edge cases
 
-Subtensor can change a subnet out from under the vault. This page lists
-those events and what the vault does about each.
+Events outside the vault's control - dissolution, disabled transfers,
+the chain's minimums, dust sweeps, stray TAO - can hit a position at any
+time. This page lists them and what the vault does about each.
 
 ## Subnet dissolution
 
