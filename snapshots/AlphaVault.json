@@ -1,9 +1,9 @@
 {
-  "rebalance: after registry weight update": "126430",
-  "unwrap: full": "154570",
-  "unwrap: partial": "198413",
-  "unwrapForTao: partial tail above floor": "183240",
-  "unwrapForTao: sub-floor tail refunded": "160937",
-  "wrap: first": "496628",
-  "wrap: subsequent": "269349"
+  "rebalance: after registry weight update": "126431",
+  "unwrap: full": "154571",
+  "unwrap: partial": "198414",
+  "unwrapForTao: partial tail above floor": "183263",
+  "unwrapForTao: sub-floor tail refunded": "160960",
+  "wrap: first": "495823",
+  "wrap: subsequent": "268544"
 }

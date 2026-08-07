@@ -277,7 +277,7 @@ class Environment:
             substrate.h160_to_ss58(mailbox), hotkey_ss58, netuid, amount_rao,
         )
         return self.vault_send(
-            gas_limit, message, "wrap(address,uint256,bytes32)", user, netuid, hotkey_pubkey,
+            gas_limit, message, "wrap(uint256,bytes32)", netuid, hotkey_pubkey,
             private_key=private_key or config.WRAPPER_USER_PRIVATE_KEY,
         )
 

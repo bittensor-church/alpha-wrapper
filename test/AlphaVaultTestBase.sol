@@ -26,7 +26,6 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     SubnetClone public subnetLogic;
     ValidatorRegistry public registry;
 
-    address public deployer = address(this);
     address public alice = makeAddr("alice");
     address public bob = makeAddr("bob");
 
@@ -38,6 +37,8 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     uint256 internal constant SIGNER_PK_1 = 0xA11CE;
     uint256 internal constant SIGNER_PK_2 = 0xB0B;
     uint256[] internal signerPks;
+
+    string internal constant VAULT_URI = "https://api.tao20.io/{id}.json";
 
     uint256 public constant NETUID1 = 1;
     uint256 public constant NETUID2 = 2;
@@ -101,7 +102,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     /// @dev `validatorRegistry` is immutable, so tests that need a different registry construct a
     ///      fresh vault against it rather than swapping it on the shared `vault`.
     function _deployVault(address _registry) internal returns (AlphaVault) {
-        return new AlphaVault("https://api.tao20.io/{id}.json", address(mailboxLogic), address(subnetLogic), _registry);
+        return new AlphaVault(VAULT_URI, address(mailboxLogic), address(subnetLogic), _registry);
     }
 
     function _setValidators(uint256 netuid, bytes32[] memory hks, uint16[] memory wts) internal {
@@ -183,7 +184,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     function _wrapHotkey(address user, uint256 netuid, bytes32 chosenHotkey) internal {
         vm.prank(user);
-        vault.wrap(user, netuid, chosenHotkey);
+        vault.wrap(netuid, chosenHotkey);
     }
 
     function _getStake(bytes32 hotkey, address who, uint256 netuid) internal view returns (uint256) {

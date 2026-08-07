@@ -13,9 +13,11 @@ import { AlphaVault } from "src/AlphaVault.sol";
 ///         with the rest of the index protocol.
 /// @dev    The validator registry is an immutable constructor dependency, supplied via the
 ///         `VALIDATOR_REGISTRY` env var (deploy/configure `ValidatorRegistry` separately first).
+///         `VAULT_URI` overrides the metadata URI; the vault cannot change it after deployment.
 contract DeployAlpha is Script {
     function run() public {
         address validatorRegistry = vm.envAddress("VALIDATOR_REGISTRY");
+        string memory vaultUri = vm.envOr("VAULT_URI", string("https://api.tao20.io/metadata/{id}.json"));
 
         vm.startBroadcast();
 
@@ -24,9 +26,7 @@ contract DeployAlpha is Script {
         console.log("DepositMailbox:        %s", address(mailboxLogic));
         console.log("SubnetClone:           %s", address(subnetLogic));
 
-        AlphaVault vault = new AlphaVault(
-            "https://api.tao20.io/metadata/{id}.json", address(mailboxLogic), address(subnetLogic), validatorRegistry
-        );
+        AlphaVault vault = new AlphaVault(vaultUri, address(mailboxLogic), address(subnetLogic), validatorRegistry);
         console.log("AlphaVault:            %s", address(vault));
 
         vm.stopBroadcast();
