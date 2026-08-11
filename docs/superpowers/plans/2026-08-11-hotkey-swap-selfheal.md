@@ -60,7 +60,6 @@ function heal(uint256 netuid, uint8 slotIdx, bytes32 candidate, uint16 evidenceN
 
 // AlphaVault constants
 uint8 private constant WALK_BOUND = 3;
-uint256 private constant HEAL_TOLERANCE = 0; // documented: no setter authority in an ownerless vault
 ```
 
 ---
@@ -231,7 +230,7 @@ Wire detection and inline recovery into every backing-reading mutating path. Thi
 - Test: `test/HotkeySwapHeal.t.sol`
 
 **Interfaces:**
-- Consumes: `HotkeyLineage.walk`, `_slots`, `_ratchetTracked`, `_consolidateRotatedStake`, `_coldkeyOf`, `WALK_BOUND`, `HEAL_TOLERANCE`.
+- Consumes: `HotkeyLineage.walk`, `_slots`, `_ratchetTracked`, `_consolidateRotatedStake`, `_coldkeyOf`, `WALK_BOUND`.
 - Produces: internal `_reconcileSlots(tokenId, clone, coldkey, currentSet, alphaPriceE18)`; event `SlotAutoHealed(uint16 indexed netuid, uint8 indexed slotIdx, bytes32 oldHotkey, bytes32 newHotkey)`; error `SlotBroken(uint16 netuid, uint8 slotIdx, bytes32 lastVisited)`.
 
 - [ ] **Step 1: Write `_reconcileSlots`** and call it at the top of the mutating paths, replacing the bare `_consolidateRotatedStake` call in `wrap` (line ~230), `_unwrapFromLiveSubnet` (~395), `rebalance` (~518), and adding it to `unwrapForTao`'s live branch (which today skips consolidation). Ordering, per slot:
@@ -243,7 +242,7 @@ for each slot i with a non-zero hotkey:
         _ratchetTracked(i, observed)          // healthy; absorb emissions
         continue
     // miss: try to follow the stake to a successor
-    (healed, next) := HotkeyLineage.walk(staking, slot.hotkey, netuid, coldkey, slot.tracked - HEAL_TOLERANCE, WALK_BOUND)
+    (healed, next) := HotkeyLineage.walk(staking, slot.hotkey, netuid, coldkey, slot.tracked, WALK_BOUND)
     if healed:
         emit SlotAutoHealed(netuid, i, slot.hotkey, next)
         slot.hotkey := next                   // tracked carries; stake proven >= tracked at `next`
