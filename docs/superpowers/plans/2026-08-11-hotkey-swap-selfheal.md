@@ -8,6 +8,18 @@
 
 **Tech Stack:** Solidity ^0.8.20, Foundry (`forge`), OpenZeppelin, Bittensor EVM precompiles (staking at `0x…0805`), subtensor `release-444` lineage getters.
 
+## As-built status (v1, 2026-08-11)
+
+Shipped as **fail-closed detection**, a deliberate narrowing of the plan below:
+
+- **What ships.** A durable per-token backing high-water. Every mutating path (`wrap`, live `unwrap`, `unwrapForTao`, `rebalance`) checks that the counted backing over the union of recorded + current validators still meets that high-water; a shortfall reverts `BackingShortfall` instead of pricing shares off an understated position. Redistribution among recorded validators leaves the union total intact (no false fire); attester re-attestation restores backing and clears the shortfall. `unwrapForTao` skips the check on a dissolved subnet (backing legitimately became TAO). Full suite green (379 tests).
+- **Why total-over-union, not per-slot.** A per-slot `getStake >= tracked` check false-fires whenever the vault (or a test) moves stake among the recorded validators; the total-over-union high-water is immune and still catches stake leaving the counted set.
+- **Deferred to a spec-444 follow-up.** The auto-heal walk and the permissionless `heal()` ladder (Tasks 4–5 below as originally written). True auto-heal requires the vault to operate on healed hotkeys that diverge from the attester registry plus a lineage-aware consolidation — materially deeper, and mis-pricing-prone if wrong. v1 recovers via attester re-attestation (the existing L0 path).
+- **Staged for that follow-up.** The two lineage getters (Task 1) and the `HotkeyLineage` walk/evidence library (Task 2) are landed and tested but not yet wired into the vault; they are the substrate the recovery half will consume.
+- **Correction carried from the design review.** F15's "only the vault's coldkey can create stake under `(·, vaultColdkey, ·)`" is false — `transfer_stake` lets a third party deposit under any coldkey. The property v1 relies on is monotonicity (backing only drops via a vault op or a swap), which holds; the check never trusts a candidate's stake as authorization.
+
+The task list below is the original plan; Tasks 4–5 describe the deferred recovery half.
+
 ## Global Constraints
 
 - Solidity `^0.8.20`; Foundry layout (`src/`, `test/`, `script/`).
