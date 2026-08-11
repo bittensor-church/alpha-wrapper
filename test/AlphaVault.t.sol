@@ -478,9 +478,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         // to a 1-RAO imbalance below the rebalance threshold.
         _simulateAlphaDepositHotkey(alice, NETUID1, 4e6, hotkey1);
         _wrapHotkey(alice, NETUID1, hotkey1);
-        bytes32 cloneColdkey = _subnetColdkey(NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneColdkey, NETUID1, 500_001);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneColdkey, NETUID1, 500_000);
+        _setVaultStakes(NETUID1, 500_001, 500_000, 0);
 
         vm.recordLogs();
         vault.rebalance(NETUID1);
@@ -1306,8 +1304,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
 
         // Drop hotkey3 one RAO below the floor, then rotate it out: untransferable rotated-out stake.
-        bytes32 cloneColdkey = _subnetColdkey(NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneColdkey, NETUID1, CHAIN_MIN_STAKE - 1);
+        _setVaultStake(hotkey3, NETUID1, CHAIN_MIN_STAKE - 1);
 
         _setNetuid1Set(hotkey1, hotkey2, hotkey4);
 
@@ -2096,12 +2093,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
 
-        // Overwrite chain-side balances with fuzzed values; ensure hk4 starts clean.
-        bytes32 cloneColdkey = _subnetColdkey(NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneColdkey, NETUID1, b1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneColdkey, NETUID1, b2);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneColdkey, NETUID1, b3);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, cloneColdkey, NETUID1, 0);
+        // Overwrite chain-side balances with fuzzed values (hk4 starts clean at 0).
+        _setVaultStakes(NETUID1, b1, b2, b3);
 
         // Rotate hotkey3 out, hotkey4 in. Same weights.
         _setNetuid1Set(hotkey1, hotkey2, hotkey4);

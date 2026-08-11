@@ -137,6 +137,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     error ConsolidationBelowFloor();
     error GatherBelowFloor();
     error TrackedOverflow();
+    error BackingShortfall(uint16 netuid, uint256 tracked, uint256 present);
 
     // -------------------- Constructor -------------------------------------------
     /// @param _uri ERC1155 metadata URI template, fixed for the contract's lifetime.
@@ -236,6 +237,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             revert DepositTooSmall();
         }
 
+        // Backing that has fallen below the recorded high-water signals an off-vault move; fail
+        // closed before the deposit lands so fresh stake cannot mask the understated position.
+        _checkBackingIntact(tokenId, nid, clone);
+
         // Flush before the consolidation so the roll can start from the fresh deposit.
         DepositMailbox(payable(userClone)).flush(destColdkey, chosenHotkey, netuid, totalDeposit);
         _consolidateRotatedStake(tokenId, clone, destColdkey, hotkeys, alphaPriceE18);
@@ -313,6 +318,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         address clone = subnetClone[tokenId];
         uint16 netuid = _netuid(tokenId);
         _requireNotDissolving(netuid);
+
+        // A dissolved subnet has legitimately converted its alpha to TAO, so its zero backing is not
+        // a shortfall; the check applies only while the position is still live.
+        if (!_isIssuedForDissolvedSubnet(tokenId)) _checkBackingIntact(tokenId, netuid, clone);
 
         (bytes32[6] memory hotkeys, uint256[6] memory balances, uint256 total) = _unionStake(tokenId, netuid, clone);
         // The dissolving window is excluded above and completed dissolution zeroes the alpha
@@ -407,6 +416,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32 coldkey = _coldkeyOf(clone);
         // Nothing on this path trades against the pool, so one price read holds for the whole call.
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
+        _checkBackingIntact(tokenId, netuid, clone);
         _consolidateRotatedStake(tokenId, clone, coldkey, hotkeys, alphaPriceE18);
 
         // After consolidation the whole backing sits on the current validators, so these three
@@ -532,6 +542,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         (bytes32[3] memory hotkeys, uint16[3] memory weights) = _resolveValidators(nid);
         bytes32 coldkey = _coldkeyOf(clone);
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
+        _checkBackingIntact(tokenId, nid, clone);
         _consolidateRotatedStake(tokenId, clone, coldkey, hotkeys, alphaPriceE18);
         _rebalance(tokenId, clone, hotkeys, weights, coldkey, alphaPriceE18);
         // Consolidation refreshed the remembered set to `hotkeys`, so their indices align.
@@ -1158,7 +1169,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     }
 
     /// @notice The remembered validator set paired with the alpha the vault last set on each hotkey.
-    function slots(uint256 tokenId) external view returns (Slot[3] memory) {
+    function slots(uint256 tokenId) public view returns (Slot[3] memory) {
         return _slots[tokenId];
     }
 
@@ -1173,7 +1184,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///      the end of every vault-signed stake path, so `tracked` ends the op equal to the actual
     ///      backing the vault just wrote - adds, removes and authorized-rotation resets alike. The
     ///      passed `hotkeys` must be the remembered set, so their indices line up with `_slots`.
-    function _refreshTracked(uint256 tokenId, bytes32[3] memory hotkeys, bytes32 coldkey, uint16 netuid) private {
+    function _refreshTracked(uint256 tokenId, bytes32[3] memory hotkeys, bytes32 coldkey, uint16 netuid) internal {
         Slot[3] storage tokenSlots = _slots[tokenId];
         IStaking staking = IStaking(STAKING_PRECOMPILE);
         for (uint256 i; i < 3;) {
@@ -1201,6 +1212,33 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         if (value > type(uint128).max) revert TrackedOverflow();
         // forge-lint: disable-next-line(unsafe-typecast)
         return uint128(value);
+    }
+
+    /// @notice Whether the vault's counted backing still meets the high-water it last recorded.
+    ///         A false reading means backing has moved off the recorded validators.
+    function isBackingIntact(uint256 tokenId) external view returns (bool) {
+        uint256 tracked = _trackedTotal(tokenId);
+        address clone = subnetClone[tokenId];
+        if (tracked == 0 || clone == address(0)) return true;
+        (,, uint256 present) = _unionStake(tokenId, _netuid(tokenId), clone);
+        return present >= tracked;
+    }
+
+    /// @dev Fails the op closed when counted backing has fallen below the high-water the vault last
+    ///      recorded - the fingerprint of stake moved off the recorded validators by an off-vault
+    ///      hotkey rename, which would otherwise price shares off an understated position.
+    ///      Redistribution among the recorded validators leaves the union total intact, and attester
+    ///      re-attestation restores it as the moved-to hotkey re-enters the counted union.
+    function _checkBackingIntact(uint256 tokenId, uint16 netuid, address clone) private view {
+        uint256 tracked = _trackedTotal(tokenId);
+        if (tracked == 0) return;
+        (,, uint256 present) = _unionStake(tokenId, netuid, clone);
+        if (present < tracked) revert BackingShortfall(netuid, tracked, present);
+    }
+
+    function _trackedTotal(uint256 tokenId) private view returns (uint256) {
+        Slot[3] storage tokenSlots = _slots[tokenId];
+        return uint256(tokenSlots[0].tracked) + uint256(tokenSlots[1].tracked) + uint256(tokenSlots[2].tracked);
     }
 
     function _ensureMailboxClone(address user, uint256 netuid) private returns (address userClone) {

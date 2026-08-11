@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import { Vm } from "forge-std/Test.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
+import { AlphaVaultHarness } from "./AlphaVaultHarness.sol";
 import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
 import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
@@ -102,7 +103,21 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     /// @dev `validatorRegistry` is immutable, so tests that need a different registry construct a
     ///      fresh vault against it rather than swapping it on the shared `vault`.
     function _deployVault(address _registry) internal returns (AlphaVault) {
-        return new AlphaVault(VAULT_URI, address(mailboxLogic), address(subnetLogic), _registry);
+        return new AlphaVaultHarness(VAULT_URI, address(mailboxLogic), address(subnetLogic), _registry);
+    }
+
+    /// @dev Brings the vault's recorded backing high-water in line with the stake a test seeded
+    ///      directly - the same effect a vault-signed op has at its end. Suites that write chain
+    ///      stake without going through wrap/unwrap call this so the backing-integrity check reads a
+    ///      consistent state, exactly as it would after a real op.
+    function _resyncTracked(uint256 netuid) internal {
+        _resyncTrackedForToken(vault.currentTokenId(netuid));
+    }
+
+    function _resyncTrackedForToken(uint256 tokenId) internal {
+        address clone = vault.subnetClone(tokenId);
+        if (clone == address(0)) return;
+        AlphaVaultHarness(address(vault)).resyncTracked(tokenId, _toSubstrate(clone));
     }
 
     function _setValidators(uint256 netuid, bytes32[] memory hks, uint16[] memory wts) internal {
@@ -205,6 +220,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     function _setVaultStake(bytes32 hotkey, uint256 netuid, uint256 amount) internal {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey, _subnetColdkey(netuid), netuid, amount);
+        _resyncTracked(netuid);
     }
 
     function _setVaultStakes(uint256 netuid, uint256 a, uint256 b, uint256 c) internal returns (uint256 total) {
@@ -213,6 +229,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneColdkey, netuid, b);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneColdkey, netuid, c);
         total = a + b + c;
+        _resyncTracked(netuid);
     }
 
     // Smallest share count whose pro-rata assets equal `targetAssets` under the share-price cushion.
@@ -268,6 +285,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         mock.setStake(hotkey3, cloneColdkey, netuid, 0);
         mock.setStake(hotkey4, cloneColdkey, netuid, 0);
         vm.deal(clone, clone.balance + taoAmount);
+        _resyncTrackedForToken(tokenId);
     }
 
     function _simulateDissolutionCompleted(uint256 netuid) internal {

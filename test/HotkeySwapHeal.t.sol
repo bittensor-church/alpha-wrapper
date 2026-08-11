@@ -3,21 +3,9 @@ pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
+import { AlphaVaultHarness } from "./AlphaVaultHarness.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
-
-/// @dev Exposes the internal ratchet so a test can drive the high-water directly; the ratchet's
-///      production call site arrives with the later health check. No production code is made
-///      test-only for this.
-contract AlphaVaultHarness is AlphaVault {
-    constructor(string memory uri, address mailboxLogic_, address subnetLogic_, address validatorRegistry_)
-        AlphaVault(uri, mailboxLogic_, subnetLogic_, validatorRegistry_)
-    { }
-
-    function ratchetTracked(uint256 tokenId, uint256 slotIdx, uint256 observed) external {
-        _ratchetTracked(tokenId, slotIdx, observed);
-    }
-}
 
 /// @dev Covers the per-slot `tracked` high-water: it mirrors the vault's own stake after every
 ///      signed move (wrap, unwrap, sell, authorized rotation), only ever ratchets upward on
@@ -108,10 +96,131 @@ contract HotkeySwapHealTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, netuid, 10 ether, hotkey1);
         _wrapHotkey(alice, netuid, hotkey1);
 
-        _setVaultStake(hotkey1, netuid, uint256(type(uint128).max) + 1);
+        // Seed the oversized stake directly (no resync) so the narrowing fires inside the op's own
+        // tracked refresh, not during setup.
+        MockStaking(STAKING_PRECOMPILE)
+            .setStake(hotkey1, _subnetColdkey(netuid), netuid, uint256(type(uint128).max) + 1);
 
         vm.expectRevert(AlphaVault.TrackedOverflow.selector);
         vault.rebalance(netuid);
+    }
+
+    function test_Wrap_RevertsWhenBackingShort() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+
+        _simulateAlphaDeposit(bob, NETUID1, 10 ether);
+        vm.prank(bob);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.wrap(NETUID1, hotkey1);
+    }
+
+    function test_Unwrap_RevertsWhenBackingShort() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+
+        vm.prank(alice);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));
+    }
+
+    function test_UnwrapForTao_RevertsWhenBackingShort() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+
+        vm.prank(alice);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.unwrapForTao(TOKEN1, shares / 2, 0);
+    }
+
+    function test_Rebalance_RevertsWhenBackingShort() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.rebalance(NETUID1);
+    }
+
+    /// @dev Views never mask the shortfall: backing reads not-intact and NAV honestly undercounts,
+    ///      so an off-chain consumer sees the same world the mutating path fails closed on.
+    function test_Views_ReportShortfallHonestly() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        uint256 navBefore = vault.totalStake(TOKEN1);
+
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+
+        assertFalse(vault.isBackingIntact(TOKEN1), "off-vault move reports backing not intact");
+        assertLt(vault.totalStake(TOKEN1), navBefore, "NAV honestly reflects the undercount");
+    }
+
+    /// @dev Emissions raise a hotkey's stake without a vault move; the check reads at or above the
+    ///      mark, so the op proceeds and the backing simply grows.
+    function test_Emission_DoesNotBreakSlot() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+
+        _simulateEmissions(NETUID1, 5 ether);
+        vault.rebalance(NETUID1);
+
+        assertGt(vault.totalStake(TOKEN1), 30 ether, "emission counted into NAV, no false break");
+    }
+
+    /// @dev Moving the whole position onto one recorded validator keeps the union total, so the
+    ///      check does not fire - only stake leaving the counted set is a shortfall.
+    function test_Redistribution_IsNotShortfall() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+
+        bytes32 coldkey = _subnetColdkey(NETUID1);
+        uint256 whole =
+            _getVaultStake(hotkey1, NETUID1) + _getVaultStake(hotkey2, NETUID1) + _getVaultStake(hotkey3, NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, coldkey, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, coldkey, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, whole);
+
+        vault.rebalance(NETUID1);
+        assertTrue(vault.isBackingIntact(TOKEN1), "redistribution kept backing intact");
+    }
+
+    /// @dev The gate is the fingerprint of an off-vault move, not the registry set changing: once
+    ///      attesters re-attest the moved-to hotkey, it leaves the recorded set and consolidation
+    ///      adopts the new one, so the op recovers without any vault-held recovery path.
+    function test_AttesterReattest_RecoversAfterBroken() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+
+        _setValidators(
+            NETUID1, _hotkeys(hotkey4, hotkey2, hotkey3), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
+        );
+        vault.rebalance(NETUID1);
+
+        AlphaVault.Slot[3] memory slots = vault.slots(TOKEN1);
+        assertEq(slots[0].hotkey, hotkey4, "slot 0 adopts the re-attested hotkey");
+        assertGt(uint256(slots[0].tracked), 0, "tracked re-established on the new hotkey");
+
+        uint256 recoveredNav =
+            _getVaultStake(hotkey4, NETUID1) + _getVaultStake(hotkey2, NETUID1) + _getVaultStake(hotkey3, NETUID1);
+        assertEq(vault.totalStake(TOKEN1), recoveredNav, "NAV counts the re-attested hotkey");
+        assertApproxEqAbs(recoveredNav, 30 ether, 0.01 ether, "backing whole after recovery");
+    }
+
+    /// @dev The dissolution guard runs before the health check, so a dissolving subnet reverts on the
+    ///      blackout, never on a broken slot.
+    function test_Dissolving_SkipsHealthCheck() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+        _simulateDissolutionStarted(NETUID1);
+
+        vm.prank(alice);
+        vm.expectRevert(AlphaVault.SubnetInDissolutionBlackoutPeriod.selector);
+        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));
+    }
+
+    /// @dev Moves the clone's whole backing off `fromHotkey` onto `toHotkey` with no vault call,
+    ///      standing in for a validator coldkey renaming its hotkey out from under the position.
+    function _simulateOffVaultSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
+        bytes32 coldkey = _subnetColdkey(netuid);
+        uint256 amount = _getStakeForColdkey(fromHotkey, coldkey, netuid);
+        MockStaking(STAKING_PRECOMPILE).setStake(fromHotkey, coldkey, netuid, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(toHotkey, coldkey, netuid, amount);
     }
 
     function _harnessWrap(address user, uint256 netuid, uint256 amount, bytes32 hotkey)
