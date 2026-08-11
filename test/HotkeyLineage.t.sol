@@ -163,6 +163,7 @@ contract HotkeyLineageTest is Test {
         bytes32 candidate = keccak256("candidate-edge");
         staking.setHotkeySuccessor(from, NETUID, candidate);
         assertTrue(harness.successorLeadsTo(iStaking, from, candidate, NETUID));
+        assertFalse(harness.successorLeadsTo(iStaking, from, keccak256("unrelated"), NETUID));
     }
 
     function test_SuccessorLeadsTo_ViaRoot() public {

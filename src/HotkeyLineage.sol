@@ -26,7 +26,8 @@ library HotkeyLineage {
     }
 
     /// @notice True when `a` and `b` share a lineage root.
-    /// @dev Absent root folds to self on both sides, matching the chain's OptionQuery semantics.
+    /// @dev Absent root folds to self on both sides, matching how the chain reports a key that has
+    ///      no recorded root.
     function sameRoot(IStaking staking, bytes32 a, bytes32 b, uint16 netuid) internal view returns (bool) {
         return _rootOrSelf(staking, a, netuid) == _rootOrSelf(staking, b, netuid);
     }
