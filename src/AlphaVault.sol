@@ -47,9 +47,16 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     mapping(address => bool) public cloneDeployed;
     mapping(uint256 => address) public subnetClone;
 
-    /// @dev Validators the clone's stake was distributed across at the last state-mutating call;
-    ///      refreshed only after a clean consolidation.
-    mapping(uint256 => bytes32[3]) private _lastSeenHotkeys;
+    /// @dev A remembered validator slot: the hotkey the clone's stake was distributed across at the
+    ///      last state-mutating call, paired with `tracked` - the alpha the vault last set on that
+    ///      hotkey through its own signed move, the expectation later heal logic gates against.
+    struct Slot {
+        bytes32 hotkey;
+        uint128 tracked;
+    }
+
+    /// @dev The remembered validator set per token; refreshed only after a clean consolidation.
+    mapping(uint256 => Slot[3]) private _slots;
 
     /// @notice Cumulative TAO credited per share over a token's lifetime, scaled by
     ///         `TAO_INDEX_PRECISION`. Grows when the clone receives TAO the vault did not pay out.
@@ -129,6 +136,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     error SlippageExceeded(uint256 amountOut);
     error ConsolidationBelowFloor();
     error GatherBelowFloor();
+    error TrackedOverflow();
 
     // -------------------- Constructor -------------------------------------------
     /// @param _uri ERC1155 metadata URI template, fixed for the contract's lifetime.
@@ -243,6 +251,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
         _mint(msg.sender, tokenId, shares, "");
 
+        // Consolidation refreshed the remembered set to `hotkeys`, so their indices align.
+        _refreshTracked(tokenId, hotkeys, destColdkey, nid);
         emit Deposited(msg.sender, tokenId, totalDeposit, shares);
     }
 
@@ -352,6 +362,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 refundShares = _sharesFor(total - assets, supply - shares, unsold);
         if (refundShares != 0) _mint(msg.sender, tokenId, refundShares, "");
 
+        // This path sells across the union without consolidating, so the remembered set is unchanged.
+        _refreshTracked(tokenId, _slotHotkeys(tokenId), _coldkeyOf(clone), netuid);
         emit UnwrappedForTao(msg.sender, tokenId, shares - refundShares, sold, taoOut);
     }
 
@@ -405,6 +417,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // swept-sale proceeds claimable, so the shares are retired instead of trapped.
         if (totalAlpha == 0) {
             _burn(msg.sender, tokenId, shares);
+            _refreshTracked(tokenId, hotkeys, coldkey, netuid);
             emit Unwrapped(msg.sender, tokenId, shares, 0);
             return;
         }
@@ -424,6 +437,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             tokenId, clone, hotkeys, weights, balances, coldkey, userSubstrateColdkey, assets, alphaPriceE18
         );
 
+        _refreshTracked(tokenId, hotkeys, coldkey, netuid);
         emit Unwrapped(msg.sender, tokenId, shares, alphaOut);
     }
 
@@ -520,6 +534,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
         _consolidateRotatedStake(tokenId, clone, coldkey, hotkeys, alphaPriceE18);
         _rebalance(tokenId, clone, hotkeys, weights, coldkey, alphaPriceE18);
+        // Consolidation refreshed the remembered set to `hotkeys`, so their indices align.
+        _refreshTracked(tokenId, hotkeys, coldkey, nid);
     }
 
     function _rebalance(
@@ -944,7 +960,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32[3] memory currentSet,
         uint256 alphaPriceE18
     ) private {
-        bytes32[3] storage lastSeen = _lastSeenHotkeys[tokenId];
+        bytes32[3] memory lastSeen = _slotHotkeys(tokenId);
         if (_anyRotatedOut(lastSeen, currentSet)) {
             uint16 netuid = _netuid(tokenId);
             (
@@ -986,12 +1002,21 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
         // The refresh may only follow a clean roll: a rejected hop reverts the whole call, otherwise
         // stake left on a rotated-out hotkey would drop out of the remembered set and be stranded.
-        if (lastSeen[0] != currentSet[0]) lastSeen[0] = currentSet[0];
-        if (lastSeen[1] != currentSet[1]) lastSeen[1] = currentSet[1];
-        if (lastSeen[2] != currentSet[2]) lastSeen[2] = currentSet[2];
+        Slot[3] storage tokenSlots = _slots[tokenId];
+        for (uint256 i; i < 3;) {
+            if (tokenSlots[i].hotkey != currentSet[i]) {
+                tokenSlots[i].hotkey = currentSet[i];
+                // A slot that drops out of the set holds no backing; clearing its high-water keeps a
+                // later set that reuses the index from inheriting a stale expectation.
+                if (currentSet[i] == bytes32(0)) tokenSlots[i].tracked = 0;
+            }
+            unchecked {
+                ++i;
+            }
+        }
     }
 
-    function _anyRotatedOut(bytes32[3] storage lastSeen, bytes32[3] memory currentSet) private view returns (bool) {
+    function _anyRotatedOut(bytes32[3] memory lastSeen, bytes32[3] memory currentSet) private pure returns (bool) {
         return _isRotatedOut(lastSeen[0], currentSet) || _isRotatedOut(lastSeen[1], currentSet)
             || _isRotatedOut(lastSeen[2], currentSet);
     }
@@ -1003,7 +1028,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///      balance and carries the rotated-out stake over. When no rotated-out balance remains, the
     ///      returned hotkey is only a placeholder.
     function _chooseRichestSlot(
-        bytes32[3] storage lastSeen,
+        bytes32[3] memory lastSeen,
         bytes32[3] memory currentSet,
         bytes32 coldkey,
         uint16 netuid
@@ -1071,7 +1096,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         view
         returns (bytes32[6] memory hotkeys, uint256[6] memory balances, uint256 total)
     {
-        bytes32[3] memory lastSeen = _lastSeenHotkeys[tokenId];
+        bytes32[3] memory lastSeen = _slotHotkeys(tokenId);
         bytes32 coldkey = _coldkeyOf(clone);
         IStaking staking = IStaking(STAKING_PRECOMPILE);
 
@@ -1127,8 +1152,55 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
     }
 
+    /// @notice The validator set the position's backing was last distributed across.
     function lastSeenHotkeys(uint256 tokenId) external view returns (bytes32[3] memory) {
-        return _lastSeenHotkeys[tokenId];
+        return _slotHotkeys(tokenId);
+    }
+
+    /// @notice The remembered validator set paired with the alpha the vault last set on each hotkey.
+    function slots(uint256 tokenId) external view returns (Slot[3] memory) {
+        return _slots[tokenId];
+    }
+
+    function _slotHotkeys(uint256 tokenId) private view returns (bytes32[3] memory hotkeys) {
+        Slot[3] storage tokenSlots = _slots[tokenId];
+        hotkeys[0] = tokenSlots[0].hotkey;
+        hotkeys[1] = tokenSlots[1].hotkey;
+        hotkeys[2] = tokenSlots[2].hotkey;
+    }
+
+    /// @dev Sets each non-zero slot's `tracked` to the vault's live stake on that hotkey. Called at
+    ///      the end of every vault-signed stake path, so `tracked` ends the op equal to the actual
+    ///      backing the vault just wrote - adds, removes and authorized-rotation resets alike. The
+    ///      passed `hotkeys` must be the remembered set, so their indices line up with `_slots`.
+    function _refreshTracked(uint256 tokenId, bytes32[3] memory hotkeys, bytes32 coldkey, uint16 netuid) private {
+        Slot[3] storage tokenSlots = _slots[tokenId];
+        IStaking staking = IStaking(STAKING_PRECOMPILE);
+        for (uint256 i; i < 3;) {
+            bytes32 hotkey = hotkeys[i];
+            if (hotkey != bytes32(0)) {
+                tokenSlots[i].tracked = _toU128(staking.getStake(hotkey, coldkey, netuid));
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @dev Raises a slot's `tracked` high-water to `observed` when it exceeds the current mark, so
+    ///      emissions the vault never moved are absorbed while the expectation can only rise.
+    function _ratchetTracked(uint256 tokenId, uint256 slotIdx, uint256 observed) internal {
+        if (observed > _slots[tokenId][slotIdx].tracked) {
+            _slots[tokenId][slotIdx].tracked = _toU128(observed);
+        }
+    }
+
+    /// @dev Alpha comes off the precompile as `uint256`, but a subnet's supply sits far below 2^128,
+    ///      so this narrowing is a defensive bound rather than an expected path.
+    function _toU128(uint256 value) private pure returns (uint128) {
+        if (value > type(uint128).max) revert TrackedOverflow();
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return uint128(value);
     }
 
     function _ensureMailboxClone(address user, uint256 netuid) private returns (address userClone) {
