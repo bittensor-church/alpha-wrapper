@@ -25,6 +25,15 @@ interface IStaking {
 
     function getStake(bytes32 hotkey, bytes32 coldkey, uint256 netuid) external view returns (uint256);
 
+    /// @notice The hotkey that replaced `hotkey` on `netuid` in a chain-side swap.
+    /// @dev Returns (false, 0) when there is none; an absent successor means the hotkey was never
+    ///      swapped and is still its own root.
+    function getHotkeySuccessor(bytes32 hotkey, uint16 netuid) external view returns (bool, bytes32);
+
+    /// @notice The earliest hotkey that `hotkey` on `netuid` descends from across prior swaps.
+    /// @dev Returns (false, 0) when there is none.
+    function getHotkeyRoot(bytes32 hotkey, uint16 netuid) external view returns (bool, bytes32);
+
     function removeStake(bytes32 hotkey, uint256 amount, uint256 netuid) external payable;
 
     /// @notice Tao-denominated dust threshold: after a partial unstake, the chain force-clears any
