@@ -50,7 +50,7 @@ jobs:
           - 9945:9945
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
           submodules: recursive
