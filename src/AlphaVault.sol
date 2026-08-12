@@ -1076,6 +1076,39 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         return _unionStake(tokenId, netuid, clone, current);
     }
 
+    /// @dev Every slot the position may hold alpha on: the remembered set, then any current
+    ///      validator not already in it.
+    function _unionSlots(uint256 tokenId, bytes32[] memory current) private view returns (bytes32[] memory slots) {
+        bytes32[] memory lastSeen = _lastSeenHotkeys[tokenId];
+        slots = new bytes32[](lastSeen.length + current.length);
+        uint256 size = lastSeen.length;
+        for (uint256 i; i < size;) {
+            slots[i] = lastSeen[i];
+            unchecked {
+                ++i;
+            }
+        }
+        // Both lists are individually duplicate-free: the registry rejects duplicate hotkeys within
+        // a validator set, and the remembered set is a past copy of such a set. Only the overlap
+        // between the two lists needs removing.
+        for (uint256 i; i < current.length;) {
+            if (!_contains(lastSeen, current[i])) {
+                slots[size] = current[i];
+                unchecked {
+                    ++size;
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        // Only the length word of an array this function allocated is written, so no memory outside
+        // it is touched.
+        assembly ("memory-safe") {
+            mstore(slots, size)
+        }
+    }
+
     /// @dev Per-hotkey stake across the remembered and current validator sets, with its total. A view
     ///      has no chance to consolidate first, so it must count stake wherever it sits: between a
     ///      registry commit and the next vault call the whole position is on validators the set no
@@ -1085,49 +1118,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         view
         returns (bytes32[] memory hotkeys, uint256[] memory balances, uint256 total)
     {
-        bytes32[] memory lastSeen = _lastSeenHotkeys[tokenId];
-        bytes32 coldkey = _coldkeyOf(clone);
-        IStaking staking = IStaking(STAKING_PRECOMPILE);
-
-        hotkeys = new bytes32[](lastSeen.length + current.length);
-        balances = new uint256[](hotkeys.length);
-        uint256 slotCount;
-        for (uint256 i; i < lastSeen.length;) {
-            hotkeys[slotCount] = lastSeen[i];
-            unchecked {
-                ++slotCount;
-                ++i;
-            }
-        }
-        // Both lists are individually duplicate-free: the registry rejects duplicate hotkeys within
-        // a validator set, and the remembered set is a past copy of such a set. Only the overlap
-        // between the two lists needs removing.
-        for (uint256 i; i < current.length;) {
-            if (!_contains(lastSeen, current[i])) {
-                hotkeys[slotCount] = current[i];
-                unchecked {
-                    ++slotCount;
-                }
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        // Trim to what was actually staged. Only the length word of arrays this function allocated
-        // is written, so no memory outside them is touched.
-        assembly ("memory-safe") {
-            mstore(hotkeys, slotCount)
-            mstore(balances, slotCount)
-        }
-
-        for (uint256 i; i < slotCount;) {
-            uint256 balance = staking.getStake(hotkeys[i], coldkey, netuid);
-            balances[i] = balance;
-            total += balance;
-            unchecked {
-                ++i;
-            }
-        }
+        hotkeys = _unionSlots(tokenId, current);
+        balances = _fetchBalances(hotkeys, _coldkeyOf(clone), netuid);
+        total = _sumBalances(balances);
     }
 
     /// @dev Live total across slots `_unionStake` already resolved.
