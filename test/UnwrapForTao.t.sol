@@ -289,7 +289,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_RevertWhen_OneFullSliceSellFails() public {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
-        (bytes32[] memory hotkeys,,) = registry.getValidators(NETUID1);
+        (bytes32[] memory hotkeys,) = registry.getValidators(NETUID1);
         _setRemoveStakeRevertsFor(hotkeys[1], true);
 
         uint256 balanceBefore = alice.balance;
@@ -304,7 +304,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_RevertWhen_AboveFloorPartialSellFails() public {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(60e6);
-        (bytes32[] memory hotkeys,,) = registry.getValidators(NETUID1);
+        (bytes32[] memory hotkeys,) = registry.getValidators(NETUID1);
         _setVaultStakes(NETUID1, 40e6, 20e6, 0);
         _setRemoveStakeRevertsFor(hotkeys[0], true);
 

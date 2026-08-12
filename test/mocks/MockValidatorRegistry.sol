@@ -7,30 +7,25 @@ contract MockValidatorRegistry is IValidatorRegistry {
     struct Slot {
         bytes32[] hotkeys;
         uint16[] weights;
-        uint256 version;
     }
 
     mapping(uint256 => Slot) private _slots;
 
     /// @dev Seeds corrupt slots (e.g. zero hotkey + non-zero weight, or mismatched lengths) that the
     ///      real registry would reject; tests deploy a fresh vault against this mock when needed.
-    ///      Each write bumps the version, mirroring the real registry's per-commit nonce.
     function setRaw(uint256 netuid, bytes32[] memory hotkeys, uint16[] memory weights) external {
-        Slot storage s = _slots[netuid];
-        s.hotkeys = hotkeys;
-        s.weights = weights;
-        unchecked {
-            ++s.version;
-        }
+        Slot storage slot = _slots[netuid];
+        slot.hotkeys = hotkeys;
+        slot.weights = weights;
     }
 
     function getValidators(uint256 netuid)
         external
         view
         override
-        returns (bytes32[] memory hotkeys, uint16[] memory weights, uint256 version)
+        returns (bytes32[] memory hotkeys, uint16[] memory weights)
     {
-        Slot storage s = _slots[netuid];
-        return (s.hotkeys, s.weights, s.version);
+        Slot storage slot = _slots[netuid];
+        return (slot.hotkeys, slot.weights);
     }
 }

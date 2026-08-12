@@ -138,30 +138,22 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(received, previewedAssets, "zero oracle read falls through to the chain floor");
     }
 
-    // All union balances sub-floor with rotated-out stake: no pile can clear the floor, so the drain
-    // leaves the dust where it is. Blocking the call instead would let a few unmovable RAO wedge
-    // every later deposit and withdrawal, so the dust stays remembered and stays in the backing.
-    function test_Rebalance_LeavesUnmovableDustTracked() public {
-        uint256 tokenId = _seedDustOnlyVault();
-        uint256 dust = CHAIN_MIN_STAKE - 1;
+    // All union balances sub-floor with rotated-out stake: no pile can clear the floor, so
+    // consolidation is rejected up front while the TAO rail stays open.
+    function test_RevertWhen_ConsolidatingDustOnlyVault() public {
+        _seedDustOnlyVault();
 
+        vm.expectRevert(AlphaVault.ConsolidationBelowFloor.selector);
         vault.rebalance(99);
-
-        assertEq(_getVaultStake(hotkey4, 99), dust, "unmovable dust stays put");
-        assertEq(vault.totalStake(tokenId), dust, "and stays inside the reported backing");
-        bytes32[] memory seen = vault.lastSeenHotkeys(tokenId);
-        assertEq(seen.length, 2, "the funded rotated-out slot stays remembered");
-        assertEq(seen[0], hotkey1);
-        assertEq(seen[1], hotkey4);
     }
 
-    // The alpha rail refuses a delivery the chain's floor would reject; the TAO rail below exits it.
+    // A dust-only vault rejects unwrap inside the consolidation, before any chain call.
     function test_RevertWhen_UnwrappingDustOnlyVault() public {
         uint256 tokenId = _seedDustOnlyVault();
 
         uint256 shares = vault.balanceOf(alice, tokenId);
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
+        vm.expectRevert(AlphaVault.ConsolidationBelowFloor.selector);
         vault.unwrap(tokenId, shares, _toSubstrate(alice));
     }
 

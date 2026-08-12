@@ -6,10 +6,9 @@ bracketed scientific suffix to numeric values.
 """
 import json
 import os
-import re
 import subprocess
 from functools import lru_cache
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from . import config
 
@@ -24,21 +23,6 @@ def _first_token(line: str) -> str:
 
 def _tokens_per_line(raw: str) -> List[str]:
     return [_first_token(line) for line in raw.splitlines() if line.strip()]
-
-
-_STAKE_INFO_RE = re.compile(r"\(\s*(0x[0-9a-fA-F]{64})\s*,\s*(\d+)")
-
-
-def parse_stake_infos(raw: str) -> Dict[str, int]:
-    """Hotkey -> stake from a printed (bytes32, uint256)[] array.
-
-    cast renders a tuple array as "[(0xhotkey, 123 [1.2e2]), ...]"; the bracketed
-    scientific suffix and any surrounding whitespace are ignored.
-    """
-    return {
-        match.group(1).lower(): int(match.group(2))
-        for match in _STAKE_INFO_RE.finditer(raw)
-    }
 
 
 def run(

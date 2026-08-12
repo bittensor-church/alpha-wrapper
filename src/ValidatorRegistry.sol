@@ -15,8 +15,9 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     );
 
     uint16 private constant BPS_BASE = 10_000;
-    /// @dev The staking precompile's batched balance read accepts at most 64 hotkeys per call, so a
-    ///      larger set could not be priced by the vault in a bounded number of reads.
+    /// @dev The vault reads one stake balance per validator on every state-mutating call, so the cap
+    ///      is what bounds that work. 64 is the widest set the chain will price in one batched read,
+    ///      which makes it the natural ceiling to stop at.
     uint8 private constant MAX_VALIDATORS = 64;
     /// @dev Bounds `_setSigners` churn so a careless or compromised admin can't install a set
     ///      so large that subsequent rotation exceeds the block gas limit.
@@ -101,10 +102,10 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         external
         view
         override
-        returns (bytes32[] memory hotkeys, uint16[] memory weights, uint256 version)
+        returns (bytes32[] memory hotkeys, uint16[] memory weights)
     {
         ValidatorSet storage validatorSet = _validators[netuid];
-        return (validatorSet.hotkeys, validatorSet.weights, nonces[netuid]);
+        return (validatorSet.hotkeys, validatorSet.weights);
     }
 
     function setSigners(address[] calldata newSigners, uint8 newThreshold) external onlyRole(DEFAULT_ADMIN_ROLE) {
