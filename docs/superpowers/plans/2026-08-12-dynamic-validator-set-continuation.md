@@ -1,138 +1,82 @@
-# Dynamic validator set (1..64) — continuation handoff
+# Dynamic validator set (1..64) — outcome
 
-State as of 2026-08-12 on branch `pg/dynamic-validator-set`. Design and
+Branch `pg/dynamic-validator-set`, branched from `main` @ `c6533a5`. Design and
 rationale live in `docs/superpowers/specs/2026-08-12-dynamic-validator-set-design.md`;
-this file covers only what a fresh session needs to resume.
+this file records what shipped and what is left for someone else.
 
-## Current state
+## State
 
-Commits: `f01c7fd` (refactor), `7339082` (drain fixes). Branched from `main` @ `c6533a5`.
-
-- `forge build` — clean.
+- `forge build` — clean, no warnings.
 - `forge fmt` — applied.
-- `forge test` — **340 passed, 12 failed, 352 total.**
-- `forge coverage` — not run.
+- `forge test` — **376 passing, 0 failing.**
+- `forge coverage` — `ValidatorRegistry.sol` 100% on lines, statements, branches
+  and functions; `AlphaVault.sol` 99.02% lines / 98.11% branches. The handful of
+  lines reported uncovered sit inside paths several tests exercise and are
+  artifacts of the `--ir-minimum` source mapping coverage needs on this contract.
 
-Reproduce the failures with `forge test`; they are deterministic apart from the
-one fuzz case noted below.
-
-## What the change does
+## What shipped
 
 `ValidatorRegistry` stores a dynamic 1..64 validator set per subnet instead of a
 fixed 3, and `AlphaVault` stakes across all of it. **Three validators remains the
 expected set size** — 64 is the ceiling the contract must survive, not the case
 to tune for.
 
-Landed:
-
 - Registry: `MAX_VALIDATORS = 64`, dynamic `bytes32[]`/`uint16[]`, `delete`+push
   commit, `getValidators` returns `(hotkeys, weights, version)`. The version is
-  `nonces[netuid]`, which was already monotonic per commit — no new storage.
+  `nonces[netuid]`, already monotonic per commit — no new registry storage.
 - Vault: batched balance reads chunked at the chain's 64-per-call bound; a
   set-version fast path that skips all history reads when membership has not
-  moved; `_drainRotatedSlots` as a move class distinct from alignment; unified
-  target-zero alignment; union reads on views and on `unwrapForTao`.
+  moved; a drain that empties dropped validators with whole-balance moves;
+  unified target-zero alignment; union reads on views and on `unwrapForTao`.
+- Every whole-balance move is sized by a live read. This is load-bearing: the
+  chain credits same-subnet moves a RAO short, so a second move sized from the
+  vault's running total over-asks and is refused, which would take `wrap`,
+  `unwrap` and `rebalance` down together for that position.
 
-## Failing tests, triaged
+## Decisions worth not relitigating
 
-**Mechanical (8).** Stale expectations, no design question.
+- **Unmovable dust is left in place, not reverted.** A dropped validator holding
+  less than the chain's floor keeps its alpha, stays remembered, and stays in the
+  reported backing until a later deposit can carry it off. Reverting instead
+  would let a few RAO wedge every deposit and withdrawal on that position.
+  `ConsolidationBelowFloor` was removed with the behaviour.
+- **The drain is a separate move class from alignment, deliberately.** Alignment
+  moves `min(surplus, deficit)`; spreading a dropped validator's balance over the
+  remaining set puts every individual deficit below the floor, so alignment would
+  skip every move and strand many times the floor on a validator the set no
+  longer names. The two also differ on floor policy, zero-price policy and
+  whether they emit. `test_Rebalance_DrainsDroppedBalanceTooSmallToSpread` pins
+  the failure boundary.
+- **The remembered set is never capped.** Forgetting a dropped validator that
+  still holds alpha would drop that alpha out of the backing every view reports
+  and out of every settlement path. A bound would only be safe alongside a
+  permissionless per-slot recovery, which does not exist.
+- **Views must read the union.** The registry commits outside the vault, so
+  between a commit and the next vault call the whole position sits on validators
+  the set no longer names; a current-set-only view would report zero backing.
 
-- Array out-of-bounds (`0x32`) — tests index `[1]`/`[2]` on now-dynamic arrays:
-  `test_RebalanceNoOpWhenCloneNotDeployed`, `test_RebalanceRecycledSubnetSilentNoop`,
-  `test_Rebalance_ConsolidatesMultipleRotatedOutSlots`,
-  `test_Update_FirstAttestationWithNonceWinsRace`,
-  `test_Update_NetuidsHaveIndependentState`, `test_Update_PersistsTwoValidators`,
-  `test_Update_ZeroesTrailingSlotsAfterShrink`.
-- `test_RevertWhen_UpdateTooManyHotkeys` — still asserts the old cap of 3; the
-  cap is now 64, so the test needs 65 hotkeys.
+## Left for someone else
 
-`test_Update_ZeroesTrailingSlotsAfterShrink` should be rewritten rather than
-patched: the trailing-zero sentinel it tests no longer exists, and the property
-worth keeping is that a 64 -> 3 shrink returns a length-3 array with no stale
-tail.
-
-**Deliberate behaviour changes (3).** These fail because the contract changed on
-purpose. Rewrite once the open question below is answered.
-
-- `test_RevertWhen_ConsolidatingDustOnlyVault` — no longer reverts.
-- `test_RevertWhen_UnwrappingDustOnlyVault` — now `WithdrawTooSmall()` instead of
-  `ConsolidationBelowFloor()`.
-- `test_RotationSweptOnRebalance` — expects 1 `Rebalanced` event, sees 0, because
-  the drain now completes the work that alignment used to finish.
-
-**Needs investigation (1).**
-
-- `testFuzz_Rebalance_ConsolidationMatchesChainFloor` — leaves 3 RAO of
-  rotated-out stake. Probably wants a rounding tolerance, since the chain credits
-  moves a RAO short, but this is unconfirmed. Do not add a tolerance without
-  first confirming the residue is bounded by hop count rather than growing.
-
-## Open question — answer before rewriting the dust tests
-
-Dust-only positions used to revert `ConsolidationBelowFloor` and route the holder
-to `unwrapForTao`. They now succeed, leaving the dust in place and tracked.
-
-Leave-behind looks right at 64: reverting lets a few RAO of unmovable dust block
-every withdrawal from the position, and the residue stays inside the reported
-backing either way (the remembered set keeps it, and views read the union). But
-it is a real behaviour change and the call is the repo owner's. The three
-deliberate-change tests above encode whichever answer is chosen.
-
-## Remaining work
-
-1. Fix the 8 mechanical tests.
-2. Resolve the dust question, rewrite the 3 behaviour tests.
-3. Investigate the fuzz residue.
-4. New tests: 1-validator and 64-validator happy paths; 64 -> 3 shrink and
-   3 -> 64 grow with no stale tail; partial rotation where the dropped balance
-   sits in `[floor, 64 x floor)` — the case that broke the first drain design;
-   a `>64` union forcing two batched reads, with a hotkey present in both chunks
-   to pin cross-chunk dedup; `unwrapForTao` exiting a fully-rotated, undrained
-   position; zero-price rotation.
-5. Fuzz: `testFuzz_UpdateValidators(seed, count)` with `count = bound(count, 1, 64)`;
-   `testFuzz_SequentialCommits(lenA, lenB)` for shrink/grow soundness;
-   `testFuzz_WrapUnwrapRoundTrip` across set sizes;
-   `testFuzz_RotationPreservesTotal(fromCount, toCount)`.
-6. Gas snapshot: add `wrap`, `unwrap`, and `previewUnwrap` at **both 3 and 64**
-   validators to `snapshots/AlphaVault.json`. Keep the existing 3-validator
-   entries so a regression at the common size stays visible in CI. Regenerate
-   with the CLI `--threads 4` on forge v1.7.0, never from a `forge coverage` run.
-7. `forge coverage`, `/simplify`, re-review, push, open PR.
-
-## Review findings not yet acted on
-
-- `updateValidatorsBatch` costs ~1.36M per full 64-validator commit, so a batch
-  approaches the 75M block limit near ~50 subnets. Document a batch-size bound.
-- ABI break: `getCurrentValidators` and `lastSeenHotkeys` changed from
-  `bytes32[3]` to `bytes32[]`, and `IValidatorRegistry.getValidators` gained a
-  third return value. The tao20 contract consumes vault views and must be
-  checked.
-- Weights of 1 bps are legal. At 64 validators a 1-bps slot needs a position of
-  roughly 10,000 x floor before any stake can land on it, so the spread is
-  silently unmet on small vaults. Either enforce a minimum weight or document
-  the acceptance.
-- No e2e/localnet item exists for `getStakeInfoForColdkeyAndNetuid`. Its
-  parameter order is `(coldkey, netuid, hotkeys)` — this project has previously
-  shipped a precompile parameter-order bug that unit tests could not catch,
-  because a faithful mock passes while the chain reverts.
-- `invariant_SharePriceMonotonic` as specified will be flaky: the chain credits
-  moves a RAO short, so rotations legitimately drop share price by dust. It needs
-  a tolerance.
-
-## Facts worth not re-deriving
-
-- Gas per db read is **625** (`RocksDbWeight` 25,000,000 ref_time / `WeightPerGas`
-  40,000). The mainnet-measured 4,952 for `getStake` is 7 x 625 = 4,375 of reads
-  plus ~577 fixed per-call overhead. Dividing 4,952 by 7 to get "707 per read"
-  is wrong and inflates every estimate.
-- `getStakeInfoForColdkeyAndNetuid` caps input at 64, reverts on a duplicate
-  hotkey, omits zero-stake hotkeys, and preserves input order. All four are
-  mirrored in `MockStaking`; the vault's index mapping depends on the last two.
-- `getTotalColdkeyStakeOnSubnet` is TAO-denominated via `sim_swap` and therefore
-  unusable for share pricing. Do not revisit it.
-- A drain must move a dropped validator's **whole balance**. Capping it at the
-  receiving slot's deficit — which is what folding it into `_rebalanceStep`
-  does — strands stake many times the floor on a routine 64 -> 63 shrink.
-- The on-weight invariant holds only at the boundary of a vault call. The
-  registry commits outside the vault, so views must read the union or they report
-  zero backing for a freshly rotated set.
+- **`tao20-contract` does not compile against this ABI, and fails silently.**
+  `BuybackTreasury` decodes `getCurrentValidators` into a `bytes32[3]` inside a
+  `try`. The dynamic return decodes into that static array without reverting, so
+  the `catch` never fires and the first two "hotkeys" it reads are the ABI offset
+  and length words. `lastSeenHotkeys` has the same break. Both need the dynamic
+  type before this ships anywhere tao20 points at.
+- **`updateValidatorsBatch` has no batch-size cap.** A full 64-validator commit
+  costs ~1.36M, so a batch approaches the block limit near ~50 subnets. Keepers
+  size their own batches; the ceiling is documented in the design spec §3.3.
+- **A weights-only re-attestation rewrites every hotkey slot.** `_commit` is
+  `delete`+push, so re-attesting the same 64 members at new weights pays ~64
+  slot rewrites where a diff-write would pay reads. This is a keeper cost on the
+  commonest commit; the design locked `delete`+push for simplicity, and changing
+  it is a real gas/readability tradeoff for the repo owner to call.
+- **`getDefaultMinStake()` is re-read per floor check.** One call per executed
+  move, where one per transaction would do. Threading the value through ~6
+  signatures is worth roughly 44k EVM plus 75k chain-charged gas at 64
+  validators, and nothing at three.
+- **The localnet run has never exercised a wide set.** `e2e/` still bootstraps
+  three validators per subnet. The batched read now has a probe
+  (`e2e/tests/test_batched_stake_read.py`), but no scenario drives a rotation at
+  the 64 ceiling, and the chain-side cost of 63 `moveStake` dispatches is
+  unmeasured — the gas snapshots are EVM-side against mocks and understate it.

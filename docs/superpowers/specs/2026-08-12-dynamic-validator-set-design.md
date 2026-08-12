@@ -323,11 +323,11 @@ Mechanical, all driven by `count = hotkeys.length`:
 | `wrap` in-set check | loop to `count`; unchanged semantics |
 | `_alignToWeights` | `lastIndex = count - 1`; single-validator shortcut becomes `count == 1`; `targets = new uint256[](count)` |
 | `_rebalanceStep` | `i < count` |
-| `_deliverAndAlign` gather | scans `count` slots for the largest; hop loop bounded by `count` |
-| `_fetchBalances` / `_sumBalances` | dynamic arrays, one batched read |
-| `_isRotatedOut` | membership scan over the dynamic current set |
-| `_totalStake` | current set only (§4.2), no union |
-| `_unionStake`, `[6]` merges | deleted where the invariant makes them redundant; retained only on the `unwrapForTao` sell path, sized `count` |
+| gather | scans `count` slots for the largest; hop loop bounded by `count` |
+| `_fetchBalances` / `_sumBalances` | dynamic arrays, one batched read per 64 |
+| rotated-out test | membership scan over the dynamic current set |
+| `totalStake` and every other view | union read — see §4.2; the on-weight invariant holds only at call boundaries, so a view that read the current set alone would report zero backing for a freshly rotated position |
+| `_unionStake` | sized `count`, kept on the views and on the `unwrapForTao` sell path |
 | `getCurrentValidators`, `lastSeenHotkeys` views | return `bytes32[]` — ABI change |
 
 Both contracts deploy fresh together and the registry reference is immutable, so
