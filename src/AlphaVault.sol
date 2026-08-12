@@ -492,7 +492,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                 ++i;
             }
         }
-        _drainRotatedSlots(tokenId, clone, hotkeys, balances, weights.length, alphaPriceE18);
+        _drainRotatedSlots(tokenId, clone, hotkeys, balances, weights.length, coldkey, alphaPriceE18);
         _alignToWeights(tokenId, clone, hotkeys, weights, balances, alphaPriceE18);
     }
 
@@ -545,7 +545,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ) private returns (uint256 total) {
         bytes32[] memory slots = _slotsToSettle(tokenId, hotkeys, version);
         uint256[] memory balances = _fetchBalances(slots, coldkey, _netuid(tokenId));
-        _drainRotatedSlots(tokenId, clone, slots, balances, hotkeys.length, alphaPriceE18);
+        _drainRotatedSlots(tokenId, clone, slots, balances, hotkeys.length, coldkey, alphaPriceE18);
         total = _alignToWeights(tokenId, clone, slots, weights, balances, alphaPriceE18);
         _rememberSet(tokenId, hotkeys, version, slots, balances);
     }
@@ -566,14 +566,17 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32[] memory slots,
         uint256[] memory balances,
         uint256 currentCount,
+        bytes32 coldkey,
         uint256 alphaPriceE18
     ) private {
-        if (alphaPriceE18 == 0) return;
         uint16 netuid = _netuid(tokenId);
 
         for (uint256 i = currentCount; i < slots.length;) {
             uint256 balance = balances[i];
-            if (balance != 0 && !_isBelowFloorAtReadPrice(balance, alphaPriceE18)) {
+            // Refuse only what cannot clear the floor at the highest price the rounded-down read
+            // could be hiding. The pessimistic check would strand stake the chain would have moved,
+            // and a zero read carries no bound at all, so it never blocks the drain.
+            if (balance != 0 && !_isBelowFloorAtAnyPrice(balance, alphaPriceE18)) {
                 uint256 destination;
                 for (uint256 j = 1; j < currentCount;) {
                     if (balances[j] < balances[destination]) destination = j;
@@ -582,9 +585,29 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                     }
                 }
                 SubnetClone(payable(clone)).moveStake(slots[i], slots[destination], netuid, balance);
-                emit Rebalanced(tokenId, slots[i], slots[destination], balance);
                 balances[destination] += balance;
                 balances[i] = 0;
+            } else if (balance != 0) {
+                // Dust too small to move on its own. Send the richest current slot into it first so
+                // the combined pile clears the floor on the way back out - which is what lets a
+                // fresh deposit carry off rotated-out dust that would otherwise sit unmovable.
+                uint256 richest;
+                for (uint256 j = 1; j < currentCount;) {
+                    if (balances[j] > balances[richest]) richest = j;
+                    unchecked {
+                        ++j;
+                    }
+                }
+                uint256 donor = balances[richest];
+                if (donor != 0 && !_isBelowFloorAtAnyPrice(donor, alphaPriceE18)) {
+                    SubnetClone(payable(clone)).moveStake(slots[richest], slots[i], netuid, donor);
+                    // The inbound hop can credit a RAO short, so the pile leaves at its live size
+                    // rather than at the sum we expected it to be.
+                    uint256 pile = IStaking(STAKING_PRECOMPILE).getStake(slots[i], coldkey, netuid);
+                    SubnetClone(payable(clone)).moveStake(slots[i], slots[richest], netuid, pile);
+                    balances[richest] = donor + balance;
+                    balances[i] = 0;
+                }
             }
             unchecked {
                 ++i;
