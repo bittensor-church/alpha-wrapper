@@ -315,9 +315,10 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         assertEq(vault.totalStake(TOKEN1), total, "every attempted move cleared the chain floor");
     }
 
-    // Three outcomes: the vault refuses up front only where the rounded-down read proves the amount
+    // Three outcomes: the vault skips the drain only where the rounded-down read proves the amount
     // is under the minimum it can see; a fall-through leaves the verdict to the chain, which refuses
-    // only under its far lower move bar; success cleared that bar.
+    // only under its far lower move bar; a completed drain cleared that bar. The dust backs the
+    // shares either way, so a skip is silent rather than a revert.
     function testFuzz_Rebalance_ConsolidationMatchesChainFloor(uint256 dust, uint256 chainPriceE18) public {
         dust = bound(dust, 1, 1e16);
         chainPriceE18 = bound(chainPriceE18, 1, 100e18);
@@ -333,13 +334,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
         (bool ok, bytes memory ret) = address(vault).call(abi.encodeCall(vault.rebalance, (99)));
 
-        if (ok) {
-            assertEq(_getVaultStake(hotkey4, 99), 0, "rotated-out stake consolidated");
-            assertEq(vault.totalStake(tokenId), dust, "pile conserved onto the current set");
-            assertGe(trueValue, CHAIN_MIN_TRANSFER, "the roll landed, so it cleared the chain's move bar");
-        } else if (bytes4(ret) == AlphaVault.ConsolidationBelowFloor.selector) {
-            assertLt((dust * (read + 1e9)) / 1e18, CHAIN_MIN_STAKE, "reject only fires on the provable bound");
-        } else {
+        if (!ok) {
             assertEq(
                 keccak256(ret),
                 keccak256(abi.encodeWithSignature("Error(string)", "MockStaking: AmountTooLow")),
@@ -349,6 +344,13 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
                 read == 0 || (dust * (read + 1e9)) / 1e18 >= CHAIN_MIN_STAKE, "fell through only when unprovable"
             );
             assertLt(trueValue, CHAIN_MIN_TRANSFER, "the chain refused because the roll is below its move bar");
+        } else if (_getVaultStake(hotkey4, 99) == 0) {
+            assertEq(vault.totalStake(tokenId), dust, "pile conserved onto the current set");
+            assertGe(trueValue, CHAIN_MIN_TRANSFER, "the roll landed, so it cleared the chain's move bar");
+        } else {
+            assertEq(_getVaultStake(hotkey4, 99), dust, "a skipped drain moves nothing");
+            assertEq(vault.totalStake(tokenId), dust, "and the untouched dust still backs the shares");
+            assertLt((dust * (read + 1e9)) / 1e18, CHAIN_MIN_STAKE, "skip only fires on the provable bound");
         }
     }
 

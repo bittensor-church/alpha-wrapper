@@ -74,4 +74,66 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
         vm.snapshotGasLastCall("AlphaVault", "rebalance: after registry weight update");
     }
+
+    function test_gas_previewUnwrap() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+
+        vault.previewUnwrap(TOKEN1, shares / 2);
+        vm.snapshotGasLastCall("AlphaVault", "previewUnwrap");
+    }
+
+    // --------- widest supported set ------------------------------------------
+    // Three validators is the expected size; the entries below price the 64-validator ceiling so a
+    // change that only shows up at full width cannot land unnoticed.
+
+    function test_gas_wrap_firstWrap_64Validators() public {
+        _setValidatorCount(NETUID1, MAX_VALIDATORS);
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        vm.snapshotGasLastCall("AlphaVault", "wrap: first (64 validators)");
+    }
+
+    function test_gas_wrap_subsequentWrap_64Validators() public {
+        _setValidatorCount(NETUID1, MAX_VALIDATORS);
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+
+        _simulateAlphaDeposit(bob, NETUID1, 5 ether);
+        _wrap(bob, NETUID1);
+        vm.snapshotGasLastCall("AlphaVault", "wrap: subsequent (64 validators)");
+    }
+
+    function test_gas_unwrap_partial_64Validators() public {
+        _setValidatorCount(NETUID1, MAX_VALIDATORS);
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));
+        vm.snapshotGasLastCall("AlphaVault", "unwrap: partial (64 validators)");
+    }
+
+    function test_gas_unwrap_full_64Validators() public {
+        _setValidatorCount(NETUID1, MAX_VALIDATORS);
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vm.snapshotGasLastCall("AlphaVault", "unwrap: full (64 validators)");
+    }
+
+    function test_gas_previewUnwrap_64Validators() public {
+        _setValidatorCount(NETUID1, MAX_VALIDATORS);
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+
+        vault.previewUnwrap(TOKEN1, shares / 2);
+        vm.snapshotGasLastCall("AlphaVault", "previewUnwrap (64 validators)");
+    }
 }

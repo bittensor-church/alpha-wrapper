@@ -16,7 +16,6 @@ contract ValidatorRegistryTest is AttestationHelper {
     bytes32 private hk1 = keccak256("hotkey1");
     bytes32 private hk2 = keccak256("hotkey2");
     bytes32 private hk3 = keccak256("hotkey3");
-    bytes32 private hk4 = keccak256("hotkey4");
 
     uint256 private constant PK1 = 0xA11CE;
     uint256 private constant PK2 = 0xB0B;
@@ -71,6 +70,30 @@ contract ValidatorRegistryTest is AttestationHelper {
             att.weights[1] = 3_000;
             att.weights[2] = 2_000;
         }
+    }
+
+    /// @dev Attestation over `count` distinct hotkeys, evenly weighted with the rounding remainder
+    ///      on the first. Use for set sizes the fixed `_att` fixtures above do not cover.
+    function _attN(uint256 netuid, uint256 count, uint256 nonce, uint256 deadline)
+        private
+        pure
+        returns (ValidatorRegistry.WeightAttestation memory att)
+    {
+        att.netuid = netuid;
+        att.nonce = nonce;
+        att.deadline = deadline;
+        att.hotkeys = new bytes32[](count);
+        att.weights = new uint256[](count);
+        uint256 share = 10_000 / count;
+        for (uint256 i; i < count; ++i) {
+            att.hotkeys[i] = _hotkeyAt(i);
+            att.weights[i] = share;
+        }
+        att.weights[0] += 10_000 - share * count;
+    }
+
+    function _hotkeyAt(uint256 index) private pure returns (bytes32) {
+        return keccak256(abi.encodePacked("validator", index));
     }
 
     /// @dev Sign with each privkey in the order given. Caller is responsible for ordering
@@ -348,29 +371,47 @@ contract ValidatorRegistryTest is AttestationHelper {
 
         assertEq(registry.nonces(SN1), 1);
         (bytes32[] memory hks, uint16[] memory wts,) = registry.getValidators(SN1);
+        assertEq(hks.length, 2);
+        assertEq(wts.length, 2);
         assertEq(hks[0], hk1);
         assertEq(hks[1], hk2);
-        assertEq(hks[2], bytes32(0));
         assertEq(wts[0], 6_000);
         assertEq(wts[1], 4_000);
-        assertEq(wts[2], 0);
     }
 
-    function test_Update_ZeroesTrailingSlotsAfterShrink() public {
-        ValidatorRegistry.WeightAttestation memory att1 = _att(SN1, 3, 1, block.timestamp + 60);
-        registry.updateValidators(att1, _sign(att1, _pks2(PK2, PK1)));
+    function test_Update_ShrinkLeavesNoStaleTail() public {
+        ValidatorRegistry.WeightAttestation memory wide = _attN(SN1, 64, 1, block.timestamp + 60);
+        registry.updateValidators(wide, _sign(wide, _pks2(PK2, PK1)));
 
-        ValidatorRegistry.WeightAttestation memory att2 = _att(SN1, 1, 2, block.timestamp + 60);
-        registry.updateValidators(att2, _sign(att2, _pks2(PK2, PK1)));
+        ValidatorRegistry.WeightAttestation memory narrow = _attN(SN1, 3, 2, block.timestamp + 60);
+        registry.updateValidators(narrow, _sign(narrow, _pks2(PK2, PK1)));
 
         assertEq(registry.nonces(SN1), 2);
         (bytes32[] memory hks, uint16[] memory wts,) = registry.getValidators(SN1);
-        assertEq(hks[0], hk1);
-        assertEq(hks[1], bytes32(0));
-        assertEq(hks[2], bytes32(0));
-        assertEq(wts[0], 10_000);
-        assertEq(wts[1], 0);
-        assertEq(wts[2], 0);
+        assertEq(hks.length, 3);
+        assertEq(wts.length, 3);
+        for (uint256 i; i < 3; ++i) {
+            assertEq(hks[i], narrow.hotkeys[i]);
+            assertEq(wts[i], narrow.weights[i]);
+        }
+    }
+
+    function test_Update_GrowsToFullValidatorCap() public {
+        ValidatorRegistry.WeightAttestation memory narrow = _attN(SN1, 1, 1, block.timestamp + 60);
+        registry.updateValidators(narrow, _sign(narrow, _pks2(PK2, PK1)));
+
+        ValidatorRegistry.WeightAttestation memory wide = _attN(SN1, 64, 2, block.timestamp + 60);
+        registry.updateValidators(wide, _sign(wide, _pks2(PK2, PK1)));
+
+        (bytes32[] memory hks, uint16[] memory wts,) = registry.getValidators(SN1);
+        assertEq(hks.length, 64);
+        assertEq(wts.length, 64);
+        uint256 sum;
+        for (uint256 i; i < 64; ++i) {
+            assertEq(hks[i], wide.hotkeys[i]);
+            sum += wts[i];
+        }
+        assertEq(sum, 10_000);
     }
 
     function test_Update_OverwritesPreviousAttestationOnGrow() public {
@@ -405,15 +446,14 @@ contract ValidatorRegistryTest is AttestationHelper {
 
         // SN1 final state: a3 (len=1, hk1, 10_000)
         (bytes32[] memory hks1, uint16[] memory wts1,) = registry.getValidators(SN1);
+        assertEq(hks1.length, 1);
+        assertEq(wts1.length, 1);
         assertEq(hks1[0], hk1);
-        assertEq(hks1[1], bytes32(0));
-        assertEq(hks1[2], bytes32(0));
         assertEq(wts1[0], 10_000);
-        assertEq(wts1[1], 0);
-        assertEq(wts1[2], 0);
 
         // SN2 final state: a2 (len=3, hk1/hk2/hk3, 5000/3000/2000)
         (bytes32[] memory hks2, uint16[] memory wts2,) = registry.getValidators(SN2);
+        assertEq(hks2.length, 3);
         assertEq(hks2[0], hk1);
         assertEq(hks2[1], hk2);
         assertEq(hks2[2], hk3);
@@ -435,20 +475,7 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_RevertWhen_UpdateTooManyHotkeys() public {
-        ValidatorRegistry.WeightAttestation memory att;
-        att.netuid = SN1;
-        att.nonce = 1;
-        att.deadline = block.timestamp + 60;
-        att.hotkeys = new bytes32[](4);
-        att.weights = new uint256[](4);
-        att.hotkeys[0] = hk1;
-        att.hotkeys[1] = hk2;
-        att.hotkeys[2] = hk3;
-        att.hotkeys[3] = hk4;
-        att.weights[0] = 2_500;
-        att.weights[1] = 2_500;
-        att.weights[2] = 2_500;
-        att.weights[3] = 2_500;
+        ValidatorRegistry.WeightAttestation memory att = _attN(SN1, 65, 1, block.timestamp + 60);
         bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
         vm.expectRevert(ValidatorRegistry.InvalidValidatorCount.selector);
         registry.updateValidators(att, sigs);
@@ -685,12 +712,10 @@ contract ValidatorRegistryTest is AttestationHelper {
         // State of SN1 must still be a1's content (len=1, hk1, 10_000), not partially overwritten by a2.
         assertEq(registry.nonces(SN1), 1);
         (bytes32[] memory hks, uint16[] memory wts,) = registry.getValidators(SN1);
+        assertEq(hks.length, 1);
+        assertEq(wts.length, 1);
         assertEq(hks[0], hk1);
-        assertEq(hks[1], bytes32(0));
-        assertEq(hks[2], bytes32(0));
         assertEq(wts[0], 10_000);
-        assertEq(wts[1], 0);
-        assertEq(wts[2], 0);
     }
 
     function test_Batch_CommitsAllEntries() public {

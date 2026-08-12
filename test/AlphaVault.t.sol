@@ -450,10 +450,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(_countRebalancedLogs(vm.getRecordedLogs()), 0);
         assertEq(vault.subnetClone(TOKEN1), address(0));
         assertEq(vault.totalStake(TOKEN1), 0);
-        bytes32[] memory seen = vault.lastSeenHotkeys(TOKEN1);
-        assertEq(seen[0], bytes32(0));
-        assertEq(seen[1], bytes32(0));
-        assertEq(seen[2], bytes32(0));
+        assertEq(vault.lastSeenHotkeys(TOKEN1).length, 0);
     }
 
     function test_RebalanceEmitsEvent() public {
@@ -1588,10 +1585,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(_countRebalancedLogs(vm.getRecordedLogs()), 0);
         assertEq(vault.subnetClone(newTokenId), address(0));
         assertEq(vault.totalStake(newTokenId), 0);
-        bytes32[] memory seen = vault.lastSeenHotkeys(newTokenId);
-        assertEq(seen[0], bytes32(0));
-        assertEq(seen[1], bytes32(0));
-        assertEq(seen[2], bytes32(0));
+        assertEq(vault.lastSeenHotkeys(newTokenId).length, 0);
 
         uint256 oldStakeAfter = _userStakeAcrossHotkeys(oldClone, NETUID1);
         assertEq(oldStakeAfter, oldStakeBefore);
@@ -1782,9 +1776,13 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         Vm.Log[] memory logs = vm.getRecordedLogs();
 
         assertEq(_getVaultStake(hotkey3, NETUID1), 0, "rotated-out slot must be drained");
-        assertEq(_countRebalancedLogs(logs), 1, "silent consolidation; only the post-consolidation alignment logs");
+        // The drain lands the dropped balance on the emptiest current slot, which here is the one
+        // that replaced it, so the set is on weight without a further move - and drains are silent.
+        assertEq(_countRebalancedLogs(logs), 0, "drain hops do not log");
+        assertApproxEqAbs(_getVaultStake(hotkey4, NETUID1), _weighted(30 ether, NETUID1_BPS_HK3), 1);
 
         bytes32[] memory lastSeen = vault.lastSeenHotkeys(TOKEN1);
+        assertEq(lastSeen.length, 3);
         assertEq(lastSeen[2], hotkey4, "cleared rotated-out slot follows the current set");
     }
 

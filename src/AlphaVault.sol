@@ -134,7 +134,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     error NetuidOutOfRange();
     error ChosenHotkeyNotInSet();
     error SlippageExceeded(uint256 amountOut);
-    error ConsolidationBelowFloor();
     error GatherBelowFloor();
 
     // -------------------- Constructor -------------------------------------------
@@ -256,9 +255,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///             of chain-side share rounding, or reverting - never partial), then re-splits the
     ///             remainder toward the attested weights.
     ///             At a readable price, reverts `WithdrawTooSmall` when the request is below the
-    ///             chain's floor, `GatherBelowFloor` when the gather's largest slot provably cannot
-    ///             clear it, and `ConsolidationBelowFloor` when pending rotated-out stake cannot be
-    ///             consolidated above it; such positions exit via `unwrapForTao`.
+    ///             chain's floor and `GatherBelowFloor` when the gather's largest slot provably
+    ///             cannot clear it; such positions exit via `unwrapForTao`.
     /// @param  tokenId              ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @param  shares               Shares to burn.
     /// @param  userSubstrateColdkey Destination coldkey for alpha on the live path (unused on dissolved path).
@@ -511,9 +509,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
     /// @notice Rebalance vault stake for a subnet toward registry target weights.
     ///         Anyone can call this (e.g. after validator registry update).
-    /// @dev    Sub-floor and zero-price moves are skipped. Reverts `ConsolidationBelowFloor` when
-    ///         pending rotated-out stake cannot be consolidated above the chain's floor; any other
-    ///         rejected move bubbles the chain's error.
+    /// @dev    Sub-floor and zero-price moves are skipped; a rejected move bubbles the chain's error.
     ///         Reverts `SubnetInDissolutionBlackoutPeriod` while a dissolving subnet still has a
     ///         registration block, then `SubnetNotRegistered` once cleanup has removed it.
     /// @param netuid The subnet to rebalance.
@@ -1068,11 +1064,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         return value > type(uint64).max ? type(uint64).max : uint64(value);
     }
 
-    /// @dev Rolls stake stranded on rotated-out validators back onto the active set, so the position's
-    ///      backing always sits under current validators, then refreshes the remembered set. Reverts
-    ///      `ConsolidationBelowFloor` when even the richest balance provably cannot clear the stake
-    ///      floor; a zero price read skips the guard, so a roll the chain then rejects burns the
-    ///      forwarded gas.
     /// @dev Every slot the position may hold alpha on: the attested set, then any remembered
     ///      validator that has since been dropped. Rotated-out slots come last so their zero
     ///      targets line up past the end of the weights array.

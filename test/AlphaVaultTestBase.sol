@@ -52,6 +52,9 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     uint16 public constant BPS_BASE = 10_000;
 
+    /// @dev The registry's cap, set by the staking precompile's 64-hotkey batched read.
+    uint256 public constant MAX_VALIDATORS = 64;
+
     // The simulated chain's dust threshold; aliased so the two can never drift.
     uint256 internal constant DUST_THRESHOLD = CHAIN_NOMINATOR_MIN_STAKE;
 
@@ -143,6 +146,38 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         arr[0] = a;
         arr[1] = b;
         arr[2] = c;
+    }
+
+    /// @dev `count` distinct validator hotkeys, disjoint from the named `hotkey1..4` fixtures so a
+    ///      wide set and the fixture set never collide.
+    function _validatorHotkeys(uint256 count) internal pure returns (bytes32[] memory hks) {
+        hks = new bytes32[](count);
+        for (uint256 i; i < count; ++i) {
+            hks[i] = keccak256(abi.encodePacked("validator", i));
+        }
+    }
+
+    /// @dev Even split with the rounding remainder on the last slot, matching how the vault assigns
+    ///      targets.
+    function _evenWeights(uint256 count) internal pure returns (uint16[] memory wts) {
+        wts = new uint16[](count);
+        uint16 share = BPS_BASE / uint16(count);
+        for (uint256 i; i < count - 1; ++i) {
+            wts[i] = share;
+        }
+        wts[count - 1] = BPS_BASE - share * uint16(count - 1);
+    }
+
+    function _setValidatorCount(uint256 netuid, uint256 count) internal returns (bytes32[] memory hks) {
+        hks = _validatorHotkeys(count);
+        _setValidators(netuid, hks, _evenWeights(count));
+    }
+
+    function _vaultStakeAcross(bytes32[] memory hks, uint256 netuid) internal view returns (uint256 total) {
+        bytes32 coldkey = _subnetColdkey(netuid);
+        for (uint256 i; i < hks.length; ++i) {
+            total += _getStakeForColdkey(hks[i], coldkey, netuid);
+        }
     }
 
     function _countRebalancedLogs(Vm.Log[] memory logs) internal pure returns (uint256 count) {

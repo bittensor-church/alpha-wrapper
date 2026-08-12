@@ -38,9 +38,9 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey3, NETUID1), 0, "second rotated-out slot consolidated");
         assertEq(vault.totalStake(TOKEN1), totalBefore, "total conserved across the chained roll");
         bytes32[] memory seen = vault.lastSeenHotkeys(TOKEN1);
+        assertEq(seen.length, 2, "remembered set refreshed to the 2-validator current set");
         assertEq(seen[0], hotkey1);
         assertEq(seen[1], hotkey4);
-        assertEq(seen[2], bytes32(0), "remembered set refreshed to the 2-validator current set");
     }
 
     /// @dev Rotated-out sub-floor stake with no other above-floor backing is still consolidated,
@@ -112,22 +112,30 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(received, previewedAssets, "zero oracle read falls through to the chain floor");
     }
 
-    // All union balances sub-floor with rotated-out stake: no pile can clear the floor, so
-    // consolidation is rejected up front while the TAO rail stays open.
-    function test_RevertWhen_ConsolidatingDustOnlyVault() public {
-        _seedDustOnlyVault();
+    // All union balances sub-floor with rotated-out stake: no pile can clear the floor, so the drain
+    // leaves the dust where it is. Blocking the call instead would let a few unmovable RAO wedge
+    // every later deposit and withdrawal, so the dust stays remembered and stays in the backing.
+    function test_Rebalance_LeavesUnmovableDustTracked() public {
+        uint256 tokenId = _seedDustOnlyVault();
+        uint256 dust = CHAIN_MIN_STAKE - 1;
 
-        vm.expectRevert(AlphaVault.ConsolidationBelowFloor.selector);
         vault.rebalance(99);
+
+        assertEq(_getVaultStake(hotkey4, 99), dust, "unmovable dust stays put");
+        assertEq(vault.totalStake(tokenId), dust, "and stays inside the reported backing");
+        bytes32[] memory seen = vault.lastSeenHotkeys(tokenId);
+        assertEq(seen.length, 2, "the funded rotated-out slot stays remembered");
+        assertEq(seen[0], hotkey1);
+        assertEq(seen[1], hotkey4);
     }
 
-    // A dust-only vault rejects unwrap inside the consolidation, before any chain call.
+    // The alpha rail refuses a delivery the chain's floor would reject; the TAO rail below exits it.
     function test_RevertWhen_UnwrappingDustOnlyVault() public {
         uint256 tokenId = _seedDustOnlyVault();
 
         uint256 shares = vault.balanceOf(alice, tokenId);
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.ConsolidationBelowFloor.selector);
+        vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
         vault.unwrap(tokenId, shares, _toSubstrate(alice));
     }
 
