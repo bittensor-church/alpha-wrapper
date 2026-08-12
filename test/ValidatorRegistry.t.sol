@@ -462,6 +462,48 @@ contract ValidatorRegistryTest is AttestationHelper {
         assertEq(wts2[2], 2_000);
     }
 
+    function testFuzz_Update_PersistsAnySetSize(uint256 count) public {
+        count = bound(count, 1, 64);
+        ValidatorRegistry.WeightAttestation memory att = _attN(SN1, count, 1, block.timestamp + 60);
+
+        registry.updateValidators(att, _sign(att, _pks2(PK2, PK1)));
+
+        (bytes32[] memory hks, uint16[] memory wts, uint256 version) = registry.getValidators(SN1);
+        assertEq(hks.length, count);
+        assertEq(wts.length, count);
+        assertEq(version, 1, "the version a reader caches is the commit nonce");
+        uint256 sum;
+        for (uint256 i; i < count; ++i) {
+            assertEq(hks[i], att.hotkeys[i]);
+            assertEq(wts[i], att.weights[i]);
+            sum += wts[i];
+        }
+        assertEq(sum, 10_000);
+    }
+
+    /// @dev A commit replaces the whole set whichever way the size moves, and every commit advances
+    ///      the version so a cached reader can tell the set has changed.
+    function testFuzz_Update_SequentialCommitsReplaceWholeSet(uint256 firstCount, uint256 secondCount) public {
+        firstCount = bound(firstCount, 1, 64);
+        secondCount = bound(secondCount, 1, 64);
+
+        ValidatorRegistry.WeightAttestation memory first = _attN(SN1, firstCount, 1, block.timestamp + 60);
+        registry.updateValidators(first, _sign(first, _pks2(PK2, PK1)));
+        (,, uint256 firstVersion) = registry.getValidators(SN1);
+
+        ValidatorRegistry.WeightAttestation memory second = _attN(SN1, secondCount, 2, block.timestamp + 60);
+        registry.updateValidators(second, _sign(second, _pks2(PK2, PK1)));
+
+        (bytes32[] memory hks, uint16[] memory wts, uint256 secondVersion) = registry.getValidators(SN1);
+        assertEq(hks.length, secondCount, "size follows the latest commit");
+        assertEq(wts.length, secondCount);
+        assertGt(secondVersion, firstVersion, "every commit advances the version");
+        for (uint256 i; i < secondCount; ++i) {
+            assertEq(hks[i], second.hotkeys[i]);
+            assertEq(wts[i], second.weights[i]);
+        }
+    }
+
     function test_RevertWhen_UpdateEmptyHotkeys() public {
         ValidatorRegistry.WeightAttestation memory att;
         att.netuid = SN1;

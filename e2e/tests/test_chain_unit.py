@@ -15,6 +15,19 @@ def test_tokens_per_line_parse_multi_return():
     assert chain._tokens_per_line(raw) == ["123", "456"]
 
 
+def test_parse_stake_infos_keys_by_hotkey_and_drops_suffixes():
+    raw = ("[(0x" + "ab" * 32 + ", 1000000000 [1e9]), "
+           "(0x" + "cd" * 32 + ", 42)]")
+    assert chain.parse_stake_infos(raw) == {
+        "0x" + "ab" * 32: 1_000_000_000,
+        "0x" + "cd" * 32: 42,
+    }
+
+
+def test_parse_stake_infos_empty_array():
+    assert chain.parse_stake_infos("[]") == {}
+
+
 def test_receipt_ok():
     assert chain.receipt_ok({"status": "0x1"}) is True
     assert chain.receipt_ok({"status": "0x0"}) is False

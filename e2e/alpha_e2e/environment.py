@@ -21,6 +21,25 @@ def read_stake(hotkey_pubkey: str, coldkey_pubkey: str, netuid: int) -> int:
     ))
 
 
+def read_stake_batch(
+    coldkey_pubkey: str, netuid: int, hotkey_pubkeys: List[str],
+) -> dict:
+    """Hotkey -> alpha stake (RAO) from the staking precompile's batched read.
+
+    The vault prices a whole validator set through this call, so its argument
+    order and its habit of omitting hotkeys that hold nothing both have to be
+    what the vault assumes.
+    """
+    raw = chain.run([
+        "cast", "call", config.STAKING_PRECOMPILE,
+        "getStakeInfoForColdkeyAndNetuid(bytes32,uint256,bytes32[])((bytes32,uint256)[])",
+        coldkey_pubkey, str(netuid),
+        "[" + ",".join(hotkey_pubkeys) + "]",
+        "--rpc-url", config.RPC_URL,
+    ]).stdout
+    return chain.parse_stake_infos(raw)
+
+
 @dataclass
 class Environment:
     netuids: List[int]
@@ -115,7 +134,7 @@ class Environment:
     def hotkey_in_last_seen(self, token_id: int, hotkey_pubkey: str) -> bool:
         """Whether the vault's remembered validator set still references `hotkey_pubkey`."""
         remembered = chain.run(
-            ["cast", "call", self.vault_address, "lastSeenHotkeys(uint256)(bytes32[3])",
+            ["cast", "call", self.vault_address, "lastSeenHotkeys(uint256)(bytes32[])",
              str(token_id), "--rpc-url", config.RPC_URL],
         ).stdout
         return hotkey_pubkey.removeprefix("0x").lower() in remembered.lower()

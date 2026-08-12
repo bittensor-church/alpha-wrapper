@@ -173,11 +173,14 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         _setValidators(netuid, hks, _evenWeights(count));
     }
 
-    function _vaultStakeAcross(bytes32[] memory hks, uint256 netuid) internal view returns (uint256 total) {
-        bytes32 coldkey = _subnetColdkey(netuid);
+    function _stakeAcross(bytes32[] memory hks, bytes32 coldkey, uint256 netuid) internal view returns (uint256 total) {
         for (uint256 i; i < hks.length; ++i) {
             total += _getStakeForColdkey(hks[i], coldkey, netuid);
         }
+    }
+
+    function _vaultStakeAcross(bytes32[] memory hks, uint256 netuid) internal view returns (uint256) {
+        return _stakeAcross(hks, _subnetColdkey(netuid), netuid);
     }
 
     function _countRebalancedLogs(Vm.Log[] memory logs) internal pure returns (uint256 count) {

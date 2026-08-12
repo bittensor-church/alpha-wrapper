@@ -198,6 +198,12 @@ Full 64-entry commit cost: 64 hotkey slots plus 4 packed weight slots
 (`uint16[]` packs 16 per slot) ≈ 68 cold `SSTORE`s ≈ 1.36M gas. A keeper cost on
 a rare operation; acceptable, and not on any user path.
 
+That figure bounds `updateValidatorsBatch`: at full width it fits roughly 50
+subnets per transaction before the 75M block limit. The contract does not cap
+the batch, because the right cap depends on the mix of set sizes in the batch
+and a too-large batch simply fails to include - it cannot half-apply, since each
+entry commits atomically inside the loop. Keepers size their own batches.
+
 ### 3.4 Interface
 
 `IValidatorRegistry.getValidators` changes to the dynamic signature above. The
@@ -404,15 +410,41 @@ Per repo standards: `test_`/`testFuzz_`/`test_RevertWhen_`, `bound()` over
 
 ### 6.4 Gas measurement (explicit deliverable)
 
-`snapshots/AlphaVault.json` gains measured 64-validator entries alongside the
-existing ones:
-
-- `wrap: 64 validators`
-- `unwrap: 64 validators`
+`snapshots/AlphaVault.json` carries every priced path at both set sizes, so a
+regression at the common size stays visible next to the ceiling.
 
 Per the known snapshot/coverage interaction, snapshots are regenerated with the
 CLI `--threads 4` on forge v1.7.0 and never from a `forge coverage` run, which
 poisons them.
+
+Measured (forge 1.7.1, `isolate = true`):
+
+| path            | 3 validators | 64 validators | before |
+| --------------- | -----------: | ------------: | -----: |
+| wrap: first     |      557,234 |     6,913,040 | 495,823 |
+| wrap: subsequent|      288,387 |     4,380,185 | 268,544 |
+| unwrap: partial |      224,570 |     3,766,375 | 198,414 |
+| unwrap: full    |      177,188 |     2,197,598 | 154,571 |
+| previewUnwrap   |       63,924 |     1,000,710 |       - |
+
+Two things to read out of this.
+
+**The ceiling is comfortable.** The widest mutating path is a 64-validator
+partial unwrap at 3.8M, about 5% of a 75M block. The union case is wider still -
+a full 64-to-64 rotation puts 128 slots in play - and stays in the same range.
+
+**The common size costs 7-12% more than it did.** That is the price of the set
+being a length rather than a constant: two extra length reads on the registry
+side, a version slot, and dynamic-array encoding where fixed arrays used to
+decode inline. Roughly 40k of the first wrap's increase is one-time storage
+initialisation for the position. No part of it scales with anything a caller
+controls.
+
+These are EVM-side figures against mocks, not a chain-gas forecast. The mock
+overstates the batched read (real SLOADs where the chain prices 625 per db read)
+and understates every `moveStake` (one SSTORE where the chain runs a staking
+extrinsic). A 64-validator wrap issues 63 moves, so the chain-side number is
+dominated by dispatch cost the localnet run has to measure.
 
 ### 6.5 Mocks
 
