@@ -60,11 +60,15 @@ abstract contract AttestationHelper is Test {
     ///      targets.
     function _evenWeights(uint256 count) internal pure returns (uint16[] memory weights) {
         weights = new uint16[](count);
-        uint16 share = uint16(10_000 / count);
-        for (uint256 i; i < count - 1; ++i) {
+        // A validator set holds at most 64 entries, so the count fits uint16 and every share it
+        // divides 10000 into is smaller still.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        uint16 slots = uint16(count);
+        uint16 share = 10_000 / slots;
+        for (uint16 i; i + 1 < slots; ++i) {
             weights[i] = share;
         }
-        weights[count - 1] = uint16(10_000 - share * (count - 1));
+        weights[slots - 1] = 10_000 - share * (slots - 1);
     }
 
     function _submitAttestation(
