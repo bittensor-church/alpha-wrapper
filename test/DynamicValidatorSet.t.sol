@@ -116,6 +116,40 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         assertEq(vault.lastSeenHotkeys(TOKEN1).length, MAX_VALIDATORS);
     }
 
+    /// @dev A weights-only re-attestation moves the version without moving membership, which is the
+    ///      commonest commit of all. It must settle on the new weights and count the set once.
+    function test_Rebalance_SettlesWeightsOnlyReattestation() public {
+        bytes32[] memory hks = _setValidatorCount(NETUID1, 3);
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+
+        uint16[] memory skewed = _weights(8000, 1000, 1000);
+        _setValidators(NETUID1, hks, skewed);
+        vault.rebalance(NETUID1);
+
+        for (uint256 i; i < 3; ++i) {
+            assertEq(_getVaultStake(hks[i], NETUID1), _weighted(10 ether, skewed[i]), "slot off its new weight");
+        }
+        assertEq(vault.totalStake(TOKEN1), 10 ether, "the set must be counted once, not twice");
+        assertEq(vault.lastSeenHotkeys(TOKEN1).length, 3);
+    }
+
+    /// @dev A swap that leaves the set the same size must not read as an unchanged set: the fast
+    ///      path keys on the registry's version, and the length alone cannot tell the two apart.
+    function test_Rebalance_DrainsSameSizeMembershipSwap() public {
+        bytes32[] memory original = _setValidatorCount(NETUID1, 3);
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+
+        bytes32[] memory swapped = _hotkeys(original[0], original[1], hotkey4);
+        _setValidators(NETUID1, swapped, _evenWeights(3));
+        vault.rebalance(NETUID1);
+
+        assertEq(_getVaultStake(original[2], NETUID1), 0, "the swapped-out validator must be drained");
+        assertEq(_vaultStakeAcross(swapped, NETUID1), 10 ether, "whole position on the new set");
+        assertEq(vault.lastSeenHotkeys(TOKEN1).length, 3, "and nothing left to remember");
+    }
+
     /// @dev Between a registry commit and the next vault call the whole position sits on validators
     ///      the set no longer names. The TAO rail must price and sell it from there.
     function test_UnwrapForTao_ExitsFullyRotatedPosition() public {

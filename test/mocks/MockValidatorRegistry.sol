@@ -24,14 +24,6 @@ contract MockValidatorRegistry is IValidatorRegistry {
         }
     }
 
-    /// @dev Re-commits the same membership under a fresh version, so tests can exercise the
-    ///      version-changed path without an actual rotation.
-    function bumpVersion(uint256 netuid) external {
-        unchecked {
-            ++_slots[netuid].version;
-        }
-    }
-
     function getValidators(uint256 netuid)
         external
         view
