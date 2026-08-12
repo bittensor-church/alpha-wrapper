@@ -69,7 +69,7 @@ design that keeps the position continuously on-weight can avoid them.
 
 All verified in subtensor source, not inferred from signatures.
 
-### 2.1 Batched stake reads — the one real gas win
+### 2.1 Batched stake reads
 
 `getStakeInfoForColdkeyAndNetuid(bytes32 coldkey, uint256 netuid, bytes32[] hotkeys)`
 on the staking precompile (`0x…0805`), `precompiles/src/staking.rs:358`.
@@ -105,8 +105,10 @@ Marginal cost per hotkey in the batched call is therefore
 | fixed per-call overhead | (included above) | ~577 |
 | **total** | **~316,928** | **~284,673** |
 
-Batching saves ~32k, about 10%. The db reads dominate and are charged per hotkey
-either way, so **~285k of reads per hot-path call at N=64 is inherent.**
+Batching saves ~32k of chain-charged cost, about 10%, plus the EVM-side cost of
+63 `CALL`s it no longer makes. The db reads dominate and are charged per hotkey
+either way, so **~285k of reads per hot-path call at N=64 is inherent.** No
+arrangement of calls avoids it; §2.2 covers why it cannot be cached away either.
 
 ### 2.2 Why the total cannot be cached or read in O(1)
 
