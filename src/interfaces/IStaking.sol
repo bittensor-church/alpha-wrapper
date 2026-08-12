@@ -25,6 +25,21 @@ interface IStaking {
 
     function getStake(bytes32 hotkey, bytes32 coldkey, uint256 netuid) external view returns (uint256);
 
+    /// @notice One hotkey's alpha stake under a coldkey, as returned by the batched read.
+    struct StakeInfo {
+        bytes32 hotkey;
+        uint256 stake;
+    }
+
+    /// @notice Alpha stake for many hotkeys under one coldkey on one subnet, in a single call.
+    /// @dev    Accepts at most 64 hotkeys and reverts on a duplicate. Hotkeys holding no stake are
+    ///         omitted, so the result is a subset of `hotkeys` in the same order and callers must
+    ///         match entries by hotkey rather than by position.
+    function getStakeInfoForColdkeyAndNetuid(bytes32 coldkey, uint256 netuid, bytes32[] calldata hotkeys)
+        external
+        view
+        returns (StakeInfo[] memory);
+
     function removeStake(bytes32 hotkey, uint256 amount, uint256 netuid) external payable;
 
     /// @notice Tao-denominated dust threshold: after a partial unstake, the chain force-clears any

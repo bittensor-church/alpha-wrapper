@@ -37,7 +37,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey2, NETUID1), 0, "first rotated-out slot consolidated");
         assertEq(_getVaultStake(hotkey3, NETUID1), 0, "second rotated-out slot consolidated");
         assertEq(vault.totalStake(TOKEN1), totalBefore, "total conserved across the chained roll");
-        bytes32[3] memory seen = vault.lastSeenHotkeys(TOKEN1);
+        bytes32[] memory seen = vault.lastSeenHotkeys(TOKEN1);
         assertEq(seen[0], hotkey1);
         assertEq(seen[1], hotkey4);
         assertEq(seen[2], bytes32(0), "remembered set refreshed to the 2-validator current set");
@@ -58,7 +58,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(vault.balanceOf(bob, tokenId), previewedShares, "mint parity with the union-priced preview");
         assertEq(_getVaultStake(hotkey4, 99), 0, "rotated-out dust consolidated by the roll");
         assertEq(vault.totalStake(tokenId), bobDeposit + dust, "rotated-out stake folded into the current-set backing");
-        bytes32[3] memory seen = vault.lastSeenHotkeys(tokenId);
+        bytes32[] memory seen = vault.lastSeenHotkeys(tokenId);
         assertEq(seen[0], hotkey1, "remembered set refreshed to the current set");
     }
 
@@ -208,7 +208,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
 
         assertEq(vault.totalStake(TOKEN1), totalBefore, "backing unchanged after the reverted roll");
         assertGt(_getVaultStake(hotkey3, NETUID1), 0, "rotated-out stake not dropped");
-        bytes32[3] memory seen = vault.lastSeenHotkeys(TOKEN1);
+        bytes32[] memory seen = vault.lastSeenHotkeys(TOKEN1);
         assertEq(seen[2], hotkey3, "remembered set still references the pre-rotation set");
     }
 

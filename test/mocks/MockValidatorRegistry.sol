@@ -5,25 +5,40 @@ import { IValidatorRegistry } from "src/interfaces/IValidatorRegistry.sol";
 
 contract MockValidatorRegistry is IValidatorRegistry {
     struct Slot {
-        bytes32[3] hotkeys;
-        uint16[3] weights;
+        bytes32[] hotkeys;
+        uint16[] weights;
+        uint256 version;
     }
 
     mapping(uint256 => Slot) private _slots;
 
-    /// @dev Seeds corrupt slots (e.g. zero hotkey + non-zero weight) that the real
-    ///      registry would reject; tests deploy a fresh vault against this mock when needed.
-    function setRaw(uint256 netuid, bytes32[3] memory hotkeys, uint16[3] memory weights) external {
-        _slots[netuid] = Slot(hotkeys, weights);
+    /// @dev Seeds corrupt slots (e.g. zero hotkey + non-zero weight, or mismatched lengths) that the
+    ///      real registry would reject; tests deploy a fresh vault against this mock when needed.
+    ///      Each write bumps the version, mirroring the real registry's per-commit nonce.
+    function setRaw(uint256 netuid, bytes32[] memory hotkeys, uint16[] memory weights) external {
+        Slot storage s = _slots[netuid];
+        s.hotkeys = hotkeys;
+        s.weights = weights;
+        unchecked {
+            ++s.version;
+        }
+    }
+
+    /// @dev Re-commits the same membership under a fresh version, so tests can exercise the
+    ///      version-changed path without an actual rotation.
+    function bumpVersion(uint256 netuid) external {
+        unchecked {
+            ++_slots[netuid].version;
+        }
     }
 
     function getValidators(uint256 netuid)
         external
         view
         override
-        returns (bytes32[3] memory hotkeys, uint16[3] memory weights)
+        returns (bytes32[] memory hotkeys, uint16[] memory weights, uint256 version)
     {
         Slot storage s = _slots[netuid];
-        return (s.hotkeys, s.weights);
+        return (s.hotkeys, s.weights, s.version);
     }
 }

@@ -3,6 +3,10 @@ pragma solidity ^0.8.20;
 
 import { MockAlpha } from "./MockAlpha.sol";
 import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
+import { IStaking } from "src/interfaces/IStaking.sol";
+
+/// @dev The chain's per-call bound on the batched stake read.
+uint256 constant MAX_STAKE_INFO_HOTKEYS = 64;
 
 /// @dev The simulated chain's minimum for unstaking. `vm.etch` copies only code, so every suite
 ///      that etches this mock must seed both minimums - an unseeded zero silently accepts amounts
@@ -129,6 +133,38 @@ contract MockStaking {
 
     function getStake(bytes32 hotkey, bytes32 coldkey, uint256 netuid) external view returns (uint256) {
         return stakes[hotkey][coldkey][netuid];
+    }
+
+    /// @dev Mirrors the chain's batched read exactly, because the vault's index-matching depends on
+    ///      every one of these behaviours: the input is bounded at 64, a repeated hotkey reverts,
+    ///      hotkeys holding nothing are dropped from the result, and survivors keep input order.
+    function getStakeInfoForColdkeyAndNetuid(bytes32 coldkey, uint256 netuid, bytes32[] calldata hotkeys)
+        external
+        view
+        returns (IStaking.StakeInfo[] memory)
+    {
+        uint256 count = hotkeys.length;
+        require(count <= MAX_STAKE_INFO_HOTKEYS, "stake info hotkeys over bound");
+        for (uint256 i; i < count; ++i) {
+            for (uint256 j = i + 1; j < count; ++j) {
+                require(hotkeys[i] != hotkeys[j], "duplicate stake info hotkey");
+            }
+        }
+
+        IStaking.StakeInfo[] memory found = new IStaking.StakeInfo[](count);
+        uint256 kept;
+        for (uint256 i; i < count; ++i) {
+            uint256 stake = stakes[hotkeys[i]][coldkey][netuid];
+            if (stake == 0) continue;
+            found[kept] = IStaking.StakeInfo({ hotkey: hotkeys[i], stake: stake });
+            unchecked {
+                ++kept;
+            }
+        }
+        assembly {
+            mstore(found, kept)
+        }
+        return found;
     }
 
     uint256 public taoPerAlpha;
