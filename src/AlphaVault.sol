@@ -792,7 +792,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         return amount - amount % TAO_NATIVE_QUANTUM;
     }
 
-    /// @notice The subnet's attested validators, in weight order.
+    /// @notice The subnet's attested validators, 1 to 64 of them, in the order they were attested.
     function getCurrentValidators(uint256 netuid) external view returns (bytes32[] memory) {
         if (netuid > type(uint16).max) revert NetuidOutOfRange();
         // forge-lint: disable-next-line(unsafe-typecast)
@@ -886,39 +886,51 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     {
         uint256 count = hotkeys.length;
         balances = new uint256[](count);
-        IStaking staking = IStaking(STAKING_PRECOMPILE);
 
         // The attested set alone fits one call, but adding rotated-out validators can push the
         // union past what the chain accepts, so the read is chunked.
         for (uint256 start; start < count; start += MAX_BATCH_HOTKEYS) {
             uint256 remaining = count - start;
             uint256 size = remaining < MAX_BATCH_HOTKEYS ? remaining : MAX_BATCH_HOTKEYS;
+            _readBalanceChunk(hotkeys, coldkey, netuid, start, size, balances);
+        }
+    }
 
-            bytes32[] memory chunk = new bytes32[](size);
-            for (uint256 i; i < size;) {
-                chunk[i] = hotkeys[start + i];
-                unchecked {
-                    ++i;
-                }
+    /// @dev Reads `size` hotkeys of `hotkeys` from `start` and writes each balance into `balances`
+    ///      at the same index.
+    function _readBalanceChunk(
+        bytes32[] memory hotkeys,
+        bytes32 coldkey,
+        uint16 netuid,
+        uint256 start,
+        uint256 size,
+        uint256[] memory balances
+    ) private view {
+        bytes32[] memory chunk = new bytes32[](size);
+        for (uint256 i; i < size;) {
+            chunk[i] = hotkeys[start + i];
+            unchecked {
+                ++i;
             }
+        }
 
-            IStaking.StakeInfo[] memory funded = staking.getStakeInfoForColdkeyAndNetuid(coldkey, netuid, chunk);
+        IStaking.StakeInfo[] memory funded =
+            IStaking(STAKING_PRECOMPILE).getStakeInfoForColdkeyAndNetuid(coldkey, netuid, chunk);
 
-            uint256 cursor;
-            for (uint256 i; i < funded.length;) {
-                // Both arrays share an order, so the scan never rewinds. A reply naming a hotkey
-                // that was not asked for runs the cursor off the chunk and reverts, which is the
-                // right answer to a malformed read.
-                while (chunk[cursor] != funded[i].hotkey) {
-                    unchecked {
-                        ++cursor;
-                    }
-                }
-                balances[start + cursor] = funded[i].stake;
+        uint256 cursor;
+        for (uint256 i; i < funded.length;) {
+            // Both arrays share an order, so the scan never rewinds. A reply naming a hotkey that
+            // was not asked for runs the cursor off the chunk and reverts, which is the right
+            // answer to a malformed read.
+            while (chunk[cursor] != funded[i].hotkey) {
                 unchecked {
                     ++cursor;
-                    ++i;
                 }
+            }
+            balances[start + cursor] = funded[i].stake;
+            unchecked {
+                ++cursor;
+                ++i;
             }
         }
     }
@@ -1105,7 +1117,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             }
         }
 
-        assembly {
+        // Shrink to what was actually staged. Only the length word of an array this function
+        // allocated is written, so no memory outside it is touched.
+        assembly ("memory-safe") {
             mstore(staged, size)
         }
         return staged;
@@ -1196,6 +1210,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         return _sumBalances(_fetchBalances(hotkeys, coldkey, netuid));
     }
 
+    /// @notice Every validator this position may still hold alpha under: the set as of its last
+    ///         state-mutating call, plus any dropped validator whose balance could not be moved.
     function lastSeenHotkeys(uint256 tokenId) external view returns (bytes32[] memory) {
         return _lastSeenHotkeys[tokenId];
     }
