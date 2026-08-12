@@ -82,18 +82,12 @@ contract ValidatorRegistryTest is AttestationHelper {
         att.netuid = netuid;
         att.nonce = nonce;
         att.deadline = deadline;
-        att.hotkeys = new bytes32[](count);
+        att.hotkeys = _hotkeysFrom("validator", count);
+        uint16[] memory weights = _evenWeights(count);
         att.weights = new uint256[](count);
-        uint256 share = 10_000 / count;
         for (uint256 i; i < count; ++i) {
-            att.hotkeys[i] = _hotkeyAt(i);
-            att.weights[i] = share;
+            att.weights[i] = weights[i];
         }
-        att.weights[0] += 10_000 - share * count;
-    }
-
-    function _hotkeyAt(uint256 index) private pure returns (bytes32) {
-        return keccak256(abi.encodePacked("validator", index));
     }
 
     /// @dev Sign with each privkey in the order given. Caller is responsible for ordering

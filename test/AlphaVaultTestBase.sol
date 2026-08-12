@@ -150,22 +150,8 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     /// @dev `count` distinct validator hotkeys, disjoint from the named `hotkey1..4` fixtures so a
     ///      wide set and the fixture set never collide.
-    function _validatorHotkeys(uint256 count) internal pure returns (bytes32[] memory hks) {
-        hks = new bytes32[](count);
-        for (uint256 i; i < count; ++i) {
-            hks[i] = keccak256(abi.encodePacked("validator", i));
-        }
-    }
-
-    /// @dev Even split with the rounding remainder on the last slot, matching how the vault assigns
-    ///      targets.
-    function _evenWeights(uint256 count) internal pure returns (uint16[] memory wts) {
-        wts = new uint16[](count);
-        uint16 share = BPS_BASE / uint16(count);
-        for (uint256 i; i < count - 1; ++i) {
-            wts[i] = share;
-        }
-        wts[count - 1] = BPS_BASE - share * uint16(count - 1);
+    function _validatorHotkeys(uint256 count) internal pure returns (bytes32[] memory) {
+        return _hotkeysFrom("validator", count);
     }
 
     function _setValidatorCount(uint256 netuid, uint256 count) internal returns (bytes32[] memory hks) {

@@ -47,6 +47,26 @@ abstract contract AttestationHelper is Test {
         }
     }
 
+    /// @dev `count` distinct hotkeys derived from `salt`. Distinct salts give disjoint sets, which
+    ///      is how a test rotates a whole validator set out at once.
+    function _hotkeysFrom(string memory salt, uint256 count) internal pure returns (bytes32[] memory hotkeys) {
+        hotkeys = new bytes32[](count);
+        for (uint256 i; i < count; ++i) {
+            hotkeys[i] = keccak256(abi.encodePacked(salt, i));
+        }
+    }
+
+    /// @dev Even split with the rounding remainder on the last slot, matching how the vault assigns
+    ///      targets.
+    function _evenWeights(uint256 count) internal pure returns (uint16[] memory weights) {
+        weights = new uint16[](count);
+        uint16 share = uint16(10_000 / count);
+        for (uint256 i; i < count - 1; ++i) {
+            weights[i] = share;
+        }
+        weights[count - 1] = uint16(10_000 - share * (count - 1));
+    }
+
     function _submitAttestation(
         ValidatorRegistry registry,
         uint256 netuid,
