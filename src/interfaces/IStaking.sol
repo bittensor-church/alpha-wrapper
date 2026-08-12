@@ -32,9 +32,9 @@ interface IStaking {
     }
 
     /// @notice Alpha stake for many hotkeys under one coldkey on one subnet, in a single call.
-    /// @dev    Accepts at most 64 hotkeys and reverts on a duplicate. Hotkeys holding no stake are
-    ///         omitted, so the result is a subset of `hotkeys` in the same order and callers must
-    ///         match entries by hotkey rather than by position.
+    /// @dev    Accepts at most `MAX_STAKE_INFO_HOTKEYS` hotkeys and reverts on a duplicate. Hotkeys
+    ///         holding no stake are omitted, so the result is a subset of `hotkeys` in the same
+    ///         order and callers must match entries by hotkey rather than by position.
     function getStakeInfoForColdkeyAndNetuid(bytes32 coldkey, uint256 netuid, bytes32[] calldata hotkeys)
         external
         view
@@ -54,3 +54,7 @@ interface IStaking {
 
 /// @dev Staking precompile address on Bittensor EVM.
 address constant STAKING_PRECOMPILE = 0x0000000000000000000000000000000000000805;
+
+/// @dev Most hotkeys `getStakeInfoForColdkeyAndNetuid` accepts in one call. A chain constant: the
+///      input is bounded, so a longer list fails to decode rather than returning a partial answer.
+uint256 constant MAX_STAKE_INFO_HOTKEYS = 64;

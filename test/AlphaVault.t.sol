@@ -607,7 +607,10 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     // ------------------ getCurrentValidators raw registry resolution -------------
 
-    function test_GetCurrentValidatorsSurfacesCorruptRegistryRawState() public {
+    // A registry whose hotkeys and weights disagree in length cannot be produced by the real one,
+    // but the vault's registry address is fixed at construction and never checked. A mis-wired one
+    // fails by name rather than indexing off the end of an array.
+    function test_RevertWhen_RegistryReturnsMismatchedSetLengths() public {
         MockValidatorRegistry mock = new MockValidatorRegistry();
         AlphaVault mockVault = _deployVault(address(mock));
 
@@ -619,11 +622,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         mock.setRaw(91, hotkeys, weights);
         _setRegBlock(91, 91);
 
-        // The lengths disagree, which the real registry cannot emit; the vault surfaces the hotkeys
-        // exactly as stored rather than reconciling them against the weights.
-        bytes32[] memory result = mockVault.getCurrentValidators(91);
-        assertEq(result.length, 1);
-        assertEq(result[0], hotkey4);
+        vm.expectRevert(AlphaVault.ValidatorSetMalformed.selector);
+        mockVault.getCurrentValidators(91);
     }
 
     // ------------------ Deposit/Unwrap verify state changes ---------
