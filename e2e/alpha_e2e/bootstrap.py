@@ -78,7 +78,8 @@ def register_hotkey(netuid: int, hotkey_name: str) -> Tuple[str, str]:
     for attempt in (1, 2, 3):
         result = chain.btcli_json(
             ["subnets", "register", "--netuid", str(netuid),
-             "--wallet", config.ALICE_WALLET, "--hotkey", hotkey_name, "--yes"],
+             "--wallet", config.ALICE_WALLET, "--hotkey", hotkey_name,
+             "--no-mev-shield", "--yes"],
         )
         if _is_registered(result):
             break
