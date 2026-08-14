@@ -229,9 +229,8 @@ def test_sub_floor_co_holder_cannot_be_locked_in_or_leak_the_other_holder(env):
     second_holder_coldkey = h160_to_substrate_b32(config.SECOND_HOLDER_ADDRESS)
 
     chain.btcli(
-        ["wallet", "transfer", "--wallet-name", config.ALICE_WALLET,
-         "--dest", h160_to_ss58(config.SECOND_HOLDER_ADDRESS), "--amount", "10",
-         "--allow-death", "--no-prompt"],
+        ["wallet", "transfer", "--wallet", config.ALICE_WALLET,
+         "--dest", h160_to_ss58(config.SECOND_HOLDER_ADDRESS), "--amount-tao", "10", "--yes"],
         check=True,
     )
     print("  Funded holder 2 with 10 TAO for gas")
