@@ -294,7 +294,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint16 netuid = _netuid(tokenId);
         _requireNotDissolving(netuid);
 
-        (bytes32[] memory hotkeys, uint256[] memory balances, uint256 total) = _unionStake(tokenId, netuid, clone);
+        bytes32 vaultColdkey = _coldkeyOf(clone);
+        (bytes32[] memory hotkeys, uint256[] memory balances, uint256 total) =
+            _unionStake(tokenId, netuid, vaultColdkey);
         // The dissolving window is excluded above and completed dissolution zeroes the alpha
         // balance, so a non-zero total implies a live subnet and a zero total cannot be
         // exited via this rail regardless of cause.
@@ -325,7 +327,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // A sell the chain accepts can still fill short at the pool's price floor, so the position
         // reports what left. Selling past the request means the chain swept backing that belongs to
         // the holders who stay; the subtraction refuses to pay it out.
-        uint256 sold = total - _sumBalances(_fetchBalances(hotkeys, _coldkeyOf(clone), netuid));
+        uint256 sold = total - _sumBalances(_fetchBalances(hotkeys, vaultColdkey, netuid));
         uint256 unsold = assets - sold;
         // The chain keeps a RAO or so of every sale; refunding that to a full exit would mint a
         // sub-floor position no rail can ever sell. A partial burn keeps it - it merges into the
@@ -552,9 +554,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
 
         // Each step settles at least one slot exactly at its target, and surpluses and deficits
-        // cancel out, so settling all but one slot settles the last one too.
+        // cancel out, so settling all but one slot settles the last one too. The floor cannot
+        // change mid-transaction, so one read serves every step.
+        uint256 minStakeTao = _minStakeTao();
         for (uint256 round; round < lastIndex;) {
-            if (!_rebalanceStep(tokenId, clone, hotkeys, balances, targets, alphaPriceE18)) break;
+            if (!_rebalanceStep(tokenId, clone, hotkeys, balances, targets, alphaPriceE18, minStakeTao)) break;
             unchecked {
                 ++round;
             }
@@ -567,7 +571,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32[] memory hotkeys,
         uint256[] memory balances,
         uint256[] memory targets,
-        uint256 alphaPriceE18
+        uint256 alphaPriceE18,
+        uint256 minStakeTao
     ) private returns (bool) {
         uint256 overIndex;
         uint256 maxOver;
@@ -600,7 +605,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // trades against the pool and the price read only rounds down. A skipped move (including
         // every move at a zero price read) leaves the split drifted - harmless, since share value
         // depends on the total, not the split.
-        if (alphaPriceE18 == 0 || _isBelowFloorAtReadPrice(moveAmount, alphaPriceE18)) return false;
+        if (alphaPriceE18 == 0 || _taoValue(moveAmount, alphaPriceE18) < minStakeTao) return false;
         SubnetClone(payable(clone)).moveStake(hotkeys[overIndex], hotkeys[underIndex], _netuid(tokenId), moveAmount);
         emit Rebalanced(tokenId, hotkeys[overIndex], hotkeys[underIndex], moveAmount);
         balances[overIndex] -= moveAmount;
@@ -618,7 +623,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     function totalStake(uint256 tokenId) public view returns (uint256) {
         address clone = subnetClone[tokenId];
         if (clone == address(0)) return 0;
-        (,, uint256 total) = _unionStake(tokenId, _netuid(tokenId), clone);
+        (,, uint256 total) = _unionStake(tokenId, _netuid(tokenId), _coldkeyOf(clone));
         return total;
     }
 
@@ -682,7 +687,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // Reverts NoValidatorFound when the registry has no set for this subnet.
         (bytes32[] memory current,) = _resolveValidators(netuid);
 
-        (,, uint256 totalAlpha) = _unionStake(tokenId, netuid, clone, current);
+        (,, uint256 totalAlpha) = _unionStake(tokenId, netuid, _coldkeyOf(clone), current);
         return (_assetsFor(totalAlpha, supply, shares), 0);
     }
 
@@ -951,7 +956,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32[] memory currentSet,
         uint256 alphaPriceE18
     ) private {
-        bytes32[] storage lastSeen = _lastSeenHotkeys[tokenId];
+        bytes32[] memory lastSeen = _lastSeenHotkeys[tokenId];
         if (_anyRotatedOut(lastSeen, currentSet)) {
             uint16 netuid = _netuid(tokenId);
             (
@@ -993,22 +998,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
         // The refresh may only follow a clean roll: a rejected hop reverts the whole call, otherwise
         // stake left on a rotated-out hotkey would drop out of the remembered set and be stranded.
-        while (lastSeen.length > currentSet.length) {
-            lastSeen.pop();
-        }
-        for (uint256 i; i < currentSet.length;) {
-            if (i < lastSeen.length) {
-                if (lastSeen[i] != currentSet[i]) lastSeen[i] = currentSet[i];
-            } else {
-                lastSeen.push(currentSet[i]);
-            }
-            unchecked {
-                ++i;
-            }
-        }
+        _lastSeenHotkeys[tokenId] = currentSet;
     }
 
-    function _anyRotatedOut(bytes32[] storage lastSeen, bytes32[] memory currentSet) private view returns (bool) {
+    function _anyRotatedOut(bytes32[] memory lastSeen, bytes32[] memory currentSet) private pure returns (bool) {
         for (uint256 i; i < lastSeen.length;) {
             if (_isRotatedOut(lastSeen[i], currentSet)) return true;
             unchecked {
@@ -1024,7 +1017,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///      dust would forfeit the self-healing case where a later above-floor deposit is the richest
     ///      balance and carries the rotated-out stake over. When no rotated-out balance remains, the
     ///      returned hotkey is only a placeholder.
-    function _chooseRichestSlot(bytes32[] storage lastSeen, bytes32[] memory currentSet, bytes32 coldkey, uint16 netuid)
+    function _chooseRichestSlot(bytes32[] memory lastSeen, bytes32[] memory currentSet, bytes32 coldkey, uint16 netuid)
         private
         view
         returns (
@@ -1071,13 +1064,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
     }
 
-    function _unionStake(uint256 tokenId, uint16 netuid, address clone)
+    function _unionStake(uint256 tokenId, uint16 netuid, bytes32 coldkey)
         private
         view
         returns (bytes32[] memory, uint256[] memory, uint256)
     {
         (bytes32[] memory current,) = validatorRegistry.getValidators(netuid);
-        return _unionStake(tokenId, netuid, clone, current);
+        return _unionStake(tokenId, netuid, coldkey, current);
     }
 
     /// @dev Every slot the position may hold alpha on: the remembered set, then any current
@@ -1117,13 +1110,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///      has no chance to consolidate first, so it must count stake wherever it sits: between a
     ///      registry commit and the next vault call the whole position is on validators the set no
     ///      longer names, and reading only the current set would report no backing at all.
-    function _unionStake(uint256 tokenId, uint16 netuid, address clone, bytes32[] memory current)
+    function _unionStake(uint256 tokenId, uint16 netuid, bytes32 coldkey, bytes32[] memory current)
         private
         view
         returns (bytes32[] memory hotkeys, uint256[] memory balances, uint256 total)
     {
         hotkeys = _unionSlots(tokenId, current);
-        balances = _fetchBalances(hotkeys, _coldkeyOf(clone), netuid);
+        balances = _fetchBalances(hotkeys, coldkey, netuid);
         total = _sumBalances(balances);
     }
 

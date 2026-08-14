@@ -71,6 +71,23 @@ abstract contract AttestationHelper is Test {
         weights[slots - 1] = 10_000 - share * (slots - 1);
     }
 
+    /// @dev Builds the payload, widening the weights to the attestation's on-wire uint256 type.
+    function _buildAttestation(
+        uint256 netuid,
+        bytes32[] memory hotkeys,
+        uint16[] memory weights,
+        uint256 nonce,
+        uint256 deadline
+    ) internal pure returns (ValidatorRegistry.WeightAttestation memory att) {
+        uint256[] memory wts = new uint256[](weights.length);
+        for (uint256 i = 0; i < weights.length; i++) {
+            wts[i] = weights[i];
+        }
+        att = ValidatorRegistry.WeightAttestation({
+            netuid: netuid, hotkeys: hotkeys, weights: wts, nonce: nonce, deadline: deadline
+        });
+    }
+
     function _submitAttestation(
         ValidatorRegistry registry,
         uint256 netuid,
@@ -78,17 +95,9 @@ abstract contract AttestationHelper is Test {
         uint16[] memory weights,
         uint256[] memory signerPks
     ) internal {
-        uint256[] memory wts = new uint256[](weights.length);
-        for (uint256 i = 0; i < weights.length; i++) {
-            wts[i] = weights[i];
-        }
-        ValidatorRegistry.WeightAttestation memory att = ValidatorRegistry.WeightAttestation({
-            netuid: netuid,
-            hotkeys: hotkeys,
-            weights: wts,
-            nonce: registry.nonces(netuid) + 1,
-            deadline: block.timestamp + 3600
-        });
+        ValidatorRegistry.WeightAttestation memory att = _buildAttestation(
+            netuid, hotkeys, weights, registry.nonces(netuid) + 1, block.timestamp + 3600
+        );
         bytes32 digest = _attestationDigest(registry, att);
         bytes[] memory sigs = _sign(digest, signerPks);
         registry.updateValidators(att, sigs);

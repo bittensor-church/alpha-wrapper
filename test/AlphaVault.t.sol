@@ -598,8 +598,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         corruptWts[2] = 5_000;
         mock.setRaw(92, corruptHks, corruptWts);
         _setRegBlock(92, 92);
-        // A non-empty set counts as configured, so a leading zero entry no longer reads as
-        // unconfigured; it is surfaced rather than rejected.
+        // A non-empty set counts as configured, so a leading zero entry is surfaced rather than
+        // read as unconfigured.
         bytes32[] memory surfaced = mockVault.getCurrentValidators(92);
         assertEq(surfaced.length, 3);
         assertEq(surfaced[0], bytes32(0));

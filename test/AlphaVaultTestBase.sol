@@ -5,7 +5,7 @@ import { Vm } from "forge-std/Test.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
-import { ValidatorRegistry, MAX_VALIDATORS as REGISTRY_VALIDATOR_CAP } from "src/ValidatorRegistry.sol";
+import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
 import { MockStaking, CHAIN_MIN_STAKE, CHAIN_MIN_TRANSFER, CHAIN_NOMINATOR_MIN_STAKE } from "./mocks/MockStaking.sol";
 import { MockAddressMapping } from "./mocks/MockAddressMapping.sol";
 import { MockSubnetPrecompile } from "./mocks/MockSubnetPrecompile.sol";
@@ -53,7 +53,6 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     uint16 public constant BPS_BASE = 10_000;
 
     /// @dev The registry's cap, set by the staking precompile's 64-hotkey batched read.
-    uint256 public constant MAX_VALIDATORS = REGISTRY_VALIDATOR_CAP;
 
     // The simulated chain's dust threshold; aliased so the two can never drift.
     uint256 internal constant DUST_THRESHOLD = CHAIN_NOMINATOR_MIN_STAKE;
@@ -148,14 +147,10 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         arr[2] = c;
     }
 
-    /// @dev `count` distinct validator hotkeys, disjoint from the named `hotkey1..4` fixtures so a
-    ///      wide set and the fixture set never collide.
-    function _validatorHotkeys(uint256 count) internal pure returns (bytes32[] memory) {
-        return _hotkeysFrom("validator", count);
-    }
-
+    /// @dev The salted hotkeys are disjoint from the named `hotkey1..4` fixtures, so a wide set and
+    ///      the fixture set never collide.
     function _setValidatorCount(uint256 netuid, uint256 count) internal returns (bytes32[] memory hks) {
-        hks = _validatorHotkeys(count);
+        hks = _hotkeysFrom("validator", count);
         _setValidators(netuid, hks, _evenWeights(count));
     }
 
@@ -167,6 +162,18 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     function _vaultStakeAcross(bytes32[] memory hks, uint256 netuid) internal view returns (uint256) {
         return _stakeAcross(hks, _subnetColdkey(netuid), netuid);
+    }
+
+    /// @dev Asserts the vault's stake on `hks` follows the even split, with the rounding remainder
+    ///      on the last slot - the same way the vault assigns targets.
+    function _assertEvenSpread(bytes32[] memory hks, uint256 netuid, uint256 total) internal view {
+        uint16[] memory wts = _evenWeights(hks.length);
+        uint256 assigned;
+        for (uint256 i; i + 1 < hks.length; ++i) {
+            assertEq(_getVaultStake(hks[i], netuid), _weighted(total, wts[i]), "slot off its weight");
+            assigned += _weighted(total, wts[i]);
+        }
+        assertEq(_getVaultStake(hks[hks.length - 1], netuid), total - assigned, "last slot absorbs the remainder");
     }
 
     function _countRebalancedLogs(Vm.Log[] memory logs) internal pure returns (uint256 count) {

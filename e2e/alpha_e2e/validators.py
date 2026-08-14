@@ -102,8 +102,6 @@ def set_validators(
         {
             "from": submitter.address,
             "nonce": transaction_nonce,
-            # The commit rewrites every hotkey slot, so the budget must grow with the set.
-            "gas": 500_000 + 30_000 * len(hotkey_bytes),
             "gasPrice": w3.to_wei(10, "gwei"),
             "chainId": chain_id,
         }

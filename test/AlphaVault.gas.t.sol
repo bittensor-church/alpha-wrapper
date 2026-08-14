@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
+import { MAX_VALIDATORS } from "src/ValidatorRegistry.sol";
 
 /// forge-config: default.isolate = true
 contract AlphaVaultGasTest is AlphaVaultTestBase {

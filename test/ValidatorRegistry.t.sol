@@ -77,17 +77,9 @@ contract ValidatorRegistryTest is AttestationHelper {
     function _attN(uint256 netuid, uint256 count, uint256 nonce, uint256 deadline)
         private
         pure
-        returns (ValidatorRegistry.WeightAttestation memory att)
+        returns (ValidatorRegistry.WeightAttestation memory)
     {
-        att.netuid = netuid;
-        att.nonce = nonce;
-        att.deadline = deadline;
-        att.hotkeys = _hotkeysFrom("validator", count);
-        uint16[] memory weights = _evenWeights(count);
-        att.weights = new uint256[](count);
-        for (uint256 i; i < count; ++i) {
-            att.weights[i] = weights[i];
-        }
+        return _buildAttestation(netuid, _hotkeysFrom("validator", count), _evenWeights(count), nonce, deadline);
     }
 
     /// @dev Sign with each privkey in the order given. Caller is responsible for ordering

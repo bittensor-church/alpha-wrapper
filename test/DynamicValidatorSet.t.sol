@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { CHAIN_MIN_STAKE } from "./mocks/MockStaking.sol";
+import { MAX_VALIDATORS } from "src/ValidatorRegistry.sol";
 
 /// @dev A subnet's validator set is any size from 1 to 64 and changes size between calls. Three is
 ///      the expected size; these tests hold the two ends, the transitions between them, and the
@@ -18,10 +19,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         bytes32[] memory hks = _setValidatorCount(NETUID1, MAX_VALIDATORS);
         _depositAndWrap(alice, NETUID1, 10 ether);
 
-        uint16[] memory wts = _evenWeights(MAX_VALIDATORS);
-        for (uint256 i; i < MAX_VALIDATORS; ++i) {
-            assertEq(_getVaultStake(hks[i], NETUID1), _weighted(10 ether, wts[i]), "slot off its weight");
-        }
+        _assertEvenSpread(hks, NETUID1, 10 ether);
         assertEq(vault.totalStake(TOKEN1), 10 ether);
     }
 
@@ -46,10 +44,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         assertEq(vault.totalStake(TOKEN1), 10 ether, "total conserved across the shrink");
         assertEq(vault.lastSeenHotkeys(TOKEN1).length, 3, "remembered set carries no stale tail");
 
-        uint16[] memory wts = _evenWeights(3);
-        for (uint256 i; i < 3; ++i) {
-            assertEq(_getVaultStake(narrow[i], NETUID1), _weighted(10 ether, wts[i]));
-        }
+        _assertEvenSpread(narrow, NETUID1, 10 ether);
     }
 
     function test_Rebalance_GrowToCapSpreadsAcrossFullSet() public {
@@ -59,10 +54,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         bytes32[] memory wide = _setValidatorCount(NETUID1, MAX_VALIDATORS);
         vault.rebalance(NETUID1);
 
-        uint16[] memory wts = _evenWeights(MAX_VALIDATORS);
-        for (uint256 i; i < MAX_VALIDATORS; ++i) {
-            assertEq(_getVaultStake(wide[i], NETUID1), _weighted(10 ether, wts[i]), "slot off its weight");
-        }
+        _assertEvenSpread(wide, NETUID1, 10 ether);
         assertEq(vault.totalStake(TOKEN1), 10 ether);
         assertEq(vault.lastSeenHotkeys(TOKEN1).length, MAX_VALIDATORS);
     }
@@ -169,13 +161,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         bytes32[] memory hks = _setValidatorCount(NETUID1, count);
         _depositAndWrap(alice, NETUID1, amount);
 
-        uint16[] memory wts = _evenWeights(count);
-        uint256 assigned;
-        for (uint256 i; i < count - 1; ++i) {
-            assertEq(_getVaultStake(hks[i], NETUID1), _weighted(amount, wts[i]), "slot off its weight");
-            assigned += _weighted(amount, wts[i]);
-        }
-        assertEq(_getVaultStake(hks[count - 1], NETUID1), amount - assigned, "last slot absorbs the remainder");
+        _assertEvenSpread(hks, NETUID1, amount);
         assertEq(vault.totalStake(TOKEN1), amount);
     }
 
