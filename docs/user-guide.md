@@ -6,8 +6,8 @@ already staked on the subnet you want to wrap. Read
 
 ## Wrapping
 
-1. Check the validator set: `getCurrentValidators(netuid)` returns up to
-   three hotkeys. The vault only accepts deposits sitting under one of
+1. Check the validator set: `getCurrentValidators(netuid)` returns the
+   subnet's hotkeys, one to 64. The vault only accepts deposits sitting under one of
    them; if your stake is delegated elsewhere, first move it under one
    of these with the chain's move_stake call.
 2. Get your deposit address: `getDepositAddress(you, netuid)`. This is an
