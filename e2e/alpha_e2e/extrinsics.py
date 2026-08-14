@@ -162,6 +162,29 @@ def set_admin_freeze_window(
     return block_hash
 
 
+def set_max_registrations_per_block(
+    netuid: int, limit: int, *, chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Raise a subnet's per-block registration cap via Sudo. The bootstrap registers
+    several hotkeys in a row, which the chain's default cap turns away. Root sets
+    this, not the subnet owner, so it cannot go through the owner hyperparameters."""
+    with _connect(chain_endpoint) as client:
+        block_hash = _submit(client, _sudo(
+            client,
+            _sdk().calls.AdminUtils.sudo_set_max_registrations_per_block(
+                netuid=netuid, max_registrations_per_block=limit,
+            ),
+        ))
+        current = client.query(
+            _sdk().storage.SubtensorModule.MaxRegistrationsPerBlock, [netuid],
+        )
+    if current != limit:
+        raise ExtrinsicError(
+            f"set_max_registrations_per_block did not reach limit={limit} (now {current})"
+        )
+    return block_hash
+
+
 def get_nominator_min_required_stake(*, chain_endpoint: str = config.CHAIN_ENDPOINT) -> int:
     """Read the global nominator dust-threshold factor."""
     with _connect(chain_endpoint) as client:

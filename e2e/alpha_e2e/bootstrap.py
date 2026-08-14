@@ -191,14 +191,14 @@ def _create_subnets() -> List[int]:
         print(f"  netuid {netuid}")
 
     # The fast-runtime's admin freeze window lets owner/root hyperparameter writes
-    # (max_regs_per_block below, the transfer toggle in the transfers-off test)
+    # (the registration cap below, the transfer toggle in the transfers-off test)
     # land only near each subnet's epoch boundary and otherwise silently miss.
     # Disable it so they apply first try.
     _log("Disable admin freeze window (deterministic sudo hyperparameter writes)")
     extrinsics.set_admin_freeze_window(0)
     print("  AdminFreezeWindow -> 0")
 
-    _log("Start emissions + increase max_regs_per_block")
+    _log("Start emissions + raise the per-block registration cap")
     for netuid in netuids:
         chain.btcli(
             ["sudo", "start", "--netuid", str(netuid),
@@ -207,12 +207,8 @@ def _create_subnets() -> List[int]:
             check=True,
         )
         print(f"  netuid {netuid} emissions started")
-        chain.btcli(
-            ["sudo", "set", "--netuid", str(netuid), "--wallet", config.ALICE_WALLET,
-             "--name", "max_regs_per_block", "--value", "8", "--yes"],
-            check=True,
-        )
-        print(f"  netuid {netuid} max_regs_per_block -> 8")
+        extrinsics.set_max_registrations_per_block(netuid, 8)
+        print(f"  netuid {netuid} registrations per block -> 8")
     return netuids
 
 
