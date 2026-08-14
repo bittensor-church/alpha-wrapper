@@ -7,10 +7,16 @@ bracketed scientific suffix to numeric values.
 import json
 import os
 import subprocess
+import sys
 from functools import lru_cache
 from typing import List, Optional
 
 from . import config
+
+# The SDK ships a `btcli` of its own, so whichever package pip writes that script
+# last owns the name. Naming the module keeps every call on the CLI these commands
+# are written for, whatever the install order was.
+BTCLI_COMMAND = [sys.executable, "-m", "bittensor_cli.cli"]
 
 
 class ChainError(RuntimeError):
@@ -154,4 +160,6 @@ def btcli(
     extraction, registration grep, wallet files) keep check=False; steps with no
     read-back (funding transfers, subnet start, sudo set) pass check=True so a
     failure aborts the run at its cause, not at a confusing later step."""
-    return run(["btcli", *args, "--network", config.CHAIN_ENDPOINT], check=check, input=input)
+    return run(
+        [*BTCLI_COMMAND, *args, "--network", config.CHAIN_ENDPOINT], check=check, input=input,
+    )

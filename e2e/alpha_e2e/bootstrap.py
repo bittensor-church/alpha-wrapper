@@ -14,8 +14,8 @@ be deposited:
   Phase 5     fund the wrapper user account
 
 btcli calls go through chain.btcli() (auto-appends --network); wallet
-regen/creation calls go through chain.run(["btcli", ...]) directly because
-they must not carry the --network flag.
+regen/creation calls go through chain.run([*chain.BTCLI_COMMAND, ...]) directly
+because they must not carry the --network flag.
 """
 import os
 import re
@@ -66,7 +66,7 @@ def register_hotkey(netuid: int, hotkey_name: str) -> Tuple[str, str]:
     hotkey_file = substrate.hotkey_file_path(config.ALICE_WALLET, hotkey_name)
     if not os.path.isfile(hotkey_file):
         chain.run(
-            ["btcli", "wallet", "new-hotkey", "--wallet-name", config.ALICE_WALLET,
+            [*chain.BTCLI_COMMAND, "wallet", "new-hotkey", "--wallet-name", config.ALICE_WALLET,
              "--hotkey", hotkey_name, "--n-words", "12", "--no-use-password"],
             check=False,
         )
@@ -136,7 +136,7 @@ def _ensure_alice_wallet() -> None:
     if need_regen:
         print("  Setting up dev Alice wallet from seed...")
         chain.run(
-            ["btcli", "wallet", "regen-coldkey", "--wallet-name", config.ALICE_WALLET,
+            [*chain.BTCLI_COMMAND, "wallet", "regen-coldkey", "--wallet-name", config.ALICE_WALLET,
              "--wallet-path", os.path.expanduser("~/.bittensor/wallets"),
              "--seed", config.ALICE_COLDKEY_SEED, "--no-use-password", "--overwrite"],
             check=False,
@@ -149,7 +149,7 @@ def _ensure_alice_wallet() -> None:
     if not os.path.isfile(hotkey_file):
         print(f"  Creating hotkey '{config.ALICE_HOTKEY_NAME}' for wallet '{config.ALICE_WALLET}'...")
         chain.run(
-            ["btcli", "wallet", "new-hotkey", "--wallet-name", config.ALICE_WALLET,
+            [*chain.BTCLI_COMMAND, "wallet", "new-hotkey", "--wallet-name", config.ALICE_WALLET,
              "--hotkey", config.ALICE_HOTKEY_NAME, "--n-words", "12", "--no-use-password"],
             check=False,
         )
