@@ -13,12 +13,12 @@ be deposited:
               the initial 50/30/20 validator sets, create the subnet proxies
   Phase 5     fund the wrapper user account
 
-btcli calls go through chain.btcli() (auto-appends --network); wallet
-regen/creation calls go through chain.run(["btcli", ...]) directly because
-they must not carry the --network flag.
+btcli calls go through chain.btcli() (auto-appends --network) or
+chain.btcli_json() where the outcome is read back; wallet regen/creation calls
+go through chain.run(["btcli", ...]) directly because they touch only local key
+files and must not carry the --network flag.
 """
 import os
-import re
 import shutil
 import time
 from typing import List, NamedTuple, Tuple
@@ -42,21 +42,21 @@ def _log(message: str) -> None:
 
 # --- Chain ops shared with the scenarios ---------------------------------------
 
-def create_subnet(name: str) -> int:
-    """Create a subnet via btcli and extract its netuid. btcli still asks
-    interactive questions despite --no-prompt, so pipe blank lines as answers."""
-    completed = chain.btcli(
-        ["subnets", "create", "--wallet-name", config.ALICE_WALLET,
-         "--hotkey", config.ALICE_HOTKEY_NAME, "--no-mev-protection",
-         "--no-prompt", "--subnet-name", name],
-        input="\n" * 10,
+def create_subnet() -> int:
+    """Create a subnet and return the netuid the chain assigned it."""
+    result = chain.btcli_json(
+        ["subnets", "create", "--wallet", config.ALICE_WALLET,
+         "--wallet-hotkey", config.ALICE_HOTKEY_NAME, "--yes"],
     )
-    output = (completed.stdout or "") + (completed.stderr or "")
-    matches = re.findall(r"netuid:\s*(\d+)", output)
-    if not matches:
-        print(f"  {output}")
-        raise RuntimeError("Could not extract netuid")
-    return int(matches[-1])
+    netuid = result.get("data", {}).get("netuid")
+    if netuid is None:
+        raise RuntimeError(f"Could not extract netuid: {result}")
+    return int(netuid)
+
+
+# A repeat registration is turned away for the hotkey already holding a slot,
+# which is exactly the state this function is asked to reach.
+_ALREADY_REGISTERED = "HotKeyAlreadyRegisteredInSubNet"
 
 
 def register_hotkey(netuid: int, hotkey_name: str) -> Tuple[str, str]:
@@ -66,31 +66,29 @@ def register_hotkey(netuid: int, hotkey_name: str) -> Tuple[str, str]:
     hotkey_file = substrate.hotkey_file_path(config.ALICE_WALLET, hotkey_name)
     if not os.path.isfile(hotkey_file):
         chain.run(
-            ["btcli", "wallet", "new-hotkey", "--wallet-name", config.ALICE_WALLET,
-             "--hotkey", hotkey_name, "--n-words", "12", "--no-use-password"],
+            ["btcli", "wallet", "new-hotkey", "--wallet", config.ALICE_WALLET,
+             "--wallet-hotkey", hotkey_name, "--n-words", "12"],
             check=False,
         )
 
-    output = ""
+    pubkey = substrate.read_hotkey_pubkey(config.ALICE_WALLET, hotkey_name)
+    ss58 = substrate.read_hotkey_ss58(config.ALICE_WALLET, hotkey_name)
+
+    refusal = None
     for attempt in (1, 2, 3):
-        completed = chain.btcli(
-            ["subnets", "register", "--netuid", str(netuid),
-             "--wallet-name", config.ALICE_WALLET, "--hotkey", hotkey_name, "--no-prompt"],
-        )
-        output = (completed.stdout or "") + (completed.stderr or "")
-        if re.search(r"Registered|Already", output):
-            break
+        try:
+            extrinsics.burned_register(ss58, netuid)
+            return pubkey, ss58
+        except extrinsics.ExtrinsicError as error:
+            if _ALREADY_REGISTERED in str(error):
+                return pubkey, ss58
+            refusal = error
         print(f"  Retry {attempt} for {hotkey_name} (waiting for next block)...")
         time.sleep(6)
 
-    if not re.search(r"Registered|Already", output):
-        print(output)
-        raise RuntimeError(
-            f"register failed for {hotkey_name} on netuid {netuid} after 3 attempts"
-        )
-    pubkey = substrate.read_hotkey_pubkey(config.ALICE_WALLET, hotkey_name)
-    ss58 = substrate.read_hotkey_ss58(config.ALICE_WALLET, hotkey_name)
-    return pubkey, ss58
+    raise RuntimeError(
+        f"register failed for {hotkey_name} on netuid {netuid} after 3 attempts: {refusal}"
+    )
 
 
 # --- Pre-flight -----------------------------------------------------------------
@@ -136,9 +134,9 @@ def _ensure_alice_wallet() -> None:
     if need_regen:
         print("  Setting up dev Alice wallet from seed...")
         chain.run(
-            ["btcli", "wallet", "regen-coldkey", "--wallet-name", config.ALICE_WALLET,
+            ["btcli", "wallet", "regen-coldkey", "--wallet", config.ALICE_WALLET,
              "--wallet-path", os.path.expanduser("~/.bittensor/wallets"),
-             "--seed", config.ALICE_COLDKEY_SEED, "--no-use-password", "--overwrite"],
+             "--seed", config.ALICE_COLDKEY_SEED, "--no-password", "--overwrite"],
             check=False,
         )
         if not os.path.isfile(coldkey_file):
@@ -149,8 +147,8 @@ def _ensure_alice_wallet() -> None:
     if not os.path.isfile(hotkey_file):
         print(f"  Creating hotkey '{config.ALICE_HOTKEY_NAME}' for wallet '{config.ALICE_WALLET}'...")
         chain.run(
-            ["btcli", "wallet", "new-hotkey", "--wallet-name", config.ALICE_WALLET,
-             "--hotkey", config.ALICE_HOTKEY_NAME, "--n-words", "12", "--no-use-password"],
+            ["btcli", "wallet", "new-hotkey", "--wallet", config.ALICE_WALLET,
+             "--wallet-hotkey", config.ALICE_HOTKEY_NAME, "--n-words", "12"],
             check=False,
         )
         print(f"  Created hotkey '{config.ALICE_HOTKEY_NAME}'")
@@ -167,9 +165,8 @@ def _ensure_evm_account_funded(
     balance = chain.cast_balance_ether(address)
     if int(balance) < minimum_tao:
         chain.btcli(
-            ["wallet", "transfer", "--wallet-name", config.ALICE_WALLET,
-             "--dest", ss58, "--amount", str(transfer_tao),
-             "--allow-death", "--no-prompt"],
+            ["wallet", "transfer", "--wallet", config.ALICE_WALLET,
+             "--dest", ss58, "--amount-tao", str(transfer_tao), "--yes"],
             check=True,
         )
         print(f"  Transferred {transfer_tao} TAO -> {address} ({ss58})")
@@ -184,34 +181,30 @@ def _create_subnets() -> List[int]:
     _log("Phase 1: Create 3 subnets")
     netuids = []
     for subnet_number in (1, 2, 3):
-        print(f"  Creating subnet alpha_e2e_{subnet_number} ...")
-        netuid = create_subnet(f"alpha_e2e_{subnet_number}")
+        print(f"  Creating subnet {subnet_number} of 3 ...")
+        netuid = create_subnet()
         netuids.append(netuid)
         print(f"  netuid {netuid}")
 
     # The fast-runtime's admin freeze window lets owner/root hyperparameter writes
-    # (max_regs_per_block below, the transfer toggle in the transfers-off test)
+    # (the registration cap below, the transfer toggle in the transfers-off test)
     # land only near each subnet's epoch boundary and otherwise silently miss.
     # Disable it so they apply first try.
     _log("Disable admin freeze window (deterministic sudo hyperparameter writes)")
     extrinsics.set_admin_freeze_window(0)
     print("  AdminFreezeWindow -> 0")
 
-    _log("Start emissions + increase max_regs_per_block")
+    _log("Start emissions + raise the per-block registration cap")
     for netuid in netuids:
         chain.btcli(
-            ["subnets", "start", "--netuid", str(netuid),
-             "--wallet-name", config.ALICE_WALLET, "--hotkey", config.ALICE_HOTKEY_NAME,
-             "--no-prompt"],
+            ["sudo", "start", "--netuid", str(netuid),
+             "--wallet", config.ALICE_WALLET, "--wallet-hotkey", config.ALICE_HOTKEY_NAME,
+             "--yes"],
             check=True,
         )
         print(f"  netuid {netuid} emissions started")
-        chain.btcli(
-            ["sudo", "set", "--netuid", str(netuid), "--wallet-name", config.ALICE_WALLET,
-             "--param", "max_regs_per_block", "--value", "8", "--no-prompt"],
-            check=True,
-        )
-        print(f"  netuid {netuid} max_regs_per_block -> 8")
+        extrinsics.set_max_registrations_per_block(netuid, 8)
+        print(f"  netuid {netuid} registrations per block -> 8")
     return netuids
 
 

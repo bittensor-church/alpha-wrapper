@@ -4,10 +4,11 @@ Each function opens a fresh connection, submits one extrinsic, and waits for
 inclusion. Failures raise ExtrinsicError carrying the chain's decoded module
 error (e.g. its name), which negative tests assert on.
 
-substrateinterface is imported lazily so the pure-Python helpers in this
+The bittensor SDK is imported lazily so the pure-Python helpers in this
 package stay usable without it installed.
 """
 import time
+from contextlib import contextmanager
 
 from . import config
 
@@ -16,75 +17,71 @@ class ExtrinsicError(RuntimeError):
     """A submitted extrinsic failed; str(error) carries the decoded module error."""
 
 
+def _sdk():
+    """The bittensor SDK: its client, its generated call builders (`calls`) and
+    storage descriptors (`storage`), and the key primitives in `sp_core`."""
+    import bittensor
+
+    return bittensor
+
+
+@contextmanager
 def _connect(chain_endpoint: str):
-    from substrateinterface import Keypair, SubstrateInterface
+    """A client pinned to `chain_endpoint`. Both endpoint pools are left empty so
+    an unreachable localnet fails the test instead of rotating the suite onto a
+    public node."""
+    with _sdk().SyncClient(
+        chain_endpoint, fallback_endpoints=[], archive_endpoints=[]
+    ) as client:
+        yield client
 
-    substrate = SubstrateInterface(url=chain_endpoint)
-    alice = Keypair.create_from_uri("//Alice")
-    return substrate, alice
+
+def _failure(result) -> str:
+    """The failed dispatch, named: the SDK reports the error's documentation text,
+    while callers match on the error name (e.g. TransferDisallowed)."""
+    error = result.error
+    if error is None or not error.name:
+        return result.message
+    return f"{error.name}: {error.message}"
 
 
-def _submit(substrate, alice, call) -> str:
+def _submit(client, call) -> str:
     """Sign `call` as Alice, wait for inclusion, and return the block hash."""
-    extrinsic = substrate.create_signed_extrinsic(call=call, keypair=alice)
-    receipt = substrate.submit_extrinsic(extrinsic, wait_for_inclusion=True)
-    if not receipt.is_success:
-        # error_message is the metadata-decoded module error, e.g.
-        # {'type': 'Module', 'name': 'TransferDisallowed', ...} - callers match the name.
-        raise ExtrinsicError(str(receipt.error_message))
-    return receipt.block_hash
+    alice = _sdk().sp_core.Keypair.create_from_uri("//Alice")
+    result = client.submit_call(call, alice, wait_for_finalization=False)
+    if not result.success:
+        raise ExtrinsicError(_failure(result))
+    return result.block_hash
 
 
-def _submit_subtensor_call(chain_endpoint: str, call_function: str, call_params: dict) -> str:
-    substrate, alice = _connect(chain_endpoint)
-    try:
-        call = substrate.compose_call(
-            call_module="SubtensorModule",
-            call_function=call_function,
-            call_params=call_params,
-        )
-    except ValueError as error:
-        raise ExtrinsicError(
-            f"runtime has no SubtensorModule.{call_function}: {error}"
-        ) from error
-    return _submit(substrate, alice, call)
-
-
-def _compose_sudo_call(substrate, inner_module: str, inner_function: str, call_params: dict):
-    inner = substrate.compose_call(
-        call_module=inner_module,
-        call_function=inner_function,
-        call_params=call_params,
-    )
-    return substrate.compose_call(
-        call_module="Sudo",
-        call_function="sudo",
-        call_params={"call": inner},
-    )
+def _sudo(client, call):
+    """Wrap `call` in root origin. The inner call is encoded against the runtime
+    first, because sudo carries an encoded call rather than a builder."""
+    return _sdk().calls.Sudo.sudo(call=client.compose(call))
 
 
 def transfer_stake(
     dest_ss58: str, hotkey_ss58: str, netuid: int, alpha_amount: int,
     *, chain_endpoint: str = config.CHAIN_ENDPOINT,
 ) -> str:
-    return _submit_subtensor_call(chain_endpoint, "transfer_stake", {
-        "destination_coldkey": dest_ss58,
-        "hotkey": hotkey_ss58,
-        "origin_netuid": netuid,
-        "destination_netuid": netuid,
-        "alpha_amount": alpha_amount,
-    })
+    with _connect(chain_endpoint) as client:
+        return _submit(client, _sdk().calls.SubtensorModule.transfer_stake(
+            destination_coldkey=dest_ss58,
+            hotkey=hotkey_ss58,
+            origin_netuid=netuid,
+            destination_netuid=netuid,
+            alpha_amount=alpha_amount,
+        ))
 
 
 def add_stake(
     hotkey_ss58: str, netuid: int, amount_rao: int,
     *, chain_endpoint: str = config.CHAIN_ENDPOINT,
 ) -> str:
-    return _submit_subtensor_call(chain_endpoint, "add_stake", {
-        "hotkey": hotkey_ss58,
-        "netuid": netuid,
-        "amount_staked": amount_rao,
-    })
+    with _connect(chain_endpoint) as client:
+        return _submit(client, _sdk().calls.SubtensorModule.add_stake(
+            hotkey=hotkey_ss58, netuid=netuid, amount_staked=amount_rao,
+        ))
 
 
 def remove_stake(
@@ -92,11 +89,10 @@ def remove_stake(
     *, chain_endpoint: str = config.CHAIN_ENDPOINT,
 ) -> str:
     """Sell `amount_rao` alpha back to the pool for TAO."""
-    return _submit_subtensor_call(chain_endpoint, "remove_stake", {
-        "hotkey": hotkey_ss58,
-        "netuid": netuid,
-        "amount_unstaked": amount_rao,
-    })
+    with _connect(chain_endpoint) as client:
+        return _submit(client, _sdk().calls.SubtensorModule.remove_stake(
+            hotkey=hotkey_ss58, netuid=netuid, amount_unstaked=amount_rao,
+        ))
 
 
 def lock_stake(
@@ -104,11 +100,23 @@ def lock_stake(
     *, chain_endpoint: str = config.CHAIN_ENDPOINT,
 ) -> str:
     """Lock `amount_rao` alpha to the given conviction hotkey."""
-    return _submit_subtensor_call(chain_endpoint, "lock_stake", {
-        "hotkey": hotkey_ss58,
-        "netuid": netuid,
-        "amount": amount_rao,
-    })
+    with _connect(chain_endpoint) as client:
+        return _submit(client, _sdk().calls.SubtensorModule.lock_stake(
+            hotkey=hotkey_ss58, netuid=netuid, amount=amount_rao,
+        ))
+
+
+def burned_register(
+    hotkey_ss58: str, netuid: int, *, chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Register a hotkey on a subnet, paying the recycle cost from Alice's balance.
+
+    Submitted as a plain call rather than through btcli, which requires this one
+    to be MEV-shielded -- machinery the localnet does not run."""
+    with _connect(chain_endpoint) as client:
+        return _submit(client, _sdk().calls.SubtensorModule.burned_register(
+            netuid=netuid, hotkey=hotkey_ss58,
+        ))
 
 
 def get_lock(
@@ -116,11 +124,10 @@ def get_lock(
     *, chain_endpoint: str = config.CHAIN_ENDPOINT,
 ) -> int:
     """locked_mass of the (coldkey, netuid, hotkey) lock in RAW alpha (0 when none)."""
-    from substrateinterface import SubstrateInterface
-
-    substrate = SubstrateInterface(url=chain_endpoint)
-    result = substrate.query("SubtensorModule", "Lock", [coldkey_ss58, netuid, hotkey_ss58])
-    value = result.value if result is not None else None
+    with _connect(chain_endpoint) as client:
+        value = client.query(
+            _sdk().storage.SubtensorModule.Lock, [coldkey_ss58, netuid, hotkey_ss58],
+        )
     return value.get("locked_mass", 0) if isinstance(value, dict) else 0
 
 
@@ -133,21 +140,19 @@ def toggle_transfer(
     removeStake/moveStake keep working. Relies on the admin freeze window being
     disabled first (see set_admin_freeze_window); retries across blocks as a
     safety net."""
-    substrate, alice = _connect(chain_endpoint)
-    call = _compose_sudo_call(
-        substrate, "AdminUtils", "sudo_set_toggle_transfer",
-        {"netuid": netuid, "toggle": enabled},
-    )
-    for attempt in range(attempts):
-        extrinsic = substrate.create_signed_extrinsic(call=call, keypair=alice)
-        receipt = substrate.submit_extrinsic(extrinsic, wait_for_inclusion=True)
-        # Sudo.sudo reports success even when the inner call reverts, so trust the
-        # chain state rather than the receipt: read the toggle back and check it stuck.
-        current = substrate.query("SubtensorModule", "TransferToggle", [netuid]).value
-        if current == enabled:
-            return receipt.block_hash
-        if attempt != attempts - 1:
-            time.sleep(6)
+    with _connect(chain_endpoint) as client:
+        call = _sudo(client, _sdk().calls.AdminUtils.sudo_set_toggle_transfer(
+            netuid=netuid, toggle=enabled,
+        ))
+        for attempt in range(attempts):
+            block_hash = _submit(client, call)
+            # Sudo reports success even when the inner call reverts, so trust the
+            # chain state rather than the result: read the toggle back and check it stuck.
+            current = client.query(_sdk().storage.SubtensorModule.TransferToggle, [netuid])
+            if current == enabled:
+                return block_hash
+            if attempt != attempts - 1:
+                time.sleep(6)
     raise ExtrinsicError(f"toggle_transfer netuid={netuid} did not reach toggle={enabled}")
 
 
@@ -158,27 +163,46 @@ def set_admin_freeze_window(
     the window equals the tempo, so owner/root hyperparameter writes are only
     accepted near each subnet epoch boundary and otherwise silently miss. The
     bootstrap sets the window to 0 so those sudo writes apply on the first try."""
-    substrate, alice = _connect(chain_endpoint)
-    call = _compose_sudo_call(
-        substrate, "AdminUtils", "sudo_set_admin_freeze_window", {"window": window},
-    )
-    extrinsic = substrate.create_signed_extrinsic(call=call, keypair=alice)
-    receipt = substrate.submit_extrinsic(extrinsic, wait_for_inclusion=True)
-    current = substrate.query("SubtensorModule", "AdminFreezeWindow", []).value
+    with _connect(chain_endpoint) as client:
+        block_hash = _submit(client, _sudo(
+            client, _sdk().calls.AdminUtils.sudo_set_admin_freeze_window(window=window),
+        ))
+        current = client.query(_sdk().storage.SubtensorModule.AdminFreezeWindow)
     if current != window:
         raise ExtrinsicError(
             f"set_admin_freeze_window did not reach window={window} (now {current})"
         )
-    return receipt.block_hash
+    return block_hash
+
+
+def set_max_registrations_per_block(
+    netuid: int, limit: int, *, chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Raise a subnet's per-block registration cap via Sudo. The bootstrap registers
+    several hotkeys in a row, which the chain's default cap turns away. Root sets
+    this, not the subnet owner, so it cannot go through the owner hyperparameters."""
+    with _connect(chain_endpoint) as client:
+        block_hash = _submit(client, _sudo(
+            client,
+            _sdk().calls.AdminUtils.sudo_set_max_registrations_per_block(
+                netuid=netuid, max_registrations_per_block=limit,
+            ),
+        ))
+        current = client.query(
+            _sdk().storage.SubtensorModule.MaxRegistrationsPerBlock, [netuid],
+        )
+    if current != limit:
+        raise ExtrinsicError(
+            f"set_max_registrations_per_block did not reach limit={limit} (now {current})"
+        )
+    return block_hash
 
 
 def get_nominator_min_required_stake(*, chain_endpoint: str = config.CHAIN_ENDPOINT) -> int:
     """Read the global nominator dust-threshold factor."""
-    from substrateinterface import SubstrateInterface
-
-    substrate = SubstrateInterface(url=chain_endpoint)
-    result = substrate.query("SubtensorModule", "NominatorMinRequiredStake", [])
-    return int(result.value) if result is not None else 0
+    with _connect(chain_endpoint) as client:
+        value = client.query(_sdk().storage.SubtensorModule.NominatorMinRequiredStake)
+    return int(value) if value is not None else 0
 
 
 def set_nominator_min_required_stake(
@@ -188,13 +212,12 @@ def set_nominator_min_required_stake(
     runs the chain's global clearing pass in the same block: every nomination
     whose value sits below the new threshold is force-sold and the proceeds are
     credited to its nominator coldkey. Lowering it only writes the factor."""
-    substrate, alice = _connect(chain_endpoint)
-    call = _compose_sudo_call(
-        substrate, "AdminUtils", "sudo_set_nominator_min_required_stake",
-        {"min_stake": factor},
-    )
-    block_hash = _submit(substrate, alice, call)
-    current = substrate.query("SubtensorModule", "NominatorMinRequiredStake", []).value
+    with _connect(chain_endpoint) as client:
+        block_hash = _submit(client, _sudo(
+            client,
+            _sdk().calls.AdminUtils.sudo_set_nominator_min_required_stake(min_stake=factor),
+        ))
+        current = client.query(_sdk().storage.SubtensorModule.NominatorMinRequiredStake)
     if current != factor:
         raise ExtrinsicError(
             f"set_nominator_min_required_stake did not reach factor={factor} (now {current})"
@@ -208,13 +231,14 @@ def dissolve_network(
     """Dissolve (deregister) a subnet via Sudo. The chain converts every staker's
     alpha into a pro-rata share of the subnet's TAO reserve, credits it to their
     coldkey, and removes the subnet."""
-    substrate, alice = _connect(chain_endpoint)
-    call = _compose_sudo_call(
-        substrate, "SubtensorModule", "root_dissolve_network", {"netuid": netuid},
-    )
-    extrinsic = substrate.create_signed_extrinsic(call=call, keypair=alice)
-    receipt = substrate.submit_extrinsic(extrinsic, wait_for_inclusion=True)
-    # Sudo.sudo reports success even when the inner call reverts, so trust chain state.
-    if substrate.query("SubtensorModule", "NetworksAdded", [netuid]).value:
+    with _connect(chain_endpoint) as client:
+        block_hash = _submit(client, _sudo(
+            client, _sdk().calls.SubtensorModule.root_dissolve_network(netuid=netuid),
+        ))
+        # Sudo reports success even when the inner call reverts, so trust chain state.
+        still_registered = client.query(
+            _sdk().storage.SubtensorModule.NetworksAdded, [netuid],
+        )
+    if still_registered:
         raise ExtrinsicError(f"dissolve_network netuid={netuid} left the subnet registered")
-    return receipt.block_hash
+    return block_hash
