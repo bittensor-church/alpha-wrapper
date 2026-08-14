@@ -12,10 +12,7 @@ scripts.
   `http://127.0.0.1:9944`), pre-funded with the well-known dev keys in
   `alpha_e2e/config.py`.
 - `btcli` and `cast`/`forge` (Foundry) on `PATH`.
-- Python deps installed via `e2e/install-deps.sh` (CI uses the same script). It
-  wraps `pip install -r e2e/requirements.txt` plus a reinstall that lets
-  `cyscale` own the shared `scalecodec` namespace; the script's header explains
-  why a bare pip install is not enough.
+- Python deps installed via `e2e/install-deps.sh` (CI runs the same script).
 
 ## How to run
 
