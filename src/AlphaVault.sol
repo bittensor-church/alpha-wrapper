@@ -115,6 +115,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     error ZeroColdkey();
     error InsufficientShares();
     error NoValidatorFound();
+    error ValidatorSetMalformed();
     error SubnetNotRegistered();
     error SubnetInDissolutionBlackoutPeriod();
     error SubnetDissolved();
@@ -324,7 +325,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // A sell the chain accepts can still fill short at the pool's price floor, so the position
         // reports what left. Selling past the request means the chain swept backing that belongs to
         // the holders who stay; the subtraction refuses to pay it out.
-        uint256 sold = total - _unionStakeTotal(hotkeys, _coldkeyOf(clone), netuid);
+        uint256 sold = total - _sumBalances(_fetchBalances(hotkeys, _coldkeyOf(clone), netuid));
         uint256 unsold = assets - sold;
         // The chain keeps a RAO or so of every sale; refunding that to a full exit would mint a
         // sub-floor position no rail can ever sell. A partial burn keeps it - it merges into the
@@ -386,7 +387,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
         _consolidateRotatedStake(tokenId, clone, coldkey, hotkeys, alphaPriceE18);
 
-        // After consolidation the whole backing sits on the current validators, so these three
+        // After consolidation the whole backing sits on the current validators, so their
         // balances count everything.
         uint256[] memory balances = _fetchBalances(hotkeys, coldkey, netuid);
         uint256 totalAlpha = _sumBalances(balances);
@@ -697,7 +698,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         return amount - amount % TAO_NATIVE_QUANTUM;
     }
 
-    /// @notice Unused slots are bytes32(0).
+    /// @notice Exactly the subnet's configured validators; reverts when none are configured.
     function getCurrentValidators(uint256 netuid) external view returns (bytes32[] memory) {
         if (netuid > type(uint16).max) revert NetuidOutOfRange();
         // forge-lint: disable-next-line(unsafe-typecast)
@@ -777,6 +778,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     {
         (hotkeys, weights) = validatorRegistry.getValidators(netuid);
         if (hotkeys.length == 0) revert NoValidatorFound();
+        // The registry interface guarantees matching lengths; a registry that breaks it would
+        // otherwise surface as a panic deep inside weight alignment, after stake has moved.
+        if (hotkeys.length != weights.length) revert ValidatorSetMalformed();
     }
 
     function _fetchBalances(bytes32[] memory hotkeys, bytes32 coldkey, uint16 netuid)
@@ -1121,21 +1125,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         hotkeys = _unionSlots(tokenId, current);
         balances = _fetchBalances(hotkeys, _coldkeyOf(clone), netuid);
         total = _sumBalances(balances);
-    }
-
-    /// @dev Live total across slots `_unionStake` already resolved.
-    function _unionStakeTotal(bytes32[] memory hotkeys, bytes32 coldkey, uint16 netuid)
-        private
-        view
-        returns (uint256 total)
-    {
-        IStaking staking = IStaking(STAKING_PRECOMPILE);
-        for (uint256 i; i < hotkeys.length;) {
-            total += staking.getStake(hotkeys[i], coldkey, netuid);
-            unchecked {
-                ++i;
-            }
-        }
     }
 
     function lastSeenHotkeys(uint256 tokenId) external view returns (bytes32[] memory) {

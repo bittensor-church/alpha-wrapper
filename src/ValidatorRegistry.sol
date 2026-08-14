@@ -6,6 +6,11 @@ import { EIP712 } from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import { ECDSA } from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import { IValidatorRegistry } from "./interfaces/IValidatorRegistry.sol";
 
+/// @dev The vault reads one stake balance per validator on every state-mutating call, so the cap
+///      is what bounds that work. 64 is the widest set the chain will price in one batched read,
+///      which makes it the natural ceiling to stop at.
+uint256 constant MAX_VALIDATORS = 64;
+
 /// @title ValidatorRegistry
 /// @notice Per-subnet validator hotkeys + BPS weights, updated by threshold-of-N
 ///         off-chain attesters via EIP-712 signed payloads.
@@ -15,10 +20,6 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     );
 
     uint16 private constant BPS_BASE = 10_000;
-    /// @dev The vault reads one stake balance per validator on every state-mutating call, so the cap
-    ///      is what bounds that work. 64 is the widest set the chain will price in one batched read,
-    ///      which makes it the natural ceiling to stop at.
-    uint8 private constant MAX_VALIDATORS = 64;
     /// @dev Bounds `_setSigners` churn so a careless or compromised admin can't install a set
     ///      so large that subsequent rotation exceeds the block gas limit.
     uint8 private constant MAX_SIGNERS = 16;

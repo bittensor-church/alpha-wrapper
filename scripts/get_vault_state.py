@@ -18,19 +18,15 @@ from common import (
 
 
 def _validator_columns(registry: Contract | None, netuid: int) -> dict:
-    """Three (hotkey, weight) slots + count; empty for unused slots or no registry."""
+    """One (hotkey, weight) column pair per configured validator, plus the count."""
     cols: dict = {"validators_count": ""}
-    for i in range(3):
-        cols[f"validator_{i+1}_hotkey"] = ""
-        cols[f"validator_{i+1}_weight"] = ""
     if registry is None:
         return cols
     hotkeys, weights = registry.functions.getValidators(netuid).call()
-    count = sum(1 for w in weights if w != 0)
-    cols["validators_count"] = count
-    for i in range(count):
-        cols[f"validator_{i+1}_hotkey"] = "0x" + hotkeys[i].hex()
-        cols[f"validator_{i+1}_weight"] = weights[i]
+    cols["validators_count"] = len(hotkeys)
+    for i, (hotkey, weight) in enumerate(zip(hotkeys, weights)):
+        cols[f"validator_{i+1}_hotkey"] = "0x" + hotkey.hex()
+        cols[f"validator_{i+1}_weight"] = weight
     return cols
 
 

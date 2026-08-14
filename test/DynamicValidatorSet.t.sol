@@ -113,7 +113,8 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         _setValidatorCount(NETUID1, 3);
         _depositAndWrap(alice, NETUID1, 10 ether);
 
-        // Disjoint from the validator fixtures, so nothing the position holds is still attested.
+        // The fixture hotkeys are disjoint from the salted set the position sits on, so nothing
+        // the position holds is still attested.
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(5000, 5000));
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
@@ -197,7 +198,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         assertEq(vault.lastSeenHotkeys(TOKEN1).length, toCount, "the remembered set follows the new one");
     }
 
-    function testFuzz_WrapUnwrapRoundTrip(uint256 count, uint256 amount, uint256 burnBps) public {
+    function testFuzz_Unwrap_DeliversPreviewAtAnyValidatorCount(uint256 count, uint256 amount, uint256 burnBps) public {
         count = bound(count, 1, MAX_VALIDATORS);
         amount = bound(amount, MIN_SPREADABLE, MAX_DEPOSIT);
         burnBps = bound(burnBps, 1, BPS_BASE);

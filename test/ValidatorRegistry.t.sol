@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import { Test, Vm } from "forge-std/Test.sol";
-import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
+import { ValidatorRegistry, MAX_VALIDATORS } from "src/ValidatorRegistry.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 import { AttestationHelper } from "./helpers/AttestationHelper.sol";
 
@@ -73,7 +73,7 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     /// @dev Attestation over `count` distinct hotkeys, evenly weighted with the rounding remainder
-    ///      on the first. Use for set sizes the fixed `_att` fixtures above do not cover.
+    ///      on the last. Use for set sizes the fixed `_att` fixtures above do not cover.
     function _attN(uint256 netuid, uint256 count, uint256 nonce, uint256 deadline)
         private
         pure
@@ -374,7 +374,7 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_Update_ShrinkLeavesNoStaleTail() public {
-        ValidatorRegistry.WeightAttestation memory wide = _attN(SN1, 64, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory wide = _attN(SN1, MAX_VALIDATORS, 1, block.timestamp + 60);
         registry.updateValidators(wide, _sign(wide, _pks2(PK2, PK1)));
 
         ValidatorRegistry.WeightAttestation memory narrow = _attN(SN1, 3, 2, block.timestamp + 60);
@@ -394,14 +394,14 @@ contract ValidatorRegistryTest is AttestationHelper {
         ValidatorRegistry.WeightAttestation memory narrow = _attN(SN1, 1, 1, block.timestamp + 60);
         registry.updateValidators(narrow, _sign(narrow, _pks2(PK2, PK1)));
 
-        ValidatorRegistry.WeightAttestation memory wide = _attN(SN1, 64, 2, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory wide = _attN(SN1, MAX_VALIDATORS, 2, block.timestamp + 60);
         registry.updateValidators(wide, _sign(wide, _pks2(PK2, PK1)));
 
         (bytes32[] memory hks, uint16[] memory wts) = registry.getValidators(SN1);
-        assertEq(hks.length, 64);
-        assertEq(wts.length, 64);
+        assertEq(hks.length, MAX_VALIDATORS);
+        assertEq(wts.length, MAX_VALIDATORS);
         uint256 sum;
-        for (uint256 i; i < 64; ++i) {
+        for (uint256 i; i < MAX_VALIDATORS; ++i) {
             assertEq(hks[i], wide.hotkeys[i]);
             sum += wts[i];
         }
@@ -457,7 +457,7 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function testFuzz_Update_PersistsAnySetSize(uint256 count) public {
-        count = bound(count, 1, 64);
+        count = bound(count, 1, MAX_VALIDATORS);
         ValidatorRegistry.WeightAttestation memory att = _attN(SN1, count, 1, block.timestamp + 60);
 
         registry.updateValidators(att, _sign(att, _pks2(PK2, PK1)));
@@ -476,8 +476,8 @@ contract ValidatorRegistryTest is AttestationHelper {
 
     /// @dev A commit replaces the whole set whichever way the size moves.
     function testFuzz_Update_SequentialCommitsReplaceWholeSet(uint256 firstCount, uint256 secondCount) public {
-        firstCount = bound(firstCount, 1, 64);
-        secondCount = bound(secondCount, 1, 64);
+        firstCount = bound(firstCount, 1, MAX_VALIDATORS);
+        secondCount = bound(secondCount, 1, MAX_VALIDATORS);
 
         ValidatorRegistry.WeightAttestation memory first = _attN(SN1, firstCount, 1, block.timestamp + 60);
         registry.updateValidators(first, _sign(first, _pks2(PK2, PK1)));
@@ -507,7 +507,7 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_RevertWhen_UpdateTooManyHotkeys() public {
-        ValidatorRegistry.WeightAttestation memory att = _attN(SN1, 65, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _attN(SN1, MAX_VALIDATORS + 1, 1, block.timestamp + 60);
         bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
         vm.expectRevert(ValidatorRegistry.InvalidValidatorCount.selector);
         registry.updateValidators(att, sigs);

@@ -142,7 +142,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
     }
 
     // The widest the position can ever be: a full rotation leaves 64 dropped validators funded
-    // alongside 64 attested ones, so the sale spans 128 slots and two batched reads.
+    // alongside 64 attested ones, so the sale spans 128 slots.
     function test_gas_unwrapForTao_fullyRotated_64Validators() public {
         _setRemoveStakeRate(1, 1);
         _setValidatorCount(NETUID1, MAX_VALIDATORS);
@@ -150,15 +150,24 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
         uint256 shares = vault.balanceOf(alice, TOKEN1);
 
-        bytes32[] memory replacement = new bytes32[](MAX_VALIDATORS);
-        for (uint256 i; i < MAX_VALIDATORS; ++i) {
-            replacement[i] = keccak256(abi.encodePacked("rotated", i));
-        }
-        _setValidators(NETUID1, replacement, _evenWeights(MAX_VALIDATORS));
+        _setValidators(NETUID1, _hotkeysFrom("rotated", MAX_VALIDATORS), _evenWeights(MAX_VALIDATORS));
 
         vm.prank(alice);
         vault.unwrapForTao(TOKEN1, shares, 0);
         vm.snapshotGasLastCall("AlphaVault", "unwrapForTao: fully rotated (128 slots)");
+    }
+
+    // The most consolidation work one call can do: the roll drains 64 dropped slots into a pile,
+    // then the respread fans it back out across the 64 new ones.
+    function test_gas_rebalance_fullyRotated_64Validators() public {
+        _setValidatorCount(NETUID1, MAX_VALIDATORS);
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+
+        _setValidators(NETUID1, _hotkeysFrom("rotated", MAX_VALIDATORS), _evenWeights(MAX_VALIDATORS));
+
+        vault.rebalance(NETUID1);
+        vm.snapshotGasLastCall("AlphaVault", "rebalance: fully rotated (64 validators)");
     }
 
     function test_gas_previewUnwrap_64Validators() public {

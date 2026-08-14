@@ -5,7 +5,7 @@ import { Vm } from "forge-std/Test.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
-import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
+import { ValidatorRegistry, MAX_VALIDATORS as REGISTRY_VALIDATOR_CAP } from "src/ValidatorRegistry.sol";
 import { MockStaking, CHAIN_MIN_STAKE, CHAIN_MIN_TRANSFER, CHAIN_NOMINATOR_MIN_STAKE } from "./mocks/MockStaking.sol";
 import { MockAddressMapping } from "./mocks/MockAddressMapping.sol";
 import { MockSubnetPrecompile } from "./mocks/MockSubnetPrecompile.sol";
@@ -53,7 +53,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     uint16 public constant BPS_BASE = 10_000;
 
     /// @dev The registry's cap, set by the staking precompile's 64-hotkey batched read.
-    uint256 public constant MAX_VALIDATORS = 64;
+    uint256 public constant MAX_VALIDATORS = REGISTRY_VALIDATOR_CAP;
 
     // The simulated chain's dust threshold; aliased so the two can never drift.
     uint256 internal constant DUST_THRESHOLD = CHAIN_NOMINATOR_MIN_STAKE;
