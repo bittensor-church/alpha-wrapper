@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
+import { MAX_VALIDATORS } from "src/ValidatorRegistry.sol";
 
 /// forge-config: default.isolate = true
 contract AlphaVaultGasTest is AlphaVaultTestBase {
@@ -73,5 +74,110 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
 
         vault.rebalance(NETUID1);
         vm.snapshotGasLastCall("AlphaVault", "rebalance: after registry weight update");
+    }
+
+    function test_gas_previewUnwrap() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+
+        vault.previewUnwrap(TOKEN1, shares / 2);
+        vm.snapshotGasLastCall("AlphaVault", "previewUnwrap");
+    }
+
+    // --------- widest supported set ------------------------------------------
+    // Three validators is the expected size; the entries below price the 64-validator ceiling so a
+    // change that only shows up at full width cannot land unnoticed.
+
+    function test_gas_wrap_firstWrap_64Validators() public {
+        _setValidatorCount(NETUID1, MAX_VALIDATORS);
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        vm.snapshotGasLastCall("AlphaVault", "wrap: first (64 validators)");
+    }
+
+    function test_gas_wrap_subsequentWrap_64Validators() public {
+        _setValidatorCount(NETUID1, MAX_VALIDATORS);
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+
+        _simulateAlphaDeposit(bob, NETUID1, 5 ether);
+        _wrap(bob, NETUID1);
+        vm.snapshotGasLastCall("AlphaVault", "wrap: subsequent (64 validators)");
+    }
+
+    function test_gas_unwrap_partial_64Validators() public {
+        _setValidatorCount(NETUID1, MAX_VALIDATORS);
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));
+        vm.snapshotGasLastCall("AlphaVault", "unwrap: partial (64 validators)");
+    }
+
+    function test_gas_unwrap_full_64Validators() public {
+        _setValidatorCount(NETUID1, MAX_VALIDATORS);
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vm.snapshotGasLastCall("AlphaVault", "unwrap: full (64 validators)");
+    }
+
+    // The rail every other exit falls back to, so its ceiling is the one that decides whether a
+    // position can always get out.
+    function test_gas_unwrapForTao_full_64Validators() public {
+        _setRemoveStakeRate(1, 1);
+        _setValidatorCount(NETUID1, MAX_VALIDATORS);
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares, 0);
+        vm.snapshotGasLastCall("AlphaVault", "unwrapForTao: full (64 validators)");
+    }
+
+    // The widest the position can ever be: a full rotation leaves 64 dropped validators funded
+    // alongside 64 attested ones, so the sale spans 128 slots.
+    function test_gas_unwrapForTao_fullyRotated_64Validators() public {
+        _setRemoveStakeRate(1, 1);
+        _setValidatorCount(NETUID1, MAX_VALIDATORS);
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+
+        _setValidators(NETUID1, _hotkeysFrom("rotated", MAX_VALIDATORS), _evenWeights(MAX_VALIDATORS));
+
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares, 0);
+        vm.snapshotGasLastCall("AlphaVault", "unwrapForTao: fully rotated (128 slots)");
+    }
+
+    // The most consolidation work one call can do: the roll drains 64 dropped slots into a pile,
+    // then the respread fans it back out across the 64 new ones.
+    function test_gas_rebalance_fullyRotated_64Validators() public {
+        _setValidatorCount(NETUID1, MAX_VALIDATORS);
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+
+        _setValidators(NETUID1, _hotkeysFrom("rotated", MAX_VALIDATORS), _evenWeights(MAX_VALIDATORS));
+
+        vault.rebalance(NETUID1);
+        vm.snapshotGasLastCall("AlphaVault", "rebalance: fully rotated (64 validators)");
+    }
+
+    function test_gas_previewUnwrap_64Validators() public {
+        _setValidatorCount(NETUID1, MAX_VALIDATORS);
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+
+        vault.previewUnwrap(TOKEN1, shares / 2);
+        vm.snapshotGasLastCall("AlphaVault", "previewUnwrap (64 validators)");
     }
 }

@@ -19,7 +19,7 @@ One attestation sets the complete validator list for one subnet:
 
 The registry enforces at submission time:
 
-- 1 to 3 distinct, non-zero hotkeys, one weight per hotkey.
+- 1 to 64 distinct, non-zero hotkeys, one weight per hotkey.
 - Every weight non-zero; weights sum to exactly 10000.
 - netuid fits in 16 bits.
 - nonce equals `nonces(netuid) + 1`. Nonces count per subnet.

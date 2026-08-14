@@ -145,6 +145,35 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         arr[2] = c;
     }
 
+    /// @dev The salted hotkeys are disjoint from the named `hotkey1..4` fixtures, so a wide set and
+    ///      the fixture set never collide.
+    function _setValidatorCount(uint256 netuid, uint256 count) internal returns (bytes32[] memory hks) {
+        hks = _hotkeysFrom("validator", count);
+        _setValidators(netuid, hks, _evenWeights(count));
+    }
+
+    function _stakeAcross(bytes32[] memory hks, bytes32 coldkey, uint256 netuid) internal view returns (uint256 total) {
+        for (uint256 i; i < hks.length; ++i) {
+            total += _getStakeForColdkey(hks[i], coldkey, netuid);
+        }
+    }
+
+    function _vaultStakeAcross(bytes32[] memory hks, uint256 netuid) internal view returns (uint256) {
+        return _stakeAcross(hks, _subnetColdkey(netuid), netuid);
+    }
+
+    /// @dev Asserts the vault's stake on `hks` follows the even split, with the rounding remainder
+    ///      on the last slot - the same way the vault assigns targets.
+    function _assertEvenSpread(bytes32[] memory hks, uint256 netuid, uint256 total) internal view {
+        uint16[] memory wts = _evenWeights(hks.length);
+        uint256 assigned;
+        for (uint256 i; i + 1 < hks.length; ++i) {
+            assertEq(_getVaultStake(hks[i], netuid), _weighted(total, wts[i]), "slot off its weight");
+            assigned += _weighted(total, wts[i]);
+        }
+        assertEq(_getVaultStake(hks[hks.length - 1], netuid), total - assigned, "last slot absorbs the remainder");
+    }
+
     function _countRebalancedLogs(Vm.Log[] memory logs) internal pure returns (uint256 count) {
         bytes32 sig = keccak256("Rebalanced(uint256,bytes32,bytes32,uint256)");
         for (uint256 i; i < logs.length;) {

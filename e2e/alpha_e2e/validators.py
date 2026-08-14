@@ -102,7 +102,6 @@ def set_validators(
         {
             "from": submitter.address,
             "nonce": transaction_nonce,
-            "gas": 500_000,
             "gasPrice": w3.to_wei(10, "gwei"),
             "chainId": chain_id,
         }

@@ -115,7 +115,7 @@ class Environment:
     def hotkey_in_last_seen(self, token_id: int, hotkey_pubkey: str) -> bool:
         """Whether the vault's remembered validator set still references `hotkey_pubkey`."""
         remembered = chain.run(
-            ["cast", "call", self.vault_address, "lastSeenHotkeys(uint256)(bytes32[3])",
+            ["cast", "call", self.vault_address, "lastSeenHotkeys(uint256)(bytes32[])",
              str(token_id), "--rpc-url", config.RPC_URL],
         ).stdout
         return hotkey_pubkey.removeprefix("0x").lower() in remembered.lower()

@@ -26,7 +26,7 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: v1.7.0
+          version: v1.7.1
 
       - name: Cache forge artifacts
         uses: actions/cache@v6
