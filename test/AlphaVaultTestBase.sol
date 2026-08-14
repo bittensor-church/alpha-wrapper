@@ -52,8 +52,6 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     uint16 public constant BPS_BASE = 10_000;
 
-    /// @dev The registry's cap, set by the staking precompile's 64-hotkey batched read.
-
     // The simulated chain's dust threshold; aliased so the two can never drift.
     uint256 internal constant DUST_THRESHOLD = CHAIN_NOMINATOR_MIN_STAKE;
 
