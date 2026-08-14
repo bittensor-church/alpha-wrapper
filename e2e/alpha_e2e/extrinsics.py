@@ -106,6 +106,19 @@ def lock_stake(
         ))
 
 
+def burned_register(
+    hotkey_ss58: str, netuid: int, *, chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Register a hotkey on a subnet, paying the recycle cost from Alice's balance.
+
+    Submitted as a plain call rather than through btcli, which requires this one
+    to be MEV-shielded -- machinery the localnet does not run."""
+    with _connect(chain_endpoint) as client:
+        return _submit(client, _sdk().calls.SubtensorModule.burned_register(
+            netuid=netuid, hotkey=hotkey_ss58,
+        ))
+
+
 def get_lock(
     coldkey_ss58: str, netuid: int, hotkey_ss58: str,
     *, chain_endpoint: str = config.CHAIN_ENDPOINT,

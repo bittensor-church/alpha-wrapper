@@ -54,12 +54,9 @@ def create_subnet() -> int:
     return int(netuid)
 
 
-def _is_registered(result: dict) -> bool:
-    """Whether the hotkey holds a slot on the subnet: a fresh registration
-    succeeds, and a repeat is refused for already holding one, which is as good."""
-    if result.get("success"):
-        return True
-    return (result.get("error") or {}).get("name") == "HotKeyAlreadyRegisteredInSubNet"
+# A repeat registration is turned away for the hotkey already holding a slot,
+# which is exactly the state this function is asked to reach.
+_ALREADY_REGISTERED = "HotKeyAlreadyRegisteredInSubNet"
 
 
 def register_hotkey(netuid: int, hotkey_name: str) -> Tuple[str, str]:
@@ -74,26 +71,24 @@ def register_hotkey(netuid: int, hotkey_name: str) -> Tuple[str, str]:
             check=False,
         )
 
-    result = {}
+    pubkey = substrate.read_hotkey_pubkey(config.ALICE_WALLET, hotkey_name)
+    ss58 = substrate.read_hotkey_ss58(config.ALICE_WALLET, hotkey_name)
+
+    refusal = None
     for attempt in (1, 2, 3):
-        result = chain.btcli_json(
-            ["subnets", "register", "--netuid", str(netuid),
-             "--wallet", config.ALICE_WALLET, "--hotkey", hotkey_name,
-             "--no-mev-shield", "--yes"],
-        )
-        if _is_registered(result):
-            break
+        try:
+            extrinsics.burned_register(ss58, netuid)
+            return pubkey, ss58
+        except extrinsics.ExtrinsicError as error:
+            if _ALREADY_REGISTERED in str(error):
+                return pubkey, ss58
+            refusal = error
         print(f"  Retry {attempt} for {hotkey_name} (waiting for next block)...")
         time.sleep(6)
 
-    if not _is_registered(result):
-        print(result)
-        raise RuntimeError(
-            f"register failed for {hotkey_name} on netuid {netuid} after 3 attempts"
-        )
-    pubkey = substrate.read_hotkey_pubkey(config.ALICE_WALLET, hotkey_name)
-    ss58 = substrate.read_hotkey_ss58(config.ALICE_WALLET, hotkey_name)
-    return pubkey, ss58
+    raise RuntimeError(
+        f"register failed for {hotkey_name} on netuid {netuid} after 3 attempts: {refusal}"
+    )
 
 
 # --- Pre-flight -----------------------------------------------------------------
