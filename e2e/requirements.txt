@@ -1,4 +1,3 @@
 # Everything the e2e suite needs on top of the shared repo requirements.
 -r ../requirements.txt
 bittensor==11.0.2
-bittensor-cli==9.23.2

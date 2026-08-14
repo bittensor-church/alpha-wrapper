@@ -11,8 +11,7 @@ scripts.
 - A running localnet subtensor at `ws://127.0.0.1:9944` (RPC at
   `http://127.0.0.1:9944`), pre-funded with the well-known dev keys in
   `alpha_e2e/config.py`.
-- `cast`/`forge` (Foundry) on `PATH`. btcli comes from the Python deps below and
-  is invoked as a module, so it does not need to be on `PATH`.
+- `cast`/`forge` (Foundry) on `PATH`; `btcli` ships with the Python deps below.
 - Python deps installed via `e2e/install-deps.sh` (CI runs the same script).
 
 ## How to run

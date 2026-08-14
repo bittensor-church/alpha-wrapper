@@ -13,12 +13,12 @@ be deposited:
               the initial 50/30/20 validator sets, create the subnet proxies
   Phase 5     fund the wrapper user account
 
-btcli calls go through chain.btcli() (auto-appends --network); wallet
-regen/creation calls go through chain.run([*chain.BTCLI_COMMAND, ...]) directly
-because they must not carry the --network flag.
+btcli calls go through chain.btcli() (auto-appends --network) or
+chain.btcli_json() where the outcome is read back; wallet regen/creation calls
+go through chain.run(["btcli", ...]) directly because they touch only local key
+files and must not carry the --network flag.
 """
 import os
-import re
 import shutil
 import time
 from typing import List, NamedTuple, Tuple
@@ -42,21 +42,24 @@ def _log(message: str) -> None:
 
 # --- Chain ops shared with the scenarios ---------------------------------------
 
-def create_subnet(name: str) -> int:
-    """Create a subnet via btcli and extract its netuid. btcli still asks
-    interactive questions despite --no-prompt, so pipe blank lines as answers."""
-    completed = chain.btcli(
-        ["subnets", "create", "--wallet-name", config.ALICE_WALLET,
-         "--hotkey", config.ALICE_HOTKEY_NAME, "--no-mev-protection",
-         "--no-prompt", "--subnet-name", name],
-        input="\n" * 10,
+def create_subnet() -> int:
+    """Create a subnet and return the netuid the chain assigned it."""
+    result = chain.btcli_json(
+        ["subnets", "create", "--wallet", config.ALICE_WALLET,
+         "--wallet-hotkey", config.ALICE_HOTKEY_NAME, "--yes"],
     )
-    output = (completed.stdout or "") + (completed.stderr or "")
-    matches = re.findall(r"netuid:\s*(\d+)", output)
-    if not matches:
-        print(f"  {output}")
-        raise RuntimeError("Could not extract netuid")
-    return int(matches[-1])
+    netuid = result.get("data", {}).get("netuid")
+    if netuid is None:
+        raise RuntimeError(f"Could not extract netuid: {result}")
+    return int(netuid)
+
+
+def _is_registered(result: dict) -> bool:
+    """Whether the hotkey holds a slot on the subnet: a fresh registration
+    succeeds, and a repeat is refused for already holding one, which is as good."""
+    if result.get("success"):
+        return True
+    return (result.get("error") or {}).get("name") == "HotKeyAlreadyRegisteredInSubNet"
 
 
 def register_hotkey(netuid: int, hotkey_name: str) -> Tuple[str, str]:
@@ -66,25 +69,24 @@ def register_hotkey(netuid: int, hotkey_name: str) -> Tuple[str, str]:
     hotkey_file = substrate.hotkey_file_path(config.ALICE_WALLET, hotkey_name)
     if not os.path.isfile(hotkey_file):
         chain.run(
-            [*chain.BTCLI_COMMAND, "wallet", "new-hotkey", "--wallet-name", config.ALICE_WALLET,
-             "--hotkey", hotkey_name, "--n-words", "12", "--no-use-password"],
+            ["btcli", "wallet", "new-hotkey", "--wallet", config.ALICE_WALLET,
+             "--wallet-hotkey", hotkey_name, "--n-words", "12"],
             check=False,
         )
 
-    output = ""
+    result = {}
     for attempt in (1, 2, 3):
-        completed = chain.btcli(
+        result = chain.btcli_json(
             ["subnets", "register", "--netuid", str(netuid),
-             "--wallet-name", config.ALICE_WALLET, "--hotkey", hotkey_name, "--no-prompt"],
+             "--wallet", config.ALICE_WALLET, "--hotkey", hotkey_name, "--yes"],
         )
-        output = (completed.stdout or "") + (completed.stderr or "")
-        if re.search(r"Registered|Already", output):
+        if _is_registered(result):
             break
         print(f"  Retry {attempt} for {hotkey_name} (waiting for next block)...")
         time.sleep(6)
 
-    if not re.search(r"Registered|Already", output):
-        print(output)
+    if not _is_registered(result):
+        print(result)
         raise RuntimeError(
             f"register failed for {hotkey_name} on netuid {netuid} after 3 attempts"
         )
@@ -136,9 +138,9 @@ def _ensure_alice_wallet() -> None:
     if need_regen:
         print("  Setting up dev Alice wallet from seed...")
         chain.run(
-            [*chain.BTCLI_COMMAND, "wallet", "regen-coldkey", "--wallet-name", config.ALICE_WALLET,
+            ["btcli", "wallet", "regen-coldkey", "--wallet", config.ALICE_WALLET,
              "--wallet-path", os.path.expanduser("~/.bittensor/wallets"),
-             "--seed", config.ALICE_COLDKEY_SEED, "--no-use-password", "--overwrite"],
+             "--seed", config.ALICE_COLDKEY_SEED, "--no-password", "--overwrite"],
             check=False,
         )
         if not os.path.isfile(coldkey_file):
@@ -149,8 +151,8 @@ def _ensure_alice_wallet() -> None:
     if not os.path.isfile(hotkey_file):
         print(f"  Creating hotkey '{config.ALICE_HOTKEY_NAME}' for wallet '{config.ALICE_WALLET}'...")
         chain.run(
-            [*chain.BTCLI_COMMAND, "wallet", "new-hotkey", "--wallet-name", config.ALICE_WALLET,
-             "--hotkey", config.ALICE_HOTKEY_NAME, "--n-words", "12", "--no-use-password"],
+            ["btcli", "wallet", "new-hotkey", "--wallet", config.ALICE_WALLET,
+             "--wallet-hotkey", config.ALICE_HOTKEY_NAME, "--n-words", "12"],
             check=False,
         )
         print(f"  Created hotkey '{config.ALICE_HOTKEY_NAME}'")
@@ -167,9 +169,8 @@ def _ensure_evm_account_funded(
     balance = chain.cast_balance_ether(address)
     if int(balance) < minimum_tao:
         chain.btcli(
-            ["wallet", "transfer", "--wallet-name", config.ALICE_WALLET,
-             "--dest", ss58, "--amount", str(transfer_tao),
-             "--allow-death", "--no-prompt"],
+            ["wallet", "transfer", "--wallet", config.ALICE_WALLET,
+             "--dest", ss58, "--amount-tao", str(transfer_tao), "--yes"],
             check=True,
         )
         print(f"  Transferred {transfer_tao} TAO -> {address} ({ss58})")
@@ -184,8 +185,8 @@ def _create_subnets() -> List[int]:
     _log("Phase 1: Create 3 subnets")
     netuids = []
     for subnet_number in (1, 2, 3):
-        print(f"  Creating subnet alpha_e2e_{subnet_number} ...")
-        netuid = create_subnet(f"alpha_e2e_{subnet_number}")
+        print(f"  Creating subnet {subnet_number} of 3 ...")
+        netuid = create_subnet()
         netuids.append(netuid)
         print(f"  netuid {netuid}")
 
@@ -200,15 +201,15 @@ def _create_subnets() -> List[int]:
     _log("Start emissions + increase max_regs_per_block")
     for netuid in netuids:
         chain.btcli(
-            ["subnets", "start", "--netuid", str(netuid),
-             "--wallet-name", config.ALICE_WALLET, "--hotkey", config.ALICE_HOTKEY_NAME,
-             "--no-prompt"],
+            ["sudo", "start", "--netuid", str(netuid),
+             "--wallet", config.ALICE_WALLET, "--wallet-hotkey", config.ALICE_HOTKEY_NAME,
+             "--yes"],
             check=True,
         )
         print(f"  netuid {netuid} emissions started")
         chain.btcli(
-            ["sudo", "set", "--netuid", str(netuid), "--wallet-name", config.ALICE_WALLET,
-             "--param", "max_regs_per_block", "--value", "8", "--no-prompt"],
+            ["sudo", "set", "--netuid", str(netuid), "--wallet", config.ALICE_WALLET,
+             "--name", "max_regs_per_block", "--value", "8", "--yes"],
             check=True,
         )
         print(f"  netuid {netuid} max_regs_per_block -> 8")
