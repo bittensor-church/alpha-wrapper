@@ -697,36 +697,52 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         return _resolvedTotalView(tokenId, BackingPolicy.ExitFull);
     }
 
-    /// @dev Read-only twin of the backing gate, persisting nothing. Keep in step with
-    ///      `_verifyBacking`.
+    /// @dev Fails closed on a shortfall `policy` does not tolerate; otherwise the resolved total.
     function _resolvedTotalView(uint256 tokenId, BackingPolicy policy) private view returns (uint256 total) {
+        uint256 shortIndex;
+        uint256 present;
+        (total, shortIndex, present) = _resolveView(tokenId, policy);
+        if (shortIndex != type(uint256).max) {
+            Slot storage shortSlot = _slots[tokenId][shortIndex];
+            revert BackingShortfall(_netuid(tokenId), shortSlot.hotkey, shortSlot.tracked, present);
+        }
+    }
+
+    /// @dev Read-only twin of the backing gate, persisting nothing and never reverting. Returns the
+    ///      resolved total and the first slot whose shortfall `policy` does not tolerate, or
+    ///      `type(uint256).max` when the record resolves clean. Keep in step with `_verifyBacking`.
+    function _resolveView(uint256 tokenId, BackingPolicy policy)
+        private
+        view
+        returns (uint256 total, uint256 shortIndex, uint256 present)
+    {
+        shortIndex = type(uint256).max;
         address clone = subnetClone[tokenId];
-        if (clone == address(0)) return 0;
+        if (clone == address(0)) return (0, shortIndex, 0);
         uint16 netuid = _netuid(tokenId);
         bytes32 coldkey = _coldkeyOf(clone);
         (bytes32[] memory hotkeys, uint256[] memory balances, uint256 raw) = _unionStake(tokenId, netuid, coldkey);
         total = raw;
         uint256 count = _slots[tokenId].length;
-        if (count == 0 || _isIssuedForDissolvedSubnet(tokenId)) return total;
+        if (count == 0 || _isIssuedForDissolvedSubnet(tokenId)) return (total, shortIndex, 0);
 
-        (uint256 followedStake, uint256 missing, uint256 shortIndex, bool renameSeen) =
+        (uint256 followedStake, uint256 missing, uint256 firstShort) =
             _scanShortfallsView(tokenId, netuid, coldkey, hotkeys, balances);
         total += followedStake;
-        if (missing != 0) {
-            if (_attestersActedSinceSettle(tokenId, netuid)) {
-                uint256 adopted;
-                for (uint256 i = count; i < balances.length;) {
-                    adopted += balances[i];
-                    unchecked {
-                        ++i;
-                    }
+        if (missing == 0) return (total, shortIndex, 0);
+
+        if (_attestersActedSinceSettle(tokenId, netuid)) {
+            uint256 adopted;
+            for (uint256 i = count; i < balances.length;) {
+                adopted += balances[i];
+                unchecked {
+                    ++i;
                 }
-                if (adopted + TRACKED_SLACK_RAO >= missing) return total;
             }
-            if (policy == BackingPolicy.Strict || (policy == BackingPolicy.ExitPartial && total > TRACKED_SLACK_RAO)) {
-                Slot storage shortSlot = _slots[tokenId][shortIndex];
-                revert BackingShortfall(netuid, shortSlot.hotkey, shortSlot.tracked, balances[shortIndex]);
-            }
+            if (adopted + TRACKED_SLACK_RAO >= missing) return (total, shortIndex, 0);
+        }
+        if (policy == BackingPolicy.Strict || (policy == BackingPolicy.ExitPartial && total > TRACKED_SLACK_RAO)) {
+            return (total, firstShort, balances[firstShort]);
         }
     }
 
@@ -738,7 +754,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32 coldkey,
         bytes32[] memory hotkeys,
         uint256[] memory balances
-    ) private view returns (uint256 followedStake, uint256 missing, uint256 shortIndex, bool renameSeen) {
+    ) private view returns (uint256 followedStake, uint256 missing, uint256 shortIndex) {
         Slot[] storage tokenSlots = _slots[tokenId];
         uint256 count = tokenSlots.length;
         shortIndex = type(uint256).max;
@@ -763,9 +779,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                 }
                 continue;
             }
-            (bool found, bytes32 successor, uint256 successorStake, bool edgeSeen) =
+            (bool found, bytes32 successor, uint256 successorStake,) =
                 _fundedSuccessor(tokenSlots[i].hotkey, netuid, coldkey, tracked);
-            if (edgeSeen) renameSeen = true;
             if (found && _slotIndexOf(tokenSlots, successor) == type(uint256).max) {
                 if (!_contains(hotkeys, successor)) {
                     hotkeys[i] = successor;
@@ -1286,43 +1301,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         return _slots[tokenId];
     }
 
-    /// @notice False when a recorded validator no longer holds the backing expected of it (beyond
-    ///         sweepable dust). Reported without repair, so monitors see the raw state; a mutating
-    ///         call may still recover it by following the chain's rename record.
+    /// @notice False when backing the record expects cannot be located - neither under the
+    ///         recorded validator, nor at the successor of an on-chain rename, nor as sweepable
+    ///         dust. A followable rename reads intact: the next operation repairs it unaided.
     function isBackingIntact(uint256 tokenId) external view returns (bool) {
-        (bool short,,,,) = _firstShortSlot(tokenId);
-        return !short;
-    }
-
-    /// @dev First recorded slot reading short with no exemption, or `short = false` when whole.
-    ///      A dissolved token's record is a dead letter and never reads short.
-    function _firstShortSlot(uint256 tokenId)
-        private
-        view
-        returns (bool short, uint16 netuid, bytes32 hotkey, uint256 tracked, uint256 present)
-    {
-        address clone = subnetClone[tokenId];
-        Slot[] storage tokenSlots = _slots[tokenId];
-        if (clone == address(0) || tokenSlots.length == 0 || _isIssuedForDissolvedSubnet(tokenId)) {
-            return (false, 0, bytes32(0), 0, 0);
-        }
-        netuid = _netuid(tokenId);
-        (, uint256[] memory balances,) = _unionStake(tokenId, netuid, _coldkeyOf(clone));
-        uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
-        uint256 dustThresholdTao = IStaking(STAKING_PRECOMPILE).getNominatorMinRequiredStake();
-        for (uint256 i; i < tokenSlots.length;) {
-            uint256 expected = tokenSlots[i].tracked;
-            if (
-                balances[i] + TRACKED_SLACK_RAO < expected
-                    && !_isSweepableDust(expected, alphaPriceE18, dustThresholdTao)
-            ) {
-                return (true, netuid, tokenSlots[i].hotkey, expected, balances[i]);
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        return (false, netuid, bytes32(0), 0, 0);
+        (, uint256 shortIndex,) = _resolveView(tokenId, BackingPolicy.Strict);
+        return shortIndex == type(uint256).max;
     }
 
     // -------------------- Backing Check & Self-Heal ------------------------------
