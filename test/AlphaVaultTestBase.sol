@@ -11,6 +11,7 @@ import { MockAddressMapping } from "./mocks/MockAddressMapping.sol";
 import { MockSubnetPrecompile } from "./mocks/MockSubnetPrecompile.sol";
 import { MockAlpha } from "./mocks/MockAlpha.sol";
 import { AttestationHelper } from "./helpers/AttestationHelper.sol";
+import { AlphaVaultHarness } from "./AlphaVaultHarness.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 import { ADDRESS_MAPPING_PRECOMPILE } from "src/interfaces/IAddressMapping.sol";
 import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
@@ -100,9 +101,10 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     }
 
     /// @dev `validatorRegistry` is immutable, so tests that need a different registry construct a
-    ///      fresh vault against it rather than swapping it on the shared `vault`.
+    ///      fresh vault against it rather than swapping it on the shared `vault`. The harness only
+    ///      adds the arranged-state resync on top of the production contract.
     function _deployVault(address _registry) internal returns (AlphaVault) {
-        return new AlphaVault(VAULT_URI, address(mailboxLogic), address(subnetLogic), _registry);
+        return AlphaVault(new AlphaVaultHarness(VAULT_URI, address(mailboxLogic), address(subnetLogic), _registry));
     }
 
     function _setValidators(uint256 netuid, bytes32[] memory hks, uint16[] memory wts) internal {
@@ -232,16 +234,27 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         return MockStaking(STAKING_PRECOMPILE).getStake(hotkey, _subnetColdkey(netuid), netuid);
     }
 
+    /// @dev Arranges a vault stake as if legitimate history produced it, so the recorded
+    ///      expectations are resynced to match. Tests that model an off-record move set the mock
+    ///      stakes directly instead.
     function _setVaultStake(bytes32 hotkey, uint256 netuid, uint256 amount) internal {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey, _subnetColdkey(netuid), netuid, amount);
+        _resyncTracked(netuid);
     }
 
+    /// @dev Same contract as `_setVaultStake`: arranged state counts as settled history.
     function _setVaultStakes(uint256 netuid, uint256 a, uint256 b, uint256 c) internal returns (uint256 total) {
         bytes32 cloneColdkey = _subnetColdkey(netuid);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneColdkey, netuid, a);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneColdkey, netuid, b);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneColdkey, netuid, c);
         total = a + b + c;
+        _resyncTracked(netuid);
+    }
+
+    function _resyncTracked(uint256 netuid) internal {
+        uint256 tokenId = vault.currentTokenId(netuid);
+        AlphaVaultHarness(address(vault)).resyncTracked(tokenId, _subnetColdkey(netuid));
     }
 
     // Smallest share count whose pro-rata assets equal `targetAssets` under the share-price cushion.
@@ -297,6 +310,8 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         mock.setStake(hotkey3, cloneColdkey, netuid, 0);
         mock.setStake(hotkey4, cloneColdkey, netuid, 0);
         vm.deal(clone, clone.balance + taoAmount);
+        // The chain sold the position itself; the record treats that as settled history.
+        AlphaVaultHarness(address(vault)).resyncTracked(tokenId, cloneColdkey);
     }
 
     function _simulateDissolutionCompleted(uint256 netuid) internal {

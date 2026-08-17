@@ -131,6 +131,19 @@ contract MockStaking {
         return stakes[hotkey][coldkey][netuid];
     }
 
+    mapping(bytes32 => mapping(uint256 => bytes32)) private _successor;
+    mapping(bytes32 => mapping(uint256 => bool)) private _successorSet;
+
+    function setHotkeySuccessor(bytes32 from, uint256 netuid, bytes32 to) external {
+        _successor[from][netuid] = to;
+        _successorSet[from][netuid] = true;
+    }
+
+    /// @dev The mock never folds an absent entry to self; the caller does, matching the chain.
+    function getHotkeySuccessor(bytes32 hotkey, uint16 netuid) external view returns (bool, bytes32) {
+        return (_successorSet[hotkey][netuid], _successor[hotkey][netuid]);
+    }
+
     uint256 public taoPerAlpha;
     uint256 public taoPerAlphaDenom;
     bool public removeStakeReverts;
