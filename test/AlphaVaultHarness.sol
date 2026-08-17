@@ -3,9 +3,8 @@ pragma solidity ^0.8.20;
 
 import { AlphaVault } from "src/AlphaVault.sol";
 
-/// @dev Test-only subclass. Tests arrange chain states directly instead of replaying the real
-///      operations that would produce them; `resyncTracked` settles the recorded expectations to
-///      the arranged state, standing in for that skipped history.
+/// @dev Test-only subclass. `resyncTracked` settles the recorded expectations to a directly
+///      arranged chain state, standing in for the operations that would have produced it.
 contract AlphaVaultHarness is AlphaVault {
     constructor(string memory _uri, address _mailboxLogic, address _subnetLogic, address _validatorRegistry)
         AlphaVault(_uri, _mailboxLogic, _subnetLogic, _validatorRegistry)

@@ -101,8 +101,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     }
 
     /// @dev `validatorRegistry` is immutable, so tests that need a different registry construct a
-    ///      fresh vault against it rather than swapping it on the shared `vault`. The harness only
-    ///      adds the arranged-state resync on top of the production contract.
+    ///      fresh vault against it rather than swapping it on the shared `vault`.
     function _deployVault(address _registry) internal returns (AlphaVault) {
         return AlphaVault(new AlphaVaultHarness(VAULT_URI, address(mailboxLogic), address(subnetLogic), _registry));
     }
@@ -234,15 +233,13 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         return MockStaking(STAKING_PRECOMPILE).getStake(hotkey, _subnetColdkey(netuid), netuid);
     }
 
-    /// @dev Arranges a vault stake as if legitimate history produced it, so the recorded
-    ///      expectations are resynced to match. Tests that model an off-record move set the mock
-    ///      stakes directly instead.
+    /// @dev Arranges a stake as settled history, resyncing the recorded expectations to match.
+    ///      Tests modeling an off-record move set the mock stakes directly instead.
     function _setVaultStake(bytes32 hotkey, uint256 netuid, uint256 amount) internal {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey, _subnetColdkey(netuid), netuid, amount);
         _resyncTracked(netuid);
     }
 
-    /// @dev Same contract as `_setVaultStake`: arranged state counts as settled history.
     function _setVaultStakes(uint256 netuid, uint256 a, uint256 b, uint256 c) internal returns (uint256 total) {
         bytes32 cloneColdkey = _subnetColdkey(netuid);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneColdkey, netuid, a);

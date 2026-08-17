@@ -137,8 +137,8 @@ contract MockStaking {
         return stakes[hotkey][coldkey][netuid];
     }
 
-    /// @dev A full hotkey rename deletes the old key's account on chain, after which any stake
-    ///      operation naming it as a destination is rejected.
+    /// @dev A full rename deletes the old key's account, after which the chain rejects any stake
+    ///      operation naming it as a destination.
     mapping(bytes32 => bool) public hotkeyDeleted;
 
     function setHotkeyDeleted(bytes32 hotkey, bool deleted) external {

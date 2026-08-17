@@ -25,13 +25,12 @@ interface IStaking {
 
     function getStake(bytes32 hotkey, bytes32 coldkey, uint256 netuid) external view returns (uint256);
 
-    /// @notice The hotkey `hotkey` on `netuid` was renamed to, if any. Returns (false, 0) for a
-    ///         hotkey that was never renamed away; the chain keys this getter with a narrower
-    ///         netuid type than the rest of the interface.
+    /// @notice The hotkey `hotkey` on `netuid` was renamed to, if any. The chain keys this getter
+    ///         with a narrower netuid type than the rest of the interface.
     function getHotkeySuccessor(bytes32 hotkey, uint16 netuid) external view returns (bool exists, bytes32 successor);
 
-    /// @notice The coldkey owning `hotkey`. Returns (false, 0) once a full rename has deleted
-    ///         the hotkey's account, even while delegated stake still sits under it.
+    /// @notice The coldkey owning `hotkey`. Absent once a full rename has deleted the hotkey's
+    ///         account, even while delegated stake still sits under it.
     function getHotkeyOwner(bytes32 hotkey) external view returns (bool exists, bytes32 owner);
 
     function removeStake(bytes32 hotkey, uint256 amount, uint256 netuid) external payable;
