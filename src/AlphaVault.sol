@@ -108,6 +108,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///      this much slack. Orders of magnitude below the dust exemption's value, so it hides
     ///      nothing the check would otherwise catch.
     uint256 private constant TRACKED_SLACK_RAO = 1e3;
+    /// @dev Budget for one rename-edge read; several times the getter's real cost, and the most
+    ///      a chain build without the getter can burn per probe.
+    uint256 private constant SUCCESSOR_PROBE_GAS = 50_000;
     /// @dev `getAlphaPrice` rounds down to a multiple of this (e18 scale), so the true price is
     ///      always below the read plus one step.
     uint256 private constant ALPHA_PRICE_QUANTUM_E18 = 1e9;
@@ -1488,6 +1491,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///      revert on the retired key, and the attesters resolve it by fixing the set.
     function _substituteRenamedValidators(uint256 tokenId, uint16 netuid, bytes32[] memory hotkeys) private view {
         bytes32[] memory recorded = _slotHotkeys(tokenId);
+        if (recorded.length == 0) return;
         for (uint256 i; i < hotkeys.length;) {
             if (!_contains(recorded, hotkeys[i])) {
                 bytes32 target = _trailIntoRecorded(hotkeys[i], netuid, recorded);
@@ -1507,7 +1511,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         view
         returns (bytes32)
     {
-        (bool exists, bytes32 next) = IStaking(STAKING_PRECOMPILE).getHotkeySuccessor(hotkey, netuid);
+        (bool exists, bytes32 next) = _hotkeySuccessorOf(hotkey, netuid);
         if (exists && next != hotkey && _contains(recorded, next)) return next;
         return bytes32(0);
     }
@@ -1521,12 +1525,23 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         view
         returns (bool found, bytes32 successor, uint256 successorStake)
     {
-        IStaking staking = IStaking(STAKING_PRECOMPILE);
-        (bool exists, bytes32 next) = staking.getHotkeySuccessor(hotkey, netuid);
+        (bool exists, bytes32 next) = _hotkeySuccessorOf(hotkey, netuid);
         if (!exists || next == hotkey) return (false, bytes32(0), 0);
-        uint256 stake = staking.getStake(next, coldkey, netuid);
+        uint256 stake = IStaking(STAKING_PRECOMPILE).getStake(next, coldkey, netuid);
         if (stake + TRACKED_SLACK_RAO < needed) return (false, bytes32(0), 0);
         return (true, next, stake);
+    }
+
+    /// @dev Reads the rename edge defensively: on a chain build that predates the getter the
+    ///      probe reverts eating everything forwarded, so it gets a bounded budget and a failure
+    ///      reads as "no edge" - the vault degrades to fail-closed instead of bricking every
+    ///      caller.
+    function _hotkeySuccessorOf(bytes32 hotkey, uint16 netuid) private view returns (bool, bytes32) {
+        (bool ok, bytes memory data) = STAKING_PRECOMPILE.staticcall{ gas: SUCCESSOR_PROBE_GAS }(
+            abi.encodeCall(IStaking.getHotkeySuccessor, (hotkey, netuid))
+        );
+        if (!ok || data.length != 64) return (false, bytes32(0));
+        return abi.decode(data, (bool, bytes32));
     }
 
     /// @dev The chain force-clears nominator positions valued below its dust threshold, so an

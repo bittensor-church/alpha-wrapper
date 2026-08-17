@@ -575,6 +575,20 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         assertEq(vault.totalSupply(tokenId), 0, "supply retired");
     }
 
+    /// @dev On a chain build without the rename getter the vault stays fully usable and degrades
+    ///      to fail-closed: probes read as "no edge" instead of bricking every caller.
+    function test_ChainWithoutRenameGetter_StaysUsable() public {
+        MockStaking(STAKING_PRECOMPILE).setSuccessorGetterReverts(true);
+
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        vault.rebalance(NETUID1);
+        assertApproxEqAbs(vault.totalStake(TOKEN1), 30 ether, 0.01 ether, "ordinary flows unaffected");
+
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.rebalance(NETUID1);
+    }
+
     /// @dev Forgiveness opens only when the attesters have signed since the last settle: parking
     ///      a donation on a lapsed attested key explains nothing by itself.
     function test_DonationWithoutAttestation_DoesNotForgive() public {

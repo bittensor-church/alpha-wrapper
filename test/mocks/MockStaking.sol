@@ -153,8 +153,16 @@ contract MockStaking {
         _successorSet[from][netuid] = true;
     }
 
+    /// @dev Models a chain build that predates the rename getter, where the probe reverts.
+    bool public successorGetterReverts;
+
+    function setSuccessorGetterReverts(bool v) external {
+        successorGetterReverts = v;
+    }
+
     /// @dev The mock never folds an absent entry to self; the caller does, matching the chain.
     function getHotkeySuccessor(bytes32 hotkey, uint16 netuid) external view returns (bool, bytes32) {
+        require(!successorGetterReverts, "MockStaking: Unknown selector");
         return (_successorSet[hotkey][netuid], _successor[hotkey][netuid]);
     }
 
