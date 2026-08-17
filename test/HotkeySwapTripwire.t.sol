@@ -339,15 +339,15 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         assertTrue(vault.isBackingIntact(TOKEN2), "a token with no position has nothing to break");
     }
 
-    /// @dev Views never publish a count known to be wrong: an unexplained shortfall with backing
-    ///      remaining makes the pricing views revert, and the monitor view reports the raw state.
-    function test_Views_FailClosedOnShortfall() public {
+    /// @dev During an unexplained shortfall the mint quote fails exactly as the deposit would,
+    ///      the total reports what the vault can locate - exactly what exits realize - and the
+    ///      monitor view flags the anomaly.
+    function test_Views_MirrorTheirOperations() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
 
         assertFalse(vault.isBackingIntact(TOKEN1), "off-vault move reports backing not intact");
-        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
-        vault.totalStake(TOKEN1);
+        assertApproxEqAbs(vault.totalStake(TOKEN1), 20 ether, 0.01 ether, "total reports the locatable backing");
         vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
         vault.previewWrap(TOKEN1, 1 ether);
     }

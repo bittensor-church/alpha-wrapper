@@ -62,9 +62,11 @@ over several sales.
   validator must still hold the stake expected of it; a renamed hotkey
   is followed one edge on chain, and an unexplained shortfall makes
   the call revert rather than misprice
-  ([edge-cases.md](edge-cases.md)). The pricing views apply the same
-  verification without persisting repairs, so a quote fails or pays
-  exactly where its operation would.
+  ([edge-cases.md](edge-cases.md)). The preview quotes apply the same
+  verification without persisting repairs, so they fail or pay exactly
+  where their operation would; `totalStake` and `sharePrice` report
+  everything the vault can locate, with `isBackingIntact` flagging
+  what the record expected but nothing explains.
 
 ## Known tradeoffs
 

@@ -76,8 +76,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // Revert on any unexplained shortfall: pricing a mint or a move against an understated
         // count would hand value to the caller.
         Strict,
-        // Tolerate only when the verified backing reads zero: a burn against zero pays zero,
-        // and a chain-side sale's proceeds have already reached holders through the claim index.
+        // Tolerate only when the verified backing reads no more than the comparison slack: a
+        // burn against nothing pays nothing, and a chain-side sale's proceeds have already
+        // reached holders through the claim index.
         ExitPartial,
         // Tolerate always: a burn of the entire supply has no other holder to shortchange.
         ExitFull
@@ -701,13 +702,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @dev    While subtensor dissolution cleanup runs for the netuid the backing alpha is in
     ///         flux; treat the value as unstable whenever `isSubnetDissolving(netuid)` is true.
     ///         Backing a pending rename moved is counted at its funded successor, so the value
-    ///         matches what the next operation realizes. Reverts `BackingShortfall` when
-    ///         remaining backing cannot be located; a fully emptied position reads an honest
-    ///         zero instead.
+    ///         reports everything the vault can locate - exactly what exits realize. It never
+    ///         reverts on a shortfall; `isBackingIntact` is the flag for backing the record
+    ///         expected but nothing explains.
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @return Alpha staked under the clone for this token.
     function totalStake(uint256 tokenId) public view returns (uint256) {
-        return _resolvedTotalView(tokenId, BackingPolicy.ExitPartial);
+        return _resolvedTotalView(tokenId, BackingPolicy.ExitFull);
     }
 
     /// @dev Read-only twin of the backing gate: counts each shortfall's funded one-hop successor
@@ -737,7 +738,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                 }
                 if (adopted + TRACKED_SLACK_RAO >= missing) return total;
             }
-            if (policy == BackingPolicy.Strict || (policy == BackingPolicy.ExitPartial && total != 0)) {
+            if (policy == BackingPolicy.Strict || (policy == BackingPolicy.ExitPartial && total > TRACKED_SLACK_RAO)) {
                 Slot storage shortSlot = _slots[tokenId][shortIndex];
                 revert BackingShortfall(netuid, shortSlot.hotkey, shortSlot.tracked, balances[shortIndex]);
             }
@@ -801,10 +802,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///         `SubnetDissolved` once dissolution has completed or
     ///         the tokenId does not correspond to the currently-registered subnet, and
     ///         `NoSharesOutstanding` when no shares have been minted against this tokenId
-    ///         (a share price with zero supply has no meaningful value), and `BackingShortfall`
-    ///         when remaining backing cannot be located - a price built on a count known to be
-    ///         wrong would mislead every integrator this contract points at it. Backing a
-    ///         pending rename moved is counted at its funded successor.
+    ///         (a share price with zero supply has no meaningful value). Backing a pending
+    ///         rename moved is counted at its funded successor, and the price reflects
+    ///         everything the vault can locate; pair with `isBackingIntact` before treating it
+    ///         as authoritative during a shortfall.
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @return Price of one share scaled by 1e18.
     function sharePrice(uint256 tokenId) external view returns (uint256) {
