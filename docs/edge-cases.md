@@ -116,18 +116,23 @@ supposed to hold, and every deposit, exit, and rebalance verifies those
 expectations before pricing anything.
 
 When a rename moved the backing, the chain also records where it went.
-The vault follows that trail up to three renames deep, confirming the
-stake at every step, adopts the key that holds it, and completes the
-call. On the deposit, alpha-exit, and rebalance paths the same call's
-consolidation then rolls the stake back onto the attested set; the TAO
-exit sells from wherever the adopted key holds it and leaves the roll
-to the next consolidating call.
+The vault reads exactly one rename edge, confirms the vault's stake
+followed it, adopts the successor in the retired key's place - weight
+included - and completes the call. A fully renamed key no longer
+exists on chain, so nothing ever stakes toward it again: the successor
+stands in until the attesters re-attest, and deposits naming either
+the attested key or its successor land under the successor. Longer
+rename trails between two vault touches are an exceptional case (the
+chain rate-limits renames of a registered key to one per subnet per
+day) and fail closed for the attesters.
 
 When nothing explains a shortfall, the call reverts `BackingShortfall`
-instead of minting cheap shares or underpaying an exit. Recovery is the
-normal attester path: re-attesting the hotkey the backing moved to both
-clears the check - the shortfall is forgiven exactly up to what newly
-attested keys hold - and rolls the stake onto the new set. Mailbox
+instead of minting cheap shares or underpaying an exit. Recovery is
+the normal attester path: after the attesters sign a new set, the
+shortfall is forgiven exactly up to what the newly attested keys hold,
+and the stake rolls onto the set they signed. The attestation itself
+is the authorization - growth on already-recorded keys, or stake
+parked somewhere before any attestation, forgives nothing. Mailbox
 recovery stays open throughout, and `isBackingIntact(tokenId)` reports
 the raw state for monitors.
 

@@ -136,10 +136,8 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
 
         assertApproxEqAbs(vault.totalStake(TOKEN1), 30 ether, 0.01 ether, "backing whole after the follow");
-        AlphaVault.Slot[] memory slots = vault.recordedSlots(TOKEN1);
-        for (uint256 i; i < slots.length; ++i) {
-            assertTrue(slots[i].hotkey != hotkey4, "consolidation rolled the successor onto the attested set");
-        }
+        assertEq(vault.recordedSlots(TOKEN1)[0].hotkey, hotkey4, "the successor stands in for the retired key");
+        assertGt(_getVaultStake(hotkey4, NETUID1), 0, "the backing stays on the successor");
         assertTrue(vault.isBackingIntact(TOKEN1), "record is intact after the follow");
     }
 
@@ -149,7 +147,10 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         uint256 aliceShares = _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
 
-        uint256 bobShares = _depositAndWrap(bob, NETUID1, 30 ether);
+        // Post-rename deposits land under the successor; wrap accepts the alias of the attested key.
+        _simulateAlphaDepositHotkey(bob, NETUID1, 30 ether, hotkey4);
+        _wrapHotkey(bob, NETUID1, hotkey4);
+        uint256 bobShares = vault.balanceOf(bob, TOKEN1);
         assertApproxEqRel(bobShares, aliceShares, 0.001e18, "equal deposits mint equal shares across the rename");
     }
 
@@ -180,18 +181,9 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         assertApproxEqAbs(alice.balance - balanceBefore, 30 ether, 0.01 ether, "sale covers the exiter's share");
     }
 
-    function testFuzz_SwapChainWithinBound_Heals(uint256 rawHops) public {
-        uint256 hops = bound(rawHops, 1, 3);
-        _depositAndWrap(alice, NETUID1, 30 ether);
-        _buildRenameTrail(NETUID1, hotkey1, hops);
-
-        vault.rebalance(NETUID1);
-        assertApproxEqAbs(vault.totalStake(TOKEN1), 30 ether, 0.01 ether, "backing whole across the chain");
-    }
-
-    /// @dev A rename can leave the backing parked mid-trail, so the follow tests the stake at
-    ///      every hop instead of jumping to the tip.
-    function test_MidTrailStake_IsFound() public {
+    /// @dev The follow reads exactly one rename edge; a further edge beyond the funded successor
+    ///      is someone else's history and never confuses the repair.
+    function test_FundedSuccessor_WinsOverDeeperTrail() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
         MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey4, NETUID1, hotkey5);
@@ -200,13 +192,14 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         emit HotkeySwapFollowed(TOKEN1, hotkey1, hotkey4);
         vault.rebalance(NETUID1);
 
-        assertApproxEqAbs(vault.totalStake(TOKEN1), 30 ether, 0.01 ether, "mid-trail backing counted whole");
+        assertApproxEqAbs(vault.totalStake(TOKEN1), 30 ether, 0.01 ether, "one-hop backing counted whole");
     }
 
-    /// @dev Trails longer than the follow bound fail closed; the attesters recover such cases.
-    function test_SwapChainBeyondBound_FailsClosed() public {
+    /// @dev The follow deliberately reads one edge only; a two-rename trail between vault touches
+    ///      is an exceptional case that fails closed for the attesters.
+    function test_MultiHopRename_FailsClosed() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
-        _buildRenameTrail(NETUID1, hotkey1, 4);
+        _buildRenameTrail(NETUID1, hotkey1, 2);
 
         vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
         vault.rebalance(NETUID1);
@@ -346,16 +339,41 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         assertTrue(vault.isBackingIntact(TOKEN2), "a token with no position has nothing to break");
     }
 
-    /// @dev Views never mask the shortfall: backing reads not-intact and NAV honestly undercounts,
-    ///      so an off-chain consumer sees the same world the mutating path fails closed on.
-    function test_Views_ReportShortfallHonestly() public {
+    /// @dev Views never publish a count known to be wrong: an unexplained shortfall with backing
+    ///      remaining makes the pricing views revert, and the monitor view reports the raw state.
+    function test_Views_FailClosedOnShortfall() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
-        uint256 navBefore = vault.totalStake(TOKEN1);
-
         _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
 
         assertFalse(vault.isBackingIntact(TOKEN1), "off-vault move reports backing not intact");
-        assertLt(vault.totalStake(TOKEN1), navBefore, "NAV honestly reflects the undercount");
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.totalStake(TOKEN1);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.previewWrap(TOKEN1, 1 ether);
+    }
+
+    /// @dev The pricing views count a pending rename's backing at its funded successor, so a
+    ///      quote taken during the window matches what the operations realize.
+    function test_Views_CountRenamedBacking() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        uint256 navBefore = vault.totalStake(TOKEN1);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+
+        assertEq(vault.totalStake(TOKEN1), navBefore, "renamed backing counted at its successor");
+        (uint256 previewAlpha,) = vault.previewUnwrap(TOKEN1, vault.balanceOf(alice, TOKEN1));
+        assertApproxEqAbs(previewAlpha, 30 ether, 0.01 ether, "exit quote counts the successor");
+    }
+
+    /// @dev A position the chain emptied outright reads an honest zero everywhere instead of
+    ///      trapping integrators in reverts.
+    function test_TotalStake_ZeroWhenEmptied() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        bytes32 coldkey = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, coldkey, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, coldkey, NETUID1, 0);
+
+        assertEq(vault.totalStake(TOKEN1), 0, "an emptied position reads zero");
     }
 
     /// @dev With no trail to follow, recovery is the attesters re-attesting the moved-to hotkey;
@@ -485,6 +503,94 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         vault.reclaimAlphaFromMailbox(NETUID1, hotkey1, _toSubstrate(bob));
 
         assertEq(_getStake(hotkey1, bob, NETUID1), 5 ether, "mailbox alpha reclaimed during the freeze");
+    }
+
+    /// @dev A fully renamed hotkey no longer exists on chain, so nothing may stake toward it:
+    ///      operations substitute the recorded successor for the retired attested key and keep
+    ///      working while the registry lags the rename.
+    function test_RenamedValidator_OpsKeepWorking() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
+
+        _simulateAlphaDepositHotkey(bob, NETUID1, 30 ether, hotkey4);
+        _wrapHotkey(bob, NETUID1, hotkey4);
+        vault.rebalance(NETUID1);
+
+        assertApproxEqAbs(vault.totalStake(TOKEN1), 60 ether, 0.01 ether, "both deposits counted");
+        assertEq(_getVaultStake(hotkey1, NETUID1), 0, "nothing staked toward the retired key");
+        assertGt(_getVaultStake(hotkey4, NETUID1), 0, "the successor carries the retired key's weight");
+    }
+
+    /// @dev A partial exit right after a rename heals first and pays real value; it never burns
+    ///      shares against the stale zero reading.
+    function test_PartialExitAfterRename_PaysProperly() public {
+        uint256 netuid = 5;
+        _registerSubnet(netuid, hotkey1);
+        _simulateAlphaDepositHotkey(alice, netuid, 10 ether, hotkey1);
+        _wrapHotkey(alice, netuid, hotkey1);
+        uint256 tokenId = vault.currentTokenId(netuid);
+        _simulateFollowedSwap(netuid, hotkey1, hotkey4);
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
+
+        uint256 shares = vault.balanceOf(alice, tokenId);
+        vm.prank(alice);
+        vault.unwrap(tokenId, shares / 2, _toSubstrate(alice));
+
+        assertApproxEqAbs(_userStakeAcrossHotkeys(alice, netuid), 5 ether, 0.01 ether, "half the backing delivered");
+    }
+
+    function test_FullBurnAfterRename_PaysFull() public {
+        uint256 netuid = 5;
+        _registerSubnet(netuid, hotkey1);
+        _simulateAlphaDepositHotkey(alice, netuid, 10 ether, hotkey1);
+        _wrapHotkey(alice, netuid, hotkey1);
+        uint256 tokenId = vault.currentTokenId(netuid);
+        _simulateFollowedSwap(netuid, hotkey1, hotkey4);
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
+
+        uint256 shares = vault.balanceOf(alice, tokenId);
+        vm.prank(alice);
+        vault.unwrap(tokenId, shares, _toSubstrate(alice));
+
+        assertApproxEqAbs(_userStakeAcrossHotkeys(alice, netuid), 10 ether, 0.01 ether, "whole backing delivered");
+        assertEq(vault.totalSupply(tokenId), 0, "supply retired");
+    }
+
+    function test_FullBurnForTaoAfterRename_SellsFull() public {
+        uint256 netuid = 5;
+        _registerSubnet(netuid, hotkey1);
+        _simulateAlphaDepositHotkey(alice, netuid, 10 ether, hotkey1);
+        _wrapHotkey(alice, netuid, hotkey1);
+        uint256 tokenId = vault.currentTokenId(netuid);
+        _simulateFollowedSwap(netuid, hotkey1, hotkey4);
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
+
+        uint256 balanceBefore = alice.balance;
+        uint256 shares = vault.balanceOf(alice, tokenId);
+        vm.prank(alice);
+        vault.unwrapForTao(tokenId, shares, 0);
+
+        assertApproxEqAbs(alice.balance - balanceBefore, 10 ether, 0.01 ether, "whole backing sold");
+        assertEq(vault.totalSupply(tokenId), 0, "supply retired");
+    }
+
+    /// @dev Forgiveness opens only when the attesters have signed since the last settle: parking
+    ///      a donation on a lapsed attested key explains nothing by itself.
+    function test_DonationWithoutAttestation_DoesNotForgive() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        // Settles the record onto the successor while the registry still lists hotkey1.
+        vault.rebalance(NETUID1);
+
+        bytes32 coldkey = _subnetColdkey(NETUID1);
+        uint256 lost = _getVaultStake(hotkey2, NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, coldkey, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey5, coldkey, NETUID1, lost);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, lost + 1 ether);
+
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.rebalance(NETUID1);
     }
 
     /// @dev Moves the clone's whole backing off `fromHotkey` onto `toHotkey` with no vault call,

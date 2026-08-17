@@ -58,12 +58,13 @@ over several sales.
   and assets (the ERC-4626 pattern), and a share-supply cap keeps the
   TAO claim index exact.
 - Market-order exits are slippage-bounded by the caller's `minTaoOut`.
-- Backing is verified before every state-mutating call prices shares.
-  Each recorded validator must still hold the stake expected of it; a
-  renamed hotkey is followed on chain, and an unexplained shortfall
-  makes the call revert rather than misprice
-  ([edge-cases.md](edge-cases.md)). Read-only quotes report the
-  recorded position without repairing it.
+- Backing is verified before every call prices shares. Each recorded
+  validator must still hold the stake expected of it; a renamed hotkey
+  is followed one edge on chain, and an unexplained shortfall makes
+  the call revert rather than misprice
+  ([edge-cases.md](edge-cases.md)). The pricing views apply the same
+  verification without persisting repairs, so a quote fails or pays
+  exactly where its operation would.
 
 ## Known tradeoffs
 

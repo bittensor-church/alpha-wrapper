@@ -93,6 +93,9 @@ contract MockStaking {
         if (transferStakeReverts) {
             _fail("MockStaking: transferStake reverted");
         }
+        if (hotkeyDeleted[hotkey]) {
+            _fail("MockStaking: HotKeyAccountNotExists");
+        }
         if (_belowMinTransfer(amount, origin_netuid)) {
             _fail("MockStaking: AmountTooLow");
         }
@@ -120,6 +123,9 @@ contract MockStaking {
         if (moveStakeReverts) {
             _fail("MockStaking: moveStake reverted");
         }
+        if (hotkeyDeleted[destination_hotkey]) {
+            _fail("MockStaking: HotKeyAccountNotExists");
+        }
         if (_belowMinTransfer(amount, origin_netuid)) {
             _fail("MockStaking: AmountTooLow");
         }
@@ -129,6 +135,14 @@ contract MockStaking {
 
     function getStake(bytes32 hotkey, bytes32 coldkey, uint256 netuid) external view returns (uint256) {
         return stakes[hotkey][coldkey][netuid];
+    }
+
+    /// @dev A full hotkey rename deletes the old key's account on chain, after which any stake
+    ///      operation naming it as a destination is rejected.
+    mapping(bytes32 => bool) public hotkeyDeleted;
+
+    function setHotkeyDeleted(bytes32 hotkey, bool deleted) external {
+        hotkeyDeleted[hotkey] = deleted;
     }
 
     mapping(bytes32 => mapping(uint256 => bytes32)) private _successor;

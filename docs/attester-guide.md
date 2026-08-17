@@ -63,12 +63,15 @@ under one stays reclaimable by its owner.
 
 Watch the chain for hotkey swaps executed by the operators of attested
 validators - the swap event names the old and new key. The vault
-follows short rename trails on its own; when it cannot (the trail is
-longer than three hops, or the chain recorded no trail for that
-subnet), the token's deposits and exits revert `BackingShortfall` until
-you re-attest. Attesting the new hotkey in the old one's place restores
-the count and rolls the stake onto the set you signed, in the next
-mutating call. Until then the freeze is expected behavior, and
+follows a single rename on its own and keeps operating on the
+successor; re-attest the new hotkey in the old one's place at your
+convenience to bring the registry back in line. When the vault cannot
+follow (a second rename before it acted, or no rename record for that
+subnet), the token's deposits and partial exits revert
+`BackingShortfall` until you re-attest. Your attestation is the
+recovery: it must name the keys that actually hold the backing, and
+the forgiveness it authorizes covers exactly what those newly attested
+keys hold. Until then the freeze is expected behavior, and
 `isBackingIntact(tokenId)` is the signal to alert on.
 
 ## Signer set changes

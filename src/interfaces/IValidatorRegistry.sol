@@ -11,4 +11,7 @@ interface IValidatorRegistry {
     ///         length is non-zero.
     /// @param  netuid Subnet id.
     function getValidators(uint256 netuid) external view returns (bytes32[] memory hotkeys, uint16[] memory weights);
+
+    /// @notice Count of accepted attestations for a subnet; moves only when the attesters act.
+    function nonces(uint256 netuid) external view returns (uint256);
 }
