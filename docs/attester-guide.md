@@ -59,6 +59,18 @@ Deposits parked under a dropped hotkey stay recoverable: `wrap` refuses
 out-of-set hotkeys up front, and stake already sitting in a mailbox
 under one stays reclaimable by its owner.
 
+## Hotkey renames
+
+Watch the chain for hotkey swaps executed by the operators of attested
+validators - the swap event names the old and new key. The vault
+follows short rename trails on its own; when it cannot (the trail is
+longer than three hops, or the chain recorded no trail for that
+subnet), the token's deposits and exits revert `BackingShortfall` until
+you re-attest. Attesting the new hotkey in the old one's place restores
+the count and rolls the stake onto the set you signed, in the next
+mutating call. Until then the freeze is expected behavior, and
+`isBackingIntact(tokenId)` is the signal to alert on.
+
 ## Signer set changes
 
 The registry admin replaces the signer set with

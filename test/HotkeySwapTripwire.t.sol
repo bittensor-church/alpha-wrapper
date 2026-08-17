@@ -340,6 +340,10 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
 
     // -------------------- Honest views and recovery ------------------------------
 
+    function test_IsBackingIntact_TrueWithoutPosition() public view {
+        assertTrue(vault.isBackingIntact(TOKEN2), "a token with no position has nothing to break");
+    }
+
     /// @dev Views never mask the shortfall: backing reads not-intact and NAV honestly undercounts,
     ///      so an off-chain consumer sees the same world the mutating path fails closed on.
     function test_Views_ReportShortfallHonestly() public {

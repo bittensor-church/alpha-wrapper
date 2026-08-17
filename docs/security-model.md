@@ -58,6 +58,10 @@ over several sales.
   and assets (the ERC-4626 pattern), and a share-supply cap keeps the
   TAO claim index exact.
 - Market-order exits are slippage-bounded by the caller's `minTaoOut`.
+- Backing is verified on every pricing call. Each recorded validator
+  must still hold the stake expected of it; a renamed hotkey is
+  followed on chain, and an unexplained shortfall makes the call revert
+  rather than misprice shares ([edge-cases.md](edge-cases.md)).
 
 ## Known tradeoffs
 
@@ -69,3 +73,8 @@ over several sales.
 - A partial `unwrapForTao` can fill short and refund the unsold part as
   shares instead of reverting; callers bound the damage with
   `minTaoOut`.
+- A backing shortfall the chain's rename records cannot explain freezes
+  a token's deposits and exits until the attesters re-attest the
+  destination. The freeze is the protection - pricing against the
+  understated count would let depositors mint cheap shares - and
+  mailbox recovery stays open while it lasts.

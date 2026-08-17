@@ -22,6 +22,6 @@ contract AlphaVaultHarness is AlphaVault {
         for (uint256 i; i < hotkeys.length; ++i) {
             balances[i] = IStaking(STAKING_PRECOMPILE).getStake(hotkeys[i], coldkey, netuid);
         }
-        _settleSlots(tokenId, coldkey, hotkeys, balances, balances);
+        _settleSlots(tokenId, coldkey, hotkeys, balances, balances, hotkeys.length);
     }
 }

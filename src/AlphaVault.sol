@@ -364,7 +364,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // reports what left. Selling past the request means the chain swept backing that belongs to
         // the holders who stay; the subtraction refuses to pay it out.
         uint256[] memory postBalances = _fetchBalances(hotkeys, vaultColdkey, netuid);
-        _settleSlots(tokenId, vaultColdkey, hotkeys, postBalances, postBalances);
+        // Only the recorded prefix of the union carries expectations; freshly attested keys past
+        // it are adopted by the next consolidating call instead of being written here.
+        _settleSlots(tokenId, vaultColdkey, hotkeys, postBalances, postBalances, _slots[tokenId].length);
         uint256 sold = total - _sumBalances(postBalances);
         uint256 unsold = assets - sold;
         // The chain keeps a RAO or so of every sale; refunding that to a full exit would mint a
@@ -435,7 +437,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // A fully swept position cannot regain alpha, and the burn's checkpoint keeps any
         // swept-sale proceeds claimable, so the shares are retired instead of trapped.
         if (totalAlpha == 0) {
-            _settleSlots(tokenId, coldkey, hotkeys, balances, balances);
+            _settleSlots(tokenId, coldkey, hotkeys, balances, balances, hotkeys.length);
             _burn(msg.sender, tokenId, shares);
             emit Unwrapped(msg.sender, tokenId, shares, 0);
             return;
@@ -517,7 +519,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256[] memory postBalances = _fetchBalances(hotkeys, coldkey, netuid);
         uint256[] memory preAlign = _copyBalances(postBalances);
         _alignToWeights(tokenId, clone, hotkeys, weights, postBalances, alphaPriceE18);
-        _settleSlots(tokenId, coldkey, hotkeys, preAlign, postBalances);
+        _settleSlots(tokenId, coldkey, hotkeys, preAlign, postBalances, hotkeys.length);
     }
 
     function _unwrapFromDissolvedSubnet(uint256 tokenId, uint256 shares, address clone) private {
@@ -568,7 +570,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256[] memory balances = _fetchBalances(hotkeys, coldkey, _netuid(tokenId));
         uint256[] memory preAlign = _copyBalances(balances);
         uint256 total = _alignToWeights(tokenId, clone, hotkeys, weights, balances, alphaPriceE18);
-        _settleSlots(tokenId, coldkey, hotkeys, preAlign, balances);
+        _settleSlots(tokenId, coldkey, hotkeys, preAlign, balances, hotkeys.length);
         return total;
     }
 
@@ -1329,24 +1331,26 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         return alphaPriceE18 != 0 && _taoValue(tracked, alphaPriceE18) <= dustThresholdTao;
     }
 
-    /// @dev Rewrites the recorded slots to the set the operation left the backing on. A balance
-    ///      the operation changed only in memory is re-read from the chain: moves can credit a
-    ///      few RAO short, and an expectation above the chain's ledger would read as a shortfall
-    ///      on the next call. Unchanged balances keep their already-exact read, and unchanged
-    ///      words are skipped, so a quiet operation settles in a handful of writes.
+    /// @dev Rewrites the recorded slots to the first `count` entries of the set the operation
+    ///      left the backing on. A balance the operation changed only in memory is re-read from
+    ///      the chain: moves can credit a few RAO short, and an expectation above the chain's
+    ///      ledger would read as a shortfall on the next call. Unchanged balances keep their
+    ///      already-exact read, and unchanged words are skipped, so a quiet operation settles in
+    ///      a handful of writes.
     function _settleSlots(
         uint256 tokenId,
         bytes32 coldkey,
         bytes32[] memory hotkeys,
         uint256[] memory preBalances,
-        uint256[] memory balances
+        uint256[] memory balances,
+        uint256 count
     ) internal {
         Slot[] storage tokenSlots = _slots[tokenId];
         uint16 netuid = _netuid(tokenId);
-        while (tokenSlots.length > hotkeys.length) {
+        while (tokenSlots.length > count) {
             tokenSlots.pop();
         }
-        for (uint256 i; i < hotkeys.length;) {
+        for (uint256 i; i < count;) {
             uint256 settled = balances[i] == preBalances[i]
                 ? balances[i]
                 : IStaking(STAKING_PRECOMPILE).getStake(hotkeys[i], coldkey, netuid);

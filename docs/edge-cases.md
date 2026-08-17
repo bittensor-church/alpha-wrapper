@@ -107,6 +107,31 @@ the position self-heals: the next deposit lands before the roll and
 carries the rotated-out dust with it. Until then, burning the token's
 entire supply via `unwrapForTao` still exits.
 
+## Validator hotkey renames
+
+A validator's operator can rename its hotkey on chain, which silently
+carries every delegator's stake - the vault's included - to the new
+key. The vault remembers how much backing each recorded validator is
+supposed to hold, and every deposit, exit, and rebalance verifies those
+expectations before pricing anything.
+
+When a rename moved the backing, the chain also records where it went.
+The vault follows that trail up to three renames deep, confirming the
+stake at every step, adopts the key that holds it, and completes the
+call; the same call's consolidation then rolls the stake back onto the
+attested set.
+
+When nothing explains a shortfall, the call reverts `BackingShortfall`
+instead of minting cheap shares or underpaying an exit. Recovery is the
+normal attester path: re-attesting the hotkey the backing moved to both
+clears the check - the shortfall is forgiven exactly up to what newly
+attested keys hold - and rolls the stake onto the new set. Mailbox
+recovery stays open throughout, and `isBackingIntact(tokenId)` reports
+the raw state for monitors.
+
+Positions small enough for the chain's dust sweep to clear outright are
+exempt from the check, so a swept speck can never freeze a token.
+
 ## Third-party dust
 
 Anyone can stake to the vault's or a mailbox's coldkey without asking.
