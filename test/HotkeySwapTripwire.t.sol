@@ -13,7 +13,6 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
     event HotkeySwapFollowed(uint256 indexed tokenId, bytes32 indexed oldHotkey, bytes32 indexed newHotkey);
 
     bytes32 internal hotkey5 = keccak256("hotkey5");
-    bytes32 internal hotkey6 = keccak256("hotkey6");
 
     // -------------------- Tracked accounting -------------------------------------
 
@@ -23,23 +22,23 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         AlphaVault.Slot[] memory slots = vault.recordedSlots(TOKEN1);
         assertEq(slots.length, 3, "one slot per attested validator");
         assertEq(slots[0].hotkey, hotkey1, "slot 0 remembers hotkey1");
-        assertEq(uint256(slots[0].tracked), _getVaultStake(hotkey1, NETUID1), "slot 0 tracked mirrors staked alpha");
-        assertEq(uint256(slots[1].tracked), _getVaultStake(hotkey2, NETUID1), "slot 1 tracked mirrors staked alpha");
-        assertEq(uint256(slots[2].tracked), _getVaultStake(hotkey3, NETUID1), "slot 2 tracked mirrors staked alpha");
+        assertEq(slots[0].tracked, _getVaultStake(hotkey1, NETUID1), "slot 0 tracked mirrors staked alpha");
+        assertEq(slots[1].tracked, _getVaultStake(hotkey2, NETUID1), "slot 1 tracked mirrors staked alpha");
+        assertEq(slots[2].tracked, _getVaultStake(hotkey3, NETUID1), "slot 2 tracked mirrors staked alpha");
     }
 
     function test_Unwrap_LowersTrackedToPostBalance() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 100 ether);
-        uint256 trackedBefore = uint256(vault.recordedSlots(TOKEN1)[0].tracked);
+        uint256 trackedBefore = vault.recordedSlots(TOKEN1)[0].tracked;
 
         vm.prank(alice);
         vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));
 
         AlphaVault.Slot[] memory slots = vault.recordedSlots(TOKEN1);
-        assertLt(uint256(slots[0].tracked), trackedBefore, "tracked drops after the partial exit");
-        assertEq(uint256(slots[0].tracked), _getVaultStake(hotkey1, NETUID1), "slot 0 tracked mirrors reduced stake");
-        assertEq(uint256(slots[1].tracked), _getVaultStake(hotkey2, NETUID1), "slot 1 tracked mirrors reduced stake");
-        assertEq(uint256(slots[2].tracked), _getVaultStake(hotkey3, NETUID1), "slot 2 tracked mirrors reduced stake");
+        assertLt(slots[0].tracked, trackedBefore, "tracked drops after the partial exit");
+        assertEq(slots[0].tracked, _getVaultStake(hotkey1, NETUID1), "slot 0 tracked mirrors reduced stake");
+        assertEq(slots[1].tracked, _getVaultStake(hotkey2, NETUID1), "slot 1 tracked mirrors reduced stake");
+        assertEq(slots[2].tracked, _getVaultStake(hotkey3, NETUID1), "slot 2 tracked mirrors reduced stake");
     }
 
     function test_UnwrapForTao_LowersTrackedToPostBalance() public {
@@ -50,11 +49,7 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
 
         AlphaVault.Slot[] memory slots = vault.recordedSlots(TOKEN1);
         for (uint256 i; i < slots.length; ++i) {
-            assertEq(
-                uint256(slots[i].tracked),
-                _getVaultStake(slots[i].hotkey, NETUID1),
-                "tracked mirrors the post-sale stake"
-            );
+            assertEq(slots[i].tracked, _getVaultStake(slots[i].hotkey, NETUID1), "tracked mirrors the post-sale stake");
         }
     }
 
@@ -70,29 +65,11 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
 
         AlphaVault.Slot[] memory slots = vault.recordedSlots(TOKEN1);
         assertEq(slots[0].hotkey, hotkey4, "slot 0 remembers the rotated-in hotkey");
-        assertEq(
-            uint256(slots[0].tracked), _getVaultStake(hotkey4, NETUID1), "slot 0 tracked mirrors consolidated stake"
-        );
+        assertEq(slots[0].tracked, _getVaultStake(hotkey4, NETUID1), "slot 0 tracked mirrors consolidated stake");
         assertEq(_getVaultStake(hotkey1, NETUID1), 0, "rotated-out hotkey holds no backing");
         for (uint256 i; i < slots.length; ++i) {
             assertTrue(slots[i].hotkey != hotkey1, "no slot still remembers the rotated-out hotkey");
         }
-    }
-
-    /// @dev A stake reading wider than the slot's `uint128` cannot be recorded, so the settle
-    ///      reverts rather than silently truncate the expectation. A single-validator subnet
-    ///      keeps the whole oversized reading on one slot.
-    function test_RevertWhen_TrackedOverflow() public {
-        uint256 netuid = 5;
-        _registerSubnet(netuid, hotkey1);
-        _simulateAlphaDepositHotkey(alice, netuid, 10 ether, hotkey1);
-        _wrapHotkey(alice, netuid, hotkey1);
-
-        MockStaking(STAKING_PRECOMPILE)
-            .setStake(hotkey1, _subnetColdkey(netuid), netuid, uint256(type(uint128).max) + 1);
-
-        vm.expectRevert(AlphaVault.TrackedOverflow.selector);
-        vault.rebalance(netuid);
     }
 
     // -------------------- Fail-closed on an unexplained shortfall ----------------
@@ -152,8 +129,7 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
 
     function test_Rebalance_FollowsHotkeySwap() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
-        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
-        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey4);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
 
         vm.expectEmit(true, true, true, true, address(vault));
         emit HotkeySwapFollowed(TOKEN1, hotkey1, hotkey4);
@@ -171,8 +147,7 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
     ///      the exact mispricing the tripwire exists to prevent.
     function test_WrapAfterSwap_MintsFairShares() public {
         uint256 aliceShares = _depositAndWrap(alice, NETUID1, 30 ether);
-        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
-        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey4);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
 
         uint256 bobShares = _depositAndWrap(bob, NETUID1, 30 ether);
         assertApproxEqRel(bobShares, aliceShares, 0.001e18, "equal deposits mint equal shares across the rename");
@@ -180,41 +155,35 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
 
     function test_UnwrapAfterSwap_PaysFullBacking() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
-        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
-        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey4);
+        // A second holder keeps alice's burn partial, so her exit itself runs the gate.
+        _depositAndWrap(bob, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
 
         vm.prank(alice);
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
 
         assertApproxEqAbs(
-            _userStakeAcrossHotkeys(alice, NETUID1), 30 ether, 0.01 ether, "full exit pays the whole backing"
+            _userStakeAcrossHotkeys(alice, NETUID1), 30 ether, 0.01 ether, "the exit pays the exiter's whole share"
         );
     }
 
     function test_UnwrapForTaoAfterSwap_SellsFullBacking() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
-        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
-        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey4);
+        // A second holder keeps alice's burn partial, so her exit itself runs the gate.
+        _depositAndWrap(bob, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
         vault.unwrapForTao(TOKEN1, shares, 0);
 
-        assertApproxEqAbs(alice.balance - balanceBefore, 30 ether, 0.01 ether, "sale covers the whole backing");
+        assertApproxEqAbs(alice.balance - balanceBefore, 30 ether, 0.01 ether, "sale covers the exiter's share");
     }
 
     function testFuzz_SwapChainWithinBound_Heals(uint256 rawHops) public {
         uint256 hops = bound(rawHops, 1, 3);
         _depositAndWrap(alice, NETUID1, 30 ether);
-
-        bytes32 previous = hotkey1;
-        bytes32 tip;
-        for (uint256 i; i < hops; ++i) {
-            tip = keccak256(abi.encode("chain-hop", i));
-            MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(previous, NETUID1, tip);
-            previous = tip;
-        }
-        _simulateOffVaultSwap(NETUID1, hotkey1, tip);
+        _buildRenameTrail(NETUID1, hotkey1, hops);
 
         vault.rebalance(NETUID1);
         assertApproxEqAbs(vault.totalStake(TOKEN1), 30 ether, 0.01 ether, "backing whole across the chain");
@@ -224,9 +193,8 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
     ///      every hop instead of jumping to the tip.
     function test_MidTrailStake_IsFound() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
-        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey4);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
         MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey4, NETUID1, hotkey5);
-        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
 
         vm.expectEmit(true, true, true, true, address(vault));
         emit HotkeySwapFollowed(TOKEN1, hotkey1, hotkey4);
@@ -238,16 +206,50 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
     /// @dev Trails longer than the follow bound fail closed; the attesters recover such cases.
     function test_SwapChainBeyondBound_FailsClosed() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
+        _buildRenameTrail(NETUID1, hotkey1, 4);
 
-        bytes32 previous = hotkey1;
-        bytes32 tip;
-        for (uint256 i; i < 4; ++i) {
-            tip = keccak256(abi.encode("long-chain-hop", i));
-            MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(previous, NETUID1, tip);
-            previous = tip;
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.rebalance(NETUID1);
+    }
+
+    /// @dev The chain's own rename migration can credit the successor a few RAO short; the
+    ///      comparison slack absorbs it, so the follow still lands instead of freezing the token
+    ///      over rounding.
+    function test_SwapCreditedShort_StillFollowed() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        bytes32 coldkey = _subnetColdkey(NETUID1);
+        uint256 credited = _getStakeForColdkey(hotkey4, coldkey, NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, coldkey, NETUID1, credited - 500);
+
+        vault.rebalance(NETUID1);
+
+        assertApproxEqAbs(vault.totalStake(TOKEN1), 30 ether, 0.01 ether, "backing whole despite the short credit");
+    }
+
+    /// @dev Backing forgiven onto a newly attested key is recorded in the same pass, so it can
+    ///      neither move off-record unseen afterwards nor excuse a second, unrelated shortfall.
+    function test_ForgivenAdoption_IsRecorded() public {
+        uint256 aliceShares = _depositAndWrap(alice, NETUID1, 30 ether);
+        _depositAndWrap(bob, NETUID1, 30 ether);
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+        _setValidators(
+            NETUID1, _hotkeys(hotkey4, hotkey2, hotkey3), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
+        );
+
+        // The TAO exit adopts through forgiveness without consolidating.
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, aliceShares / 2, 0);
+
+        AlphaVault.Slot[] memory slots = vault.recordedSlots(TOKEN1);
+        bool recorded;
+        for (uint256 i; i < slots.length; ++i) {
+            if (slots[i].hotkey == hotkey4) recorded = slots[i].tracked > 0;
         }
-        _simulateOffVaultSwap(NETUID1, hotkey1, tip);
+        assertTrue(recorded, "the adopted key joined the record with its balance");
 
+        // A second off-record move of the adopted backing is no longer invisible.
+        _simulateOffVaultSwap(NETUID1, hotkey4, hotkey5);
         vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
         vault.rebalance(NETUID1);
     }
@@ -335,7 +337,7 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
 
         assertTrue(vault.isBackingIntact(tokenId), "a sweepable expectation is exempt");
         vault.rebalance(netuid);
-        assertEq(uint256(vault.recordedSlots(tokenId)[0].tracked), 0, "record settled to the swept state");
+        assertEq(vault.recordedSlots(tokenId)[0].tracked, 0, "record settled to the swept state");
     }
 
     // -------------------- Honest views and recovery ------------------------------
@@ -424,6 +426,54 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));
     }
 
+    /// @dev A shortfall never traps the last holder: with nobody else to shortchange, a burn of
+    ///      the entire supply exits at the counted backing.
+    function test_FullSupplyBurn_ExitsDuringShortfall() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+
+        assertEq(vault.totalSupply(TOKEN1), 0, "the whole supply retired");
+        assertApproxEqAbs(
+            _userStakeAcrossHotkeys(alice, NETUID1), 20 ether, 0.01 ether, "the exit pays the counted backing"
+        );
+    }
+
+    function test_FullSupplyBurnForTao_ExitsDuringShortfall() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+
+        uint256 balanceBefore = alice.balance;
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares, 0);
+
+        assertEq(vault.totalSupply(TOKEN1), 0, "the whole supply retired");
+        assertApproxEqAbs(alice.balance - balanceBefore, 20 ether, 0.01 ether, "the sale covers the counted backing");
+    }
+
+    /// @dev The chain can sell a whole position out from under the vault; retiring shares against
+    ///      the zero reading pays zero and mispricing is impossible, so the exit proceeds while
+    ///      the record - and with it the deposit freeze - stays in place.
+    function test_ZeroBackingRetire_KeepsRecord() public {
+        uint256 aliceShares = _depositAndWrap(alice, NETUID1, 30 ether);
+        _depositAndWrap(bob, NETUID1, 30 ether);
+        bytes32 coldkey = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, coldkey, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, coldkey, NETUID1, 0);
+
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, aliceShares, _toSubstrate(alice));
+        assertEq(_userStakeAcrossHotkeys(alice, NETUID1), 0, "a zero backing pays zero");
+
+        _simulateAlphaDeposit(bob, NETUID1, 10 ether);
+        vm.prank(bob);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.wrap(NETUID1, hotkey1);
+    }
+
     /// @dev Mailbox funds were never counted as backing, so their recovery paths stay open while
     ///      pricing paths fail closed.
     function test_MailboxReclaim_OpenDuringShortfall() public {
@@ -444,5 +494,22 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         uint256 amount = _getStakeForColdkey(fromHotkey, coldkey, netuid);
         MockStaking(STAKING_PRECOMPILE).setStake(fromHotkey, coldkey, netuid, 0);
         MockStaking(STAKING_PRECOMPILE).setStake(toHotkey, coldkey, netuid, amount);
+    }
+
+    /// @dev A full rename as the chain records it: the stake moves and the trail points at it.
+    function _simulateFollowedSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
+        _simulateOffVaultSwap(netuid, fromHotkey, toHotkey);
+        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(fromHotkey, netuid, toHotkey);
+    }
+
+    /// @dev Chains `hops` renames from `fromHotkey`, moving the backing to the returned tip.
+    function _buildRenameTrail(uint256 netuid, bytes32 fromHotkey, uint256 hops) internal returns (bytes32 tip) {
+        bytes32 previous = fromHotkey;
+        for (uint256 i; i < hops; ++i) {
+            tip = keccak256(abi.encode("trail-hop", i));
+            MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(previous, netuid, tip);
+            previous = tip;
+        }
+        _simulateOffVaultSwap(netuid, fromHotkey, tip);
     }
 }

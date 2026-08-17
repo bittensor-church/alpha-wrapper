@@ -2,7 +2,6 @@
 pragma solidity ^0.8.20;
 
 import { AlphaVault } from "src/AlphaVault.sol";
-import { IStaking, STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 /// @dev Test-only subclass. Tests arrange chain states directly instead of replaying the real
 ///      operations that would produce them; `resyncTracked` settles the recorded expectations to
@@ -14,14 +13,7 @@ contract AlphaVaultHarness is AlphaVault {
 
     function resyncTracked(uint256 tokenId, bytes32 coldkey) external {
         if (subnetClone[tokenId] == address(0)) return;
-        bytes32[] memory hotkeys = this.lastSeenHotkeys(tokenId);
-        uint256[] memory balances = new uint256[](hotkeys.length);
-        // Token ids place the netuid in the low 16 bits.
-        // forge-lint: disable-next-line(unsafe-typecast)
-        uint16 netuid = uint16(tokenId);
-        for (uint256 i; i < hotkeys.length; ++i) {
-            balances[i] = IStaking(STAKING_PRECOMPILE).getStake(hotkeys[i], coldkey, netuid);
-        }
-        _settleSlots(tokenId, coldkey, hotkeys, balances, balances, hotkeys.length);
+        bytes32[] memory hotkeys = _slotHotkeys(tokenId);
+        _refreshTracked(tokenId, _fetchBalances(hotkeys, coldkey, _netuid(tokenId)));
     }
 }

@@ -118,8 +118,10 @@ expectations before pricing anything.
 When a rename moved the backing, the chain also records where it went.
 The vault follows that trail up to three renames deep, confirming the
 stake at every step, adopts the key that holds it, and completes the
-call; the same call's consolidation then rolls the stake back onto the
-attested set.
+call. On the deposit, alpha-exit, and rebalance paths the same call's
+consolidation then rolls the stake back onto the attested set; the TAO
+exit sells from wherever the adopted key holds it and leaves the roll
+to the next consolidating call.
 
 When nothing explains a shortfall, the call reverts `BackingShortfall`
 instead of minting cheap shares or underpaying an exit. Recovery is the
@@ -129,8 +131,14 @@ attested keys hold - and rolls the stake onto the new set. Mailbox
 recovery stays open throughout, and `isBackingIntact(tokenId)` reports
 the raw state for monitors.
 
-Positions small enough for the chain's dust sweep to clear outright are
-exempt from the check, so a swept speck can never freeze a token.
+Three exits stay open on their own because they cannot misprice
+anything. Positions small enough for the chain's dust sweep to clear
+outright are exempt from the check, so a swept speck never freezes a
+token. A backing that reads zero - the footprint of the chain
+force-selling the whole position, whose proceeds reach holders through
+the claim index - can still be retired, paying zero while deposits stay
+frozen. And a burn of the entire supply always exits at the counted
+position: with no other holder left, there is nobody to shortchange.
 
 ## Third-party dust
 

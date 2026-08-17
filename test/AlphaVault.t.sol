@@ -2084,7 +2084,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         b2 = bound(b2, 0, perCap);
         b3 = bound(b3, 0, perCap);
 
-        // Seed the vault so _lastSeenHotkeys[TOKEN1] = [hotkey1, hotkey2, hotkey3].
+        // Seed the vault so the remembered set is [hotkey1, hotkey2, hotkey3].
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
 
