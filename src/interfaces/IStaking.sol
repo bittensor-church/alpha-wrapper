@@ -30,6 +30,10 @@ interface IStaking {
     ///         netuid type than the rest of the interface.
     function getHotkeySuccessor(bytes32 hotkey, uint16 netuid) external view returns (bool exists, bytes32 successor);
 
+    /// @notice The coldkey owning `hotkey`. Returns (false, 0) once a full rename has deleted
+    ///         the hotkey's account, even while delegated stake still sits under it.
+    function getHotkeyOwner(bytes32 hotkey) external view returns (bool exists, bytes32 owner);
+
     function removeStake(bytes32 hotkey, uint256 amount, uint256 netuid) external payable;
 
     /// @notice Tao-denominated dust threshold: after a partial unstake, the chain force-clears any

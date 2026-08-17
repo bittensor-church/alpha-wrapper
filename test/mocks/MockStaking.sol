@@ -166,6 +166,11 @@ contract MockStaking {
         return (_successorSet[hotkey][netuid], _successor[hotkey][netuid]);
     }
 
+    function getHotkeyOwner(bytes32 hotkey) external view returns (bool, bytes32) {
+        require(!successorGetterReverts, "MockStaking: Unknown selector");
+        return (!hotkeyDeleted[hotkey], hotkeyDeleted[hotkey] ? bytes32(0) : bytes32(uint256(1)));
+    }
+
     uint256 public taoPerAlpha;
     uint256 public taoPerAlphaDenom;
     bool public removeStakeReverts;

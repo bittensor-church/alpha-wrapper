@@ -136,14 +136,21 @@ parked somewhere before any attestation, forgives nothing. Mailbox
 recovery stays open throughout, and `isBackingIntact(tokenId)` reports
 the raw state for monitors.
 
-Three exits stay open on their own because they cannot misprice
-anything. Positions small enough for the chain's dust sweep to clear
-outright are exempt from the check, so a swept speck never freezes a
-token. A backing that reads zero - the footprint of the chain
-force-selling the whole position, whose proceeds reach holders through
-the claim index - can still be retired, paying zero while deposits stay
-frozen. And a burn of the entire supply always exits at the counted
-position: with no other holder left, there is nobody to shortchange.
+Exits stay open exactly where mispricing is impossible and no rename
+trail says otherwise. Positions small enough for the chain's dust
+sweep to clear outright are exempt from the check, so a swept speck
+never freezes a token. A backing reading at or near zero with no
+rename trail in sight - the footprint of the chain force-selling the
+whole position, whose proceeds reach holders through the claim index -
+can still be retired, paying zero while deposits stay frozen; a burn
+of the entire supply likewise exits at the counted position. A visible
+rename trail blocks both: it is positive evidence the backing is
+recoverable, so no exit burns shares against it.
+
+One runtime edge has no in-vault recovery: a global rename that keeps
+its stake leaves the position counted but immovable under a key the
+chain deleted. Every call then reverts `StakeParkedOnRetiredHotkey`,
+naming the key, until the key re-registers or the runtime changes.
 
 ## Third-party dust
 

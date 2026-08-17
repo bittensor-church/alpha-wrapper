@@ -575,6 +575,82 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         assertEq(vault.totalSupply(tokenId), 0, "supply retired");
     }
 
+    /// @dev A rename edge is positive evidence the backing was not swept, so no exit - partial
+    ///      or whole-supply, either rail - may burn shares against it; re-attestation recovers.
+    function test_TwoHopRename_ExitsFailClosed() public {
+        uint256 netuid = 5;
+        _registerSubnet(netuid, hotkey1);
+        _simulateAlphaDepositHotkey(alice, netuid, 10 ether, hotkey1);
+        _wrapHotkey(alice, netuid, hotkey1);
+        uint256 tokenId = vault.currentTokenId(netuid);
+        _buildRenameTrail(netuid, hotkey1, 2);
+
+        uint256 shares = vault.balanceOf(alice, tokenId);
+        vm.prank(alice);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.unwrap(tokenId, shares / 2, _toSubstrate(alice));
+        vm.prank(alice);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.unwrap(tokenId, shares, _toSubstrate(alice));
+        vm.prank(alice);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.unwrapForTao(tokenId, shares, 0);
+    }
+
+    /// @dev A chain-side sale can leave a few RAO behind; a reading within the comparison slack
+    ///      retires like an exact zero instead of trapping the holders.
+    function test_SweepResidue_StaysExitable() public {
+        uint256 aliceShares = _depositAndWrap(alice, NETUID1, 30 ether);
+        _depositAndWrap(bob, NETUID1, 30 ether);
+        bytes32 coldkey = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, coldkey, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, coldkey, NETUID1, 500);
+
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, aliceShares, _toSubstrate(alice));
+
+        assertEq(_userStakeAcrossHotkeys(alice, NETUID1), 0, "a residue reading pays zero");
+        assertEq(vault.balanceOf(alice, TOKEN1), 0, "shares retired");
+    }
+
+    /// @dev A rename that kept its stake leaves it counted but immovable under a deleted key;
+    ///      the vault names that state instead of dying inside a later stake move.
+    function test_KeepStakeRename_FailsWithNamedCause() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey4);
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
+
+        vm.expectPartialRevert(AlphaVault.StakeParkedOnRetiredHotkey.selector);
+        vault.rebalance(NETUID1);
+    }
+
+    /// @dev A rename landing between mailbox funding and the first wrap has no record to alias
+    ///      against; the mailbox reclaim is the documented path out.
+    function test_RenameBeforeFirstWrap_ReclaimsViaMailbox() public {
+        uint256 netuid = 5;
+        _registerSubnet(netuid, hotkey1);
+        _simulateAlphaDepositHotkey(bob, netuid, 10 ether, hotkey1);
+
+        // The rename migrates the mailbox stake before any wrap has recorded slots.
+        address mailbox = vault.getDepositAddress(bob, netuid);
+        bytes32 mailboxColdkey = _toSubstrate(mailbox);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, mailboxColdkey, netuid, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, mailboxColdkey, netuid, 10 ether);
+        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, netuid, hotkey4);
+
+        vm.prank(bob);
+        vm.expectRevert(AlphaVault.ZeroAmount.selector);
+        vault.wrap(netuid, hotkey1);
+        vm.prank(bob);
+        vm.expectRevert(AlphaVault.ChosenHotkeyNotInSet.selector);
+        vault.wrap(netuid, hotkey4);
+
+        vm.prank(bob);
+        vault.reclaimAlphaFromMailbox(netuid, hotkey4, _toSubstrate(bob));
+        assertEq(_getStake(hotkey4, bob, netuid), 10 ether, "mailbox stake reclaimed from the successor");
+    }
+
     /// @dev On a chain build without the rename getter the vault stays fully usable and degrades
     ///      to fail-closed: probes read as "no edge" instead of bricking every caller.
     function test_ChainWithoutRenameGetter_StaysUsable() public {
