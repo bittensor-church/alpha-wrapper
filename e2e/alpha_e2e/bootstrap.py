@@ -10,7 +10,8 @@ be deposited:
   Phase 2     create + register 3 validator hotkeys per subnet
   Phase 3     stake TAO per validator at ratio 3:2:1
   Phase 4     deploy the contracts, wire the validator registry (2-of-2), attest
-              the initial 50/30/20 validator sets, create the subnet proxies
+              the initial 50/30/20 validator sets. A subnet's clone appears with
+              its first wrap, so scenarios read clone addresses after depositing
   Phase 5     fund the wrapper user account
 
 btcli calls go through chain.btcli() (auto-appends --network) or
