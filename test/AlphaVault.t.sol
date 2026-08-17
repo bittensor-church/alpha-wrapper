@@ -381,7 +381,6 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_RevertWhen_SharePriceWhenSupplyIsZero() public {
-        vault.createSubnetProxy(NETUID1);
         uint256 tokenId = vault.currentTokenId(NETUID1);
         assertEq(vault.totalSupply(tokenId), 0);
         vm.expectRevert(AlphaVault.NoSharesOutstanding.selector);
@@ -640,10 +639,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_SubnetCloneCanMoveStake() public {
-        vault.createSubnetProxy(NETUID1);
-        uint256 tokenId = vault.currentTokenId(NETUID1);
-        address clone = vault.subnetClone(tokenId);
-        _setVaultStake(hotkey1, NETUID1, 100 ether);
+        address clone = _materializeSubnetClone(NETUID1);
+        _setVaultStakes(NETUID1, 100 ether, 0, 0);
 
         vm.prank(address(vault));
         SubnetClone(payable(clone)).moveStake(hotkey1, hotkey2, NETUID1, 100 ether);
@@ -653,8 +650,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_SubnetCloneCanUnwrapTao() public {
-        vault.createSubnetProxy(NETUID1);
-        address clone = vault.subnetClone(vault.currentTokenId(NETUID1));
+        address clone = _materializeSubnetClone(NETUID1);
         vm.deal(clone, 50 ether);
 
         uint256 aliceBefore = alice.balance;
@@ -666,16 +662,14 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_OnlyWrapperCanCallMoveStake() public {
-        vault.createSubnetProxy(NETUID1);
-        address clone = vault.subnetClone(vault.currentTokenId(NETUID1));
+        address clone = _materializeSubnetClone(NETUID1);
         vm.prank(alice);
         vm.expectRevert(CloneBase.NotWrapper.selector);
         SubnetClone(payable(clone)).moveStake(hotkey1, hotkey2, NETUID1, 100 ether);
     }
 
     function test_OnlyWrapperCanCallUnwrapTao() public {
-        vault.createSubnetProxy(NETUID1);
-        address clone = vault.subnetClone(vault.currentTokenId(NETUID1));
+        address clone = _materializeSubnetClone(NETUID1);
         vm.deal(clone, 50 ether);
         vm.prank(alice);
         vm.expectRevert(CloneBase.NotWrapper.selector);
@@ -856,46 +850,6 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(afterRecycle, uint256(uint16(NETUID1)) | (uint256(500) << 16));
     }
 
-    // --------- createSubnetProxy ---------------------------------------------
-
-    function test_RevertWhen_CreateSubnetProxySubnetNotRegistered() public {
-        vm.expectRevert(AlphaVault.SubnetNotRegistered.selector);
-        vault.createSubnetProxy(42);
-    }
-
-    function test_CreateSubnetProxyDeploysClone() public {
-        uint256 tokenId = vault.currentTokenId(NETUID1);
-        assertEq(vault.subnetClone(tokenId), address(0));
-
-        vm.expectEmit(true, false, false, false);
-        emit SubnetProxyCreated(tokenId, address(0));
-        vault.createSubnetProxy(NETUID1);
-
-        assertTrue(vault.subnetClone(tokenId) != address(0));
-    }
-
-    function test_CreateSubnetProxyNoopForExistingClone() public {
-        vault.createSubnetProxy(NETUID1);
-        address first = vault.subnetClone(vault.currentTokenId(NETUID1));
-        vault.createSubnetProxy(NETUID1);
-        assertEq(vault.subnetClone(vault.currentTokenId(NETUID1)), first);
-    }
-
-    function test_CreateSubnetProxyDeploysNewCloneAfterRecycle() public {
-        vault.createSubnetProxy(NETUID1);
-        uint256 oldTokenId = vault.currentTokenId(NETUID1);
-
-        _setRegBlock(NETUID1, 500);
-        uint256 newTokenId = vault.currentTokenId(NETUID1);
-        vault.createSubnetProxy(NETUID1);
-
-        address oldClone = vault.subnetClone(oldTokenId);
-        address newClone = vault.subnetClone(newTokenId);
-        assertTrue(oldClone != address(0));
-        assertTrue(newClone != address(0));
-        assertTrue(oldClone != newClone);
-    }
-
     // --------- wrap ------------------------------------------------
 
     function test_WrapAutoDeploysClone() public {
@@ -903,11 +857,22 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(vault.subnetClone(tokenId), address(0));
 
         _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        vm.expectEmit(true, false, false, false);
+        emit SubnetProxyCreated(tokenId, address(0));
         _wrap(alice, NETUID1);
 
         assertTrue(vault.subnetClone(tokenId) != address(0));
         assertTrue(vault.balanceOf(alice, tokenId) > 0);
         assertEq(vault.totalStake(tokenId), 10 ether);
+    }
+
+    function test_WrapReusesExistingClone() public {
+        address clone = _materializeSubnetClone(NETUID1);
+
+        _simulateAlphaDeposit(bob, NETUID1, 10 ether);
+        _wrap(bob, NETUID1);
+
+        assertEq(vault.subnetClone(vault.currentTokenId(NETUID1)), clone);
     }
 
     function test_WrapTwoUsersProportionalShares() public {
@@ -1917,7 +1882,6 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     function test_EmptyVault_ViewsReturnZeroNotRevert() public {
         AlphaVault fresh = _deployVault(address(registry));
-        fresh.createSubnetProxy(NETUID1);
         uint256 tokenId = fresh.currentTokenId(NETUID1);
 
         assertEq(fresh.totalStake(tokenId), 0, "totalStake returns 0 for a vault with no stake");

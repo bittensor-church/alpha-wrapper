@@ -38,8 +38,7 @@ If a subnet is dissolved and its netuid later reused, the new subnet gets
 a new token id. Old shares keep pointing at the old position and its TAO
 refund.
 
-The first `wrap` on a subnet deploys the clone and opens the position;
-`createSubnetProxy(netuid)` deploys it ahead of time.
+The first `wrap` on a subnet deploys the clone and opens the position.
 
 ## Share price
 

@@ -319,15 +319,6 @@ def _deploy_contracts(netuids: List[int], hotkey_pubkeys: List[str]):
               + ", ".join(f"{pubkey[:18]}..." for pubkey in subnet_pubkeys))
     registry_block_end = chain.cast_block_number()
 
-    for netuid in netuids:
-        receipt = chain.cast_send(
-            vault_address, "createSubnetProxy(uint256)", netuid,
-            private_key=config.DEPLOYER_PRIVATE_KEY, gas_limit=500_000,
-        )
-        if not chain.receipt_ok(receipt):
-            raise RuntimeError(f"createSubnetProxy failed for netuid {netuid}: {receipt}")
-        print(f"  Subnet proxy created for netuid {netuid}")
-
     contracts = DeployedContracts(
         vault_address=vault_address,
         mailbox_implementation_address=mailbox_implementation_address,

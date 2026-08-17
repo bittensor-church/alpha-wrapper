@@ -216,6 +216,14 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         vault.wrap(netuid, chosenHotkey);
     }
 
+    /// @dev A wrap is the only thing that brings the subnet clone into existence, so tests that
+    ///      drive the clone directly open a position first.
+    function _materializeSubnetClone(uint256 netuid) internal returns (address) {
+        _simulateAlphaDeposit(alice, netuid, 1 ether);
+        _wrap(alice, netuid);
+        return vault.subnetClone(vault.currentTokenId(netuid));
+    }
+
     function _getStake(bytes32 hotkey, address who, uint256 netuid) internal view returns (uint256) {
         return MockStaking(STAKING_PRECOMPILE).getStake(hotkey, _toSubstrate(who), netuid);
     }

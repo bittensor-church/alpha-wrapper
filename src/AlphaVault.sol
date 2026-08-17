@@ -160,14 +160,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         return uint256(nid) | (uint256(registrationBlock) << 16);
     }
 
-    /// @notice Deploy the per-subnet clone that will hold this subnet's alpha under an isolated coldkey.
-    /// @dev    Idempotent: returns silently if a clone already exists for the current tokenId.
-    function createSubnetProxy(uint256 netuid) external {
-        uint256 tokenId = currentTokenId(netuid);
-        if (subnetClone[tokenId] != address(0)) return;
-        _deploySubnetClone(tokenId);
-    }
-
     // -------------------- Deposit Flow ------------------------------------------
 
     /// @notice Predict the mailbox clone address for a user on a subnet.
