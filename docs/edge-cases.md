@@ -126,31 +126,32 @@ rename trails between two vault touches are an exceptional case (the
 chain rate-limits renames of a registered key to one per subnet per
 day) and fail closed for the attesters.
 
-When nothing explains a shortfall, the call reverts `BackingShortfall`
-instead of minting cheap shares or underpaying an exit. Recovery is
-the normal attester path: after the attesters sign a new set, the
-shortfall is forgiven exactly up to what the newly attested keys hold,
-and the stake rolls onto the set they signed. The attestation itself
-is the authorization - growth on already-recorded keys, or stake
-parked somewhere before any attestation, forgives nothing. Mailbox
-recovery stays open throughout, and `isBackingIntact(tokenId)` reports
-the raw state for monitors.
+When nothing explains a shortfall, the call reverts
+`BackingShortfall` instead of minting cheap shares or underpaying an
+exit - deposits and exits alike, since paying an exit against a count
+the record contradicts hands out backing that may still be
+recoverable.
 
-Exits stay open exactly where mispricing is impossible and no rename
-trail says otherwise. Positions small enough for the chain's dust
-sweep to clear outright are exempt from the check, so a swept speck
-never freezes a token. A backing reading at or near zero with no
-rename trail in sight - the footprint of the chain force-selling the
-whole position, whose proceeds reach holders through the claim index -
-can still be retired, paying zero while deposits stay frozen; a burn
-of the entire supply likewise exits at the counted position. A visible
-rename trail blocks both: it is positive evidence the backing is
-recoverable, so no exit burns shares against it.
+Recovery is the normal attester path, and it takes a fresh
+attestation. Once the attesters publish a set naming the keys that
+actually hold the backing, the next `rebalance(netuid)` re-anchors the
+record on what the chain holds under that set, and the token resumes
+at an honest price. The attestation is the authorization: a
+`rebalance` with no newer attestation behind it re-anchors nothing, so
+the window closes again as soon as a call settles. Mailbox recovery
+stays open throughout, and `isBackingIntact(tokenId)` reports the raw
+state for monitors.
 
-One runtime edge has no in-vault recovery: a global rename that keeps
-its stake leaves the position counted but immovable under a key the
-chain deleted. Every call then reverts `StakeParkedOnRetiredHotkey`,
-naming the key, until the key re-registers or the runtime changes.
+Positions small enough for the chain's dust sweep to clear outright
+are exempt from the check, so a swept speck never freezes a token: the
+record settles to the swept state and the holders retire their shares
+against it as usual.
+
+One runtime state has no in-vault recovery: a rename that keeps its
+stake leaves the position counted but immovable under a key the chain
+deleted. The backing check passes - the stake is right where the
+record expects it - and any call that needs to move it fails on chain
+instead, until the key re-registers or the runtime changes.
 
 ## Third-party dust
 

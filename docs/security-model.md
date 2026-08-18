@@ -63,10 +63,10 @@ over several sales.
   is followed one edge on chain, and an unexplained shortfall makes
   the call revert rather than misprice
   ([edge-cases.md](edge-cases.md)). The preview quotes apply the same
-  verification without persisting repairs, so they fail or pay exactly
-  where their operation would; `totalStake` and `sharePrice` report
-  everything the vault can locate, with `isBackingIntact` flagging
-  what the record expected but nothing explains.
+  verification without persisting repairs, so they fail exactly where
+  their operation would. `totalStake` reports everything the vault can
+  locate rather than reverting, and `isBackingIntact` flags what the
+  record expected but nothing explains.
 
 ## Known tradeoffs
 
@@ -79,9 +79,14 @@ over several sales.
   shares instead of reverting; callers bound the damage with
   `minTaoOut`.
 - A backing shortfall the chain's rename records cannot explain freezes
-  a token's deposits and partial exits until the attesters re-attest
-  the destination. The freeze is the protection - pricing against the
-  understated count would let depositors mint cheap shares. Mailbox
-  recovery stays open while it lasts, a backing that reads zero can
-  still be retired (paying zero misprices nothing), and the last
-  holder can always burn the entire supply for the counted position.
+  every call on that token, exits included, until the attesters
+  re-attest the destination and a `rebalance` re-anchors the record.
+  The freeze is the protection - pricing against the understated count
+  would let depositors mint cheap shares and would pay exiters backing
+  that is still recoverable. Mailbox recovery stays open while it
+  lasts.
+- Re-anchoring trusts the attesters to have found where the stake went.
+  They already choose which hotkeys the vault stakes to, so this grants
+  them no reach they did not have; it is bounded to one call per
+  attestation, and a shortfall appearing afterwards fails closed
+  again.

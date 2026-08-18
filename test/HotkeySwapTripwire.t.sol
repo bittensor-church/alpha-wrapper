@@ -217,28 +217,16 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         assertApproxEqAbs(vault.totalStake(TOKEN1), 30 ether, 0.01 ether, "backing whole despite the short credit");
     }
 
-    /// @dev Forgiven backing is recorded in the same pass, so it can neither move off-record
-    ///      unseen nor excuse a second, unrelated shortfall.
-    function test_ForgivenAdoption_IsRecorded() public {
-        uint256 aliceShares = _depositAndWrap(alice, NETUID1, 30 ether);
-        _depositAndWrap(bob, NETUID1, 30 ether);
+    /// @dev Re-anchoring spends the attestation that authorized it, so the next loss is caught
+    ///      like any other.
+    function test_ReanchoredRecord_StillFailsClosedOnNewLoss() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
         _setValidators(
             NETUID1, _hotkeys(hotkey4, hotkey2, hotkey3), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
         );
+        vault.rebalance(NETUID1);
 
-        // The TAO exit adopts through forgiveness without consolidating.
-        vm.prank(alice);
-        vault.unwrapForTao(TOKEN1, aliceShares / 2, 0);
-
-        AlphaVault.Slot[] memory slots = vault.recordedSlots(TOKEN1);
-        bool recorded;
-        for (uint256 i; i < slots.length; ++i) {
-            if (slots[i].hotkey == hotkey4) recorded = slots[i].tracked > 0;
-        }
-        assertTrue(recorded, "the adopted key joined the record with its balance");
-
-        // A second off-record move of the adopted backing is no longer invisible.
         _simulateOffVaultSwap(NETUID1, hotkey4, hotkey5);
         vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
         vault.rebalance(NETUID1);
@@ -255,9 +243,9 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         assertApproxEqAbs(vault.totalStake(TOKEN1), 30 ether, 0.01 ether, "backing unchanged");
     }
 
-    /// @dev Two validators renamed into one key merge on chain; the record merges the expectations
-    ///      too, so the position counts once.
-    function test_SwapCollision_MergesSlots() public {
+    /// @dev Two slots resolving onto one key would count it twice, so the vault refuses rather
+    ///      than merges. The chain cannot produce this - a rename destination must be unused.
+    function test_SwapCollision_FailsClosed() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);
         uint256 merged = _getVaultStake(hotkey1, NETUID1) + _getVaultStake(hotkey2, NETUID1);
@@ -267,10 +255,8 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey4);
         MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey2, NETUID1, hotkey4);
 
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
         vault.rebalance(NETUID1);
-
-        assertApproxEqAbs(vault.totalStake(TOKEN1), 30 ether, 0.01 ether, "merged backing counted exactly once");
-        assertTrue(vault.isBackingIntact(TOKEN1), "record intact after the merge");
     }
 
     // -------------------- Legitimate quiet changes never trip --------------------
@@ -385,21 +371,25 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         assertTrue(vault.isBackingIntact(TOKEN1), "record intact after recovery");
     }
 
-    /// @dev Forgiveness covers only what the newly attested keys hold; half the loss still fails
-    ///      closed.
-    function test_PartialAdoption_StillFailsClosed() public {
+    /// @dev A loss the attesters cannot fully locate re-anchors to what is really there, so the
+    ///      token keeps working at an honest, lower price.
+    function test_PartialLoss_ReanchorsOnReattest() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 lost = _getVaultStake(hotkey1, NETUID1);
         bytes32 coldkey = _subnetColdkey(NETUID1);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, coldkey, NETUID1, lost / 2);
 
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.rebalance(NETUID1);
+
         _setValidators(
             NETUID1, _hotkeys(hotkey4, hotkey2, hotkey3), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
         );
-
-        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
         vault.rebalance(NETUID1);
+
+        assertTrue(vault.isBackingIntact(TOKEN1), "record re-anchored on what the chain holds");
+        assertApproxEqAbs(vault.totalStake(TOKEN1), 25 ether, 0.01 ether, "the total reports the surviving backing");
     }
 
     /// @dev The mechanism holds at the widest attested set.
@@ -434,35 +424,24 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));
     }
 
-    /// @dev With nobody else to shortchange, a whole-supply burn exits at the counted backing.
-    function test_FullSupplyBurn_ExitsDuringShortfall() public {
+    /// @dev Exits get no exemption: burning against a total the record contradicts would hand the
+    ///      exiter backing that may still be recoverable. Both rails wait for the attesters.
+    function test_FullSupplyBurn_FailsClosedDuringShortfall() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
 
         vm.prank(alice);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
 
-        assertEq(vault.totalSupply(TOKEN1), 0, "the whole supply retired");
-        assertApproxEqAbs(
-            _userStakeAcrossHotkeys(alice, NETUID1), 20 ether, 0.01 ether, "the exit pays the counted backing"
-        );
-    }
-
-    function test_FullSupplyBurnForTao_ExitsDuringShortfall() public {
-        uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
-        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
-
-        uint256 balanceBefore = alice.balance;
         vm.prank(alice);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
         vault.unwrapForTao(TOKEN1, shares, 0);
-
-        assertEq(vault.totalSupply(TOKEN1), 0, "the whole supply retired");
-        assertApproxEqAbs(alice.balance - balanceBefore, 20 ether, 0.01 ether, "the sale covers the counted backing");
     }
 
-    /// @dev Retiring shares against a zero reading pays zero, so the exit proceeds while the
-    ///      record - and with it the deposit freeze - stays in place.
-    function test_ZeroBackingRetire_KeepsRecord() public {
+    /// @dev A position emptied off-record freezes until the attesters re-attest; the re-anchor
+    ///      then lets the holders retire their shares against the honest zero.
+    function test_EmptiedPosition_FailsClosedUntilReattest() public {
         uint256 aliceShares = _depositAndWrap(alice, NETUID1, 30 ether);
         _depositAndWrap(bob, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);
@@ -471,13 +450,18 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, coldkey, NETUID1, 0);
 
         vm.prank(alice);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.unwrap(TOKEN1, aliceShares, _toSubstrate(alice));
+
+        _setValidators(
+            NETUID1, _hotkeys(hotkey4, hotkey2, hotkey3), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
+        );
+        vault.rebalance(NETUID1);
+
+        vm.prank(alice);
         vault.unwrap(TOKEN1, aliceShares, _toSubstrate(alice));
         assertEq(_userStakeAcrossHotkeys(alice, NETUID1), 0, "a zero backing pays zero");
-
-        _simulateAlphaDeposit(bob, NETUID1, 10 ether);
-        vm.prank(bob);
-        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
-        vault.wrap(NETUID1, hotkey1);
+        assertEq(vault.balanceOf(alice, TOKEN1), 0, "shares retired");
     }
 
     /// @dev Mailbox funds are not backing, so their recovery stays open while pricing fails closed.
@@ -582,32 +566,22 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         vault.unwrapForTao(tokenId, shares, 0);
     }
 
-    /// @dev A sale can leave a few RAO behind; a reading within the slack retires like an exact
-    ///      zero instead of trapping the holders.
+    /// @dev The chain sweep leaves a few RAO behind. The expectation is dust-scale, so it is
+    ///      exempt, and the holders retire against the residue instead of being trapped.
     function test_SweepResidue_StaysExitable() public {
-        uint256 aliceShares = _depositAndWrap(alice, NETUID1, 30 ether);
-        _depositAndWrap(bob, NETUID1, 30 ether);
-        bytes32 coldkey = _subnetColdkey(NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, coldkey, NETUID1, 0);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, coldkey, NETUID1, 500);
+        uint256 netuid = 5;
+        _registerSubnet(netuid, hotkey1);
+        _simulateAlphaDepositHotkey(alice, netuid, 1e7, hotkey1);
+        _wrapHotkey(alice, netuid, hotkey1);
+        uint256 tokenId = vault.currentTokenId(netuid);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(netuid), netuid, 500);
 
+        uint256 shares = vault.balanceOf(alice, tokenId);
         vm.prank(alice);
-        vault.unwrap(TOKEN1, aliceShares, _toSubstrate(alice));
+        vault.unwrap(tokenId, shares, _toSubstrate(alice));
 
-        assertEq(_userStakeAcrossHotkeys(alice, NETUID1), 0, "a residue reading pays zero");
-        assertEq(vault.balanceOf(alice, TOKEN1), 0, "shares retired");
-    }
-
-    /// @dev Stake kept under a deleted key is counted but immovable; the vault names that state
-    ///      instead of dying inside a later move.
-    function test_KeepStakeRename_FailsWithNamedCause() public {
-        _depositAndWrap(alice, NETUID1, 30 ether);
-        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey4);
-        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
-
-        vm.expectPartialRevert(AlphaVault.StakeParkedOnRetiredHotkey.selector);
-        vault.rebalance(NETUID1);
+        assertEq(_userStakeAcrossHotkeys(alice, netuid), 0, "a residue reading pays zero");
+        assertEq(vault.totalSupply(tokenId), 0, "shares retired");
     }
 
     /// @dev A rename before the first wrap has no record to alias against; mailbox reclaim is the
@@ -636,23 +610,27 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         assertEq(_getStake(hotkey4, bob, netuid), 10 ether, "mailbox stake reclaimed from the successor");
     }
 
-    /// @dev Without the rename getter the vault stays usable: probes read as "no edge" rather than
-    ///      bricking every caller.
-    function test_ChainWithoutRenameGetter_StaysUsable() public {
-        MockStaking(STAKING_PRECOMPILE).setSuccessorGetterReverts(true);
+    /// @dev Any settled call spends the attestation, so a signature published before the loss
+    ///      cannot be cashed in after it.
+    function test_StaleAttestation_DoesNotAuthorizeReanchor() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
+        _depositAndWrap(bob, NETUID1, 30 ether);
+        _setValidators(
+            NETUID1, _hotkeys(hotkey4, hotkey2, hotkey3), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
+        );
 
-        _depositAndWrap(alice, NETUID1, 30 ether);
-        vault.rebalance(NETUID1);
-        assertApproxEqAbs(vault.totalStake(TOKEN1), 30 ether, 0.01 ether, "ordinary flows unaffected");
+        // Nothing is short yet, so the exit settles and consumes the fresh attestation.
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares / 2, 0);
 
-        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey5);
         vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
         vault.rebalance(NETUID1);
     }
 
-    /// @dev Forgiveness needs an attester signature since the last settle; a parked donation
+    /// @dev Re-anchoring needs an attester signature since the last settle; stake parked nearby
     ///      explains nothing by itself.
-    function test_DonationWithoutAttestation_DoesNotForgive() public {
+    function test_DonationWithoutReattestation_FailsClosed() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
         // Settles the record onto the successor while the registry still lists hotkey1.

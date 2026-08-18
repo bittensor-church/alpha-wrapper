@@ -67,12 +67,19 @@ follows a single rename on its own and keeps operating on the
 successor; re-attest the new hotkey in the old one's place at your
 convenience to bring the registry back in line. When the vault cannot
 follow (a second rename before it acted, or no rename record for that
-subnet), the token's deposits and partial exits revert
-`BackingShortfall` until you re-attest. Your attestation is the
-recovery: it must name the keys that actually hold the backing, and
-the forgiveness it authorizes covers exactly what those newly attested
-keys hold. Until then the freeze is expected behavior, and
-`isBackingIntact(tokenId)` is the signal to alert on.
+subnet), every call on that token reverts `BackingShortfall` until you
+re-attest.
+
+Your attestation is the recovery, in two steps. Publish a set naming
+the hotkeys that actually hold the backing - the vault only counts
+stake under keys it has recorded or you have attested, so a key you
+leave out stays invisible to it. Then anyone calls `rebalance(netuid)`:
+seeing an attestation newer than its own record, the vault re-anchors
+on what the chain holds under your set and resumes. A `rebalance` with
+no fresh attestation behind it re-anchors nothing, so the window your
+signature opens closes again on the next settled call. Until you act
+the freeze is expected behavior, and `isBackingIntact(tokenId)` is the
+signal to alert on.
 
 ## Signer set changes
 
