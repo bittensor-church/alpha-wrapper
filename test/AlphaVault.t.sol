@@ -738,11 +738,16 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey4, aliceSub, NETUID1), 10 ether);
     }
 
-    function test_RevertWhen_ReclaimAlphaFromMailboxZeroHotkey() public {
+    /// @dev A rename may carry mailbox stake to the zero hotkey, which nothing can ever attest.
+    ///      The alpha rail has to reach it or the deposit is stranded for good.
+    function test_ReclaimAlphaFromMailbox_RecoversStakeStrandedOnTheZeroHotkey() public {
         bytes32 aliceSub = _toSubstrate(alice);
+        _simulateAlphaDepositHotkey(alice, NETUID1, 5 ether, bytes32(0));
+
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.ZeroHotkey.selector);
         vault.reclaimAlphaFromMailbox(NETUID1, bytes32(0), aliceSub);
+
+        assertEq(_getStake(bytes32(0), alice, NETUID1), 5 ether, "the stranded deposit came back");
     }
 
     function test_RevertWhen_ReclaimAlphaFromMailboxNoStake() public {

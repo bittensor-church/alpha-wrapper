@@ -12,6 +12,7 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
     event HotkeySwapFollowed(uint256 indexed tokenId, bytes32 indexed oldHotkey, bytes32 indexed newHotkey);
 
     bytes32 internal hotkey5 = keccak256("hotkey5");
+    bytes32 internal _extraHotkey = keccak256("hotkey6");
 
     // -------------------- Tracked accounting -------------------------------------
 
@@ -255,6 +256,9 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey4);
         MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey2, NETUID1, hotkey4);
 
+        assertFalse(vault.isBackingIntact(TOKEN1), "the quote sees the collision too");
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.previewWrap(TOKEN1, 1 ether);
         vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
         vault.rebalance(NETUID1);
     }
@@ -350,6 +354,43 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey1, NETUID1), 0, "the parked position rolled off the claimed hotkey");
         assertApproxEqAbs(vault.totalStake(TOKEN1), 30 ether, 0.01 ether, "backing whole after the roll");
         assertTrue(vault.isBackingIntact(TOKEN1), "record intact once the position moved");
+    }
+
+    /// @dev A cheap position and a trail the vault cannot walk compose: the edge says the alpha
+    ///      moved, which rules out the sweep the dust test would otherwise blame.
+    function test_DustScaleMultiHopRename_FailsClosedEverywhere() public {
+        uint256 netuid = 5;
+        _registerSubnet(netuid, hotkey1);
+        uint256 shares = _depositAndWrap(alice, netuid, 1e7);
+        uint256 tokenId = vault.currentTokenId(netuid);
+
+        _buildRenameTrail(netuid, hotkey1, 2);
+
+        assertFalse(vault.isBackingIntact(tokenId), "an unwalkable trail is not a sweep");
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.previewWrap(tokenId, 1e6);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.sharePrice(tokenId);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.rebalance(netuid);
+        vm.prank(alice);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.unwrapForTao(tokenId, shares, 0);
+    }
+
+    /// @dev An attestation that predates the loss is not authorization to write it off. Only the
+    ///      attesters dropping the validator holding the shortfall speaks for it.
+    function test_UnrelatedAttestation_DoesNotAuthorizeLaterWriteOff() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+
+        // A routine weight change: the same validators, a fresh registry nonce.
+        _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2, hotkey3), _weights(5000, 3000, 2000));
+
+        // The loss lands afterwards, on a validator the attesters still name.
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.rebalance(NETUID1);
     }
 
     // -------------------- Honest views and recovery ------------------------------
@@ -511,8 +552,12 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
         vault.unwrap(TOKEN1, aliceShares, _toSubstrate(alice));
 
+        // Every recorded validator came up short, so recovery means the attesters replacing all
+        // of them: a set that still names one is them saying to keep expecting stake there.
         _setValidators(
-            NETUID1, _hotkeys(hotkey4, hotkey2, hotkey3), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
+            NETUID1,
+            _hotkeys(hotkey4, hotkey5, _extraHotkey),
+            _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
         );
         vault.rebalance(NETUID1);
 

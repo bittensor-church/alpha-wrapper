@@ -60,10 +60,17 @@ contract ReclaimMailboxAlphaAsTaoTest is AlphaVaultTestBase {
         vault.reclaimMailboxAlphaAsTao(uint256(type(uint16).max) + 1, hotkey1, 0);
     }
 
-    function test_RevertWhen_HotkeyIsZero() public {
+    /// @dev A rename may carry mailbox stake to the zero hotkey, which nothing can ever attest.
+    ///      The sale rail has to reach it or the deposit is stranded for good.
+    function test_ReclaimAsTao_RecoversStakeStrandedOnTheZeroHotkey() public {
+        _setRemoveStakeRate(1, 1);
+        _seedMailboxAlpha(alice, NETUID1, bytes32(0), 50 ether);
+        uint256 aliceBefore = alice.balance;
+
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.ZeroHotkey.selector);
         vault.reclaimMailboxAlphaAsTao(NETUID1, bytes32(0), 0);
+
+        assertEq(alice.balance - aliceBefore, 50 ether, "the stranded deposit came back as TAO");
     }
 
     function test_RevertWhen_NoMailboxStakeForGivenHotkey() public {
