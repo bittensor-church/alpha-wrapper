@@ -39,18 +39,6 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         uint256 deadline;
     }
 
-    /// @notice Signed acknowledgement that a token's backing is gone and the vault may resume
-    ///         against what it can still see. `slotsHash` pins the exact record the signers
-    ///         examined, so an approval cannot be kept back and spent on a later, different loss.
-    struct BackingWriteDown {
-        address vault;
-        uint256 tokenId;
-        bytes32 slotsHash;
-        uint256 minimumBacking;
-        uint256 nonce;
-        uint256 deadline;
-    }
-
     struct ValidatorSet {
         bytes32[] hotkeys;
         uint16[] weights;
