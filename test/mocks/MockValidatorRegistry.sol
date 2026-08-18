@@ -13,10 +13,15 @@ contract MockValidatorRegistry is IValidatorRegistry {
 
     /// @dev Seeds corrupt slots (e.g. zero hotkey + non-zero weight, or mismatched lengths) that the
     ///      real registry would reject; tests deploy a fresh vault against this mock when needed.
+    mapping(uint256 => uint256) public nonces;
+
     function setRaw(uint256 netuid, bytes32[] memory hotkeys, uint16[] memory weights) external {
         Slot storage slot = _slots[netuid];
         slot.hotkeys = hotkeys;
         slot.weights = weights;
+        // The real registry bumps its counter on every accepted update, and the vault reads that
+        // counter to tell a set it has already settled against from one it has not.
+        ++nonces[netuid];
     }
 
     function getValidators(uint256 netuid)

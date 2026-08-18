@@ -10,5 +10,8 @@ interface IValidatorRegistry {
     ///         and no zero weight; the weights sum to 10000. A subnet is configured iff the returned
     ///         length is non-zero.
     /// @param  netuid Subnet id.
+    /// @notice Attestation counter for a subnet, bumped by every accepted validator-set update.
+    function nonces(uint256 netuid) external view returns (uint256);
+
     function getValidators(uint256 netuid) external view returns (bytes32[] memory hotkeys, uint16[] memory weights);
 }

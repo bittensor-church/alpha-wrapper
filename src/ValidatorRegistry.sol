@@ -20,6 +20,12 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         "WeightAttestation(uint256 netuid,bytes32[] hotkeys,uint256[] weights,uint256 nonce,uint256 deadline)"
     );
 
+    /// @dev Signed separately from a validator set, and by its own typehash, so that publishing
+    ///      one can never be read as consent for the other.
+    bytes32 public constant WRITE_DOWN_TYPEHASH = keccak256(
+        "BackingWriteDown(address vault,uint256 tokenId,bytes32 slotsHash,uint256 minimumBacking,uint256 nonce,uint256 deadline)"
+    );
+
     uint16 private constant BPS_BASE = 10_000;
     /// @dev Bounds `_setSigners` churn so a careless or compromised admin can't install a set
     ///      so large that subsequent rotation exceeds the block gas limit.
@@ -29,6 +35,18 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         uint256 netuid;
         bytes32[] hotkeys;
         uint256[] weights;
+        uint256 nonce;
+        uint256 deadline;
+    }
+
+    /// @notice Signed acknowledgement that a token's backing is gone and the vault may resume
+    ///         against what it can still see. `slotsHash` pins the exact record the signers
+    ///         examined, so an approval cannot be kept back and spent on a later, different loss.
+    struct BackingWriteDown {
+        address vault;
+        uint256 tokenId;
+        bytes32 slotsHash;
+        uint256 minimumBacking;
         uint256 nonce;
         uint256 deadline;
     }
@@ -45,8 +63,13 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     mapping(uint256 => ValidatorSet) private _validators;
     mapping(uint256 => uint256) public nonces;
 
+    /// @notice Write-down nonce per (vault, tokenId). Kept apart from the validator-set nonces so
+    ///         neither kind of approval can consume the other's freshness.
+    mapping(address => mapping(uint256 => uint256)) public writeDownNonces;
+
     event SignersUpdated(address[] newSigners, uint8 newThreshold);
     event ValidatorsUpdated(uint256 indexed netuid, uint256 nonce, bytes32[] hotkeys, uint256[] weights);
+    event BackingWrittenDown(address indexed vault, uint256 indexed tokenId, uint256 nonce, bytes32 slotsHash);
 
     error ZeroAddress();
     error ZeroValue();
@@ -58,6 +81,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     error WeightsMustSum10000();
     error StaleNonce();
     error ExpiredAttestation();
+    error NotApprovedVault();
     error NotEnoughSignatures();
     error UnknownSigner(address signer);
     error SignersNotSorted();
@@ -79,7 +103,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         uint256 validatorCount = attestation.hotkeys.length;
         _validatePayload(attestation, validatorCount);
         _validateFreshness(attestation);
-        _verifySignatures(attestation, signatures);
+        _verifySignatures(_hashAttestation(attestation), signatures);
         _commit(attestation, validatorCount);
     }
 
@@ -91,12 +115,29 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
             uint256 validatorCount = attestations[i].hotkeys.length;
             _validatePayload(attestations[i], validatorCount);
             _validateFreshness(attestations[i]);
-            _verifySignatures(attestations[i], signatures[i]);
+            _verifySignatures(_hashAttestation(attestations[i]), signatures[i]);
             _commit(attestations[i], validatorCount);
             unchecked {
                 ++i;
             }
         }
+    }
+
+    /// @notice Spend a threshold-signed acknowledgement that `tokenId`'s backing is gone.
+    /// @dev    Callable by the vault named in the approval and nobody else, so an approval for one
+    ///         deployment cannot be replayed into another. The signers state which record they
+    ///         examined and the least backing they expect to survive; whether either still holds is
+    ///         the vault's to check, and it reverts if not.
+    function consumeWriteDown(BackingWriteDown calldata approval, bytes[] calldata signatures) external {
+        if (msg.sender != approval.vault) revert NotApprovedVault();
+        if (block.timestamp > approval.deadline) revert ExpiredAttestation();
+        uint256 expected = writeDownNonces[approval.vault][approval.tokenId] + 1;
+        if (approval.nonce != expected) revert StaleNonce();
+
+        _verifySignatures(_hashWriteDown(approval), signatures);
+
+        writeDownNonces[approval.vault][approval.tokenId] = approval.nonce;
+        emit BackingWrittenDown(approval.vault, approval.tokenId, approval.nonce, approval.slotsHash);
     }
 
     /// @inheritdoc IValidatorRegistry
@@ -176,11 +217,10 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         if (block.timestamp > attestation.deadline) revert ExpiredAttestation();
     }
 
-    function _verifySignatures(WeightAttestation calldata attestation, bytes[] calldata signatures) private view {
+    function _verifySignatures(bytes32 digest, bytes[] calldata signatures) private view {
         uint256 signatureCount = signatures.length;
         if (signatureCount < threshold) revert NotEnoughSignatures();
 
-        bytes32 digest = _hashAttestation(attestation);
         address previousSigner;
         for (uint256 i; i < signatureCount;) {
             address recovered = ECDSA.recover(digest, signatures[i]);
@@ -207,6 +247,22 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
             }
         }
         emit ValidatorsUpdated(attestation.netuid, attestation.nonce, attestation.hotkeys, attestation.weights);
+    }
+
+    function _hashWriteDown(BackingWriteDown calldata approval) private view returns (bytes32) {
+        return _hashTypedDataV4(
+            keccak256(
+                abi.encode(
+                    WRITE_DOWN_TYPEHASH,
+                    approval.vault,
+                    approval.tokenId,
+                    approval.slotsHash,
+                    approval.minimumBacking,
+                    approval.nonce,
+                    approval.deadline
+                )
+            )
+        );
     }
 
     function _hashAttestation(WeightAttestation calldata attestation) private view returns (bytes32) {
