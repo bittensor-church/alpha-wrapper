@@ -719,18 +719,19 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         for (uint256 i; i < tokenSlots.length;) {
             uint256 tracked = tokenSlots[i].tracked;
             if (balances[i] + TRACKED_SLACK_RAO < tracked) {
-                if (alphaPriceE18 == type(uint256).max) {
-                    alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
-                    dustThresholdTao = IStaking(STAKING_PRECOMPILE).getNominatorMinRequiredStake();
-                }
-                if (!_isSweepableDust(tracked, alphaPriceE18, dustThresholdTao)) {
-                    (bool found, bytes32 successor, uint256 successorStake) =
-                        _fundedSuccessor(tokenSlots[i].hotkey, netuid, coldkey, tracked);
-                    if (found && !_contains(hotkeys, successor)) {
-                        // Recorded in the scratch union so a second slot cannot count it again.
-                        hotkeys[i] = successor;
-                        total += successorStake;
-                    } else if (shortIndex == type(uint256).max) {
+                (bool found, bytes32 successor, uint256 successorStake) =
+                    _fundedSuccessor(tokenSlots[i].hotkey, netuid, coldkey, tracked);
+                if (found && !_contains(hotkeys, successor)) {
+                    // Recorded in the scratch union so a second slot cannot count it again.
+                    hotkeys[i] = successor;
+                    total += successorStake;
+                } else {
+                    if (alphaPriceE18 == type(uint256).max) {
+                        alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
+                        dustThresholdTao = IStaking(STAKING_PRECOMPILE).getNominatorMinRequiredStake();
+                    }
+                    bool swept = _isSweepableDust(tracked, alphaPriceE18, dustThresholdTao);
+                    if (!swept && shortIndex == type(uint256).max) {
                         shortIndex = i;
                         present = balances[i];
                     }
@@ -1290,22 +1291,26 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         for (uint256 i; i < tokenSlots.length;) {
             uint256 tracked = tokenSlots[i].tracked;
             if (balances[i] + TRACKED_SLACK_RAO < tracked) {
+                bytes32 hotkey = tokenSlots[i].hotkey;
+                // The rename record is what the chain states; the dust test below only infers from
+                // an amount, and a cheap enough expectation looks sweepable whether or not the
+                // chain swept it. Asking the record first keeps backing that merely moved from
+                // being written off as sold.
+                (bool found, bytes32 successor,) = _fundedSuccessor(hotkey, netuid, coldkey, tracked);
+                // Two slots resolving onto one key would count that key's stake twice. A rename
+                // cannot produce it - the chain refuses a destination that already exists - so
+                // it is left to re-attestation rather than merged.
+                if (found && _slotIndexOf(tokenSlots, successor) == type(uint256).max) {
+                    tokenSlots[i].hotkey = successor;
+                    emit HotkeySwapFollowed(tokenId, hotkey, successor);
+                    return true;
+                }
                 if (alphaPriceE18 == type(uint256).max) {
                     alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
                     dustThresholdTao = IStaking(STAKING_PRECOMPILE).getNominatorMinRequiredStake();
                 }
-                if (!_isSweepableDust(tracked, alphaPriceE18, dustThresholdTao)) {
-                    bytes32 hotkey = tokenSlots[i].hotkey;
-                    (bool found, bytes32 successor,) = _fundedSuccessor(hotkey, netuid, coldkey, tracked);
-                    // Two slots resolving onto one key would count that key's stake twice. A rename
-                    // cannot produce it - the chain refuses a destination that already exists - so
-                    // it is left to re-attestation rather than merged.
-                    if (found && _slotIndexOf(tokenSlots, successor) == type(uint256).max) {
-                        tokenSlots[i].hotkey = successor;
-                        emit HotkeySwapFollowed(tokenId, hotkey, successor);
-                        return true;
-                    }
-                    if (!resync) revert BackingShortfall(netuid, hotkey, tracked, balances[i]);
+                if (!_isSweepableDust(tracked, alphaPriceE18, dustThresholdTao) && !resync) {
+                    revert BackingShortfall(netuid, hotkey, tracked, balances[i]);
                 }
             }
             unchecked {

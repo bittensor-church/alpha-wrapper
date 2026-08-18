@@ -7,8 +7,8 @@ at that moment, let them withdraw it, and give none of it to later
 depositors.
 
 The threshold raise clears sub-threshold nominations on EVERY subnet and
-force-sells the vault's whole (deliberately tiny) position. The test restores
-the threshold it found and then retires the swept position's shares, so
+force-sells the vault's whole (deliberately tiny) position. The test retires
+the swept position's shares and then restores the threshold it found, so
 sibling suites sharing the session localnet see the subnet in a normal state.
 """
 import pytest
@@ -75,25 +75,28 @@ def test_root_sweep_tao_becomes_claimable(env):
         assert delivered == claimable, f"delivered {delivered} != quoted {claimable}"
         remaining = claimable_tao()
         assert remaining == 0, f"quote not cleared after claim: {remaining}"
+
+        # The clearing pass empties the vault's position but its shares remain outstanding. How
+        # empty depends on the runtime build: an exactly-zero position retires shares through the
+        # zero-backing unwrap, while a sub-floor residue exits through the TAO rail's full-drain
+        # sale. This runs before the threshold is put back: the vault exempts an expectation the
+        # sweep could have taken, judged against the threshold in force when it looks, so lowering
+        # it first would leave the swept position looking like backing that went missing.
+        all_shares = env.vault_shares(token_id)
+        if env.vault_total_stake(token_id) == 0:
+            env.vault_send(
+                2_500_000, "Sweep: cleanup unwrap failed",
+                "unwrap(uint256,uint256,bytes32)", token_id, all_shares, env.wrapper_substrate_coldkey,
+            )
+        else:
+            env.vault_send(
+                2_500_000, "Sweep: cleanup unwrap failed",
+                "unwrapForTao(uint256,uint256,uint256)", token_id, all_shares, 0,
+            )
+        assert env.vault_total_supply(token_id) == 0, "cleanup left outstanding shares"
     finally:
         # A raise here would mask the test's own assertion error; report and move on instead.
         try:
             extrinsics.set_nominator_min_required_stake(previous_factor)
         except Exception as restore_error:  # noqa: BLE001
             print(f"  WARNING: dust threshold not restored to {previous_factor}: {restore_error}")
-
-    # The clearing pass empties the vault's position but its shares remain outstanding. How
-    # empty depends on the runtime build: an exactly-zero position retires shares through the
-    # zero-backing unwrap, while a sub-floor residue exits through the TAO rail's full-drain sale.
-    all_shares = env.vault_shares(token_id)
-    if env.vault_total_stake(token_id) == 0:
-        env.vault_send(
-            2_500_000, "Sweep: cleanup unwrap failed",
-            "unwrap(uint256,uint256,bytes32)", token_id, all_shares, env.wrapper_substrate_coldkey,
-        )
-    else:
-        env.vault_send(
-            2_500_000, "Sweep: cleanup unwrap failed",
-            "unwrapForTao(uint256,uint256,uint256)", token_id, all_shares, 0,
-        )
-    assert env.vault_total_supply(token_id) == 0, "cleanup left outstanding shares"

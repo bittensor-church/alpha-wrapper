@@ -314,6 +314,23 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         assertEq(vault.recordedSlots(tokenId)[0].tracked, 0, "record settled to the swept state");
     }
 
+    /// @dev A cheap enough expectation looks sweepable whether or not the chain swept it, so the
+    ///      rename record is consulted first. Backing that merely moved must never be written off.
+    function test_DustScaleRename_IsFollowedNotWrittenOff() public {
+        uint256 netuid = 5;
+        _registerSubnet(netuid, hotkey1);
+        _simulateAlphaDepositHotkey(alice, netuid, 1e7, hotkey1);
+        _wrapHotkey(alice, netuid, hotkey1);
+        uint256 tokenId = vault.currentTokenId(netuid);
+
+        _simulateFollowedSwap(netuid, hotkey1, hotkey4);
+
+        assertApproxEqAbs(vault.totalStake(tokenId), 1e7, 1e3, "the view counts the moved backing");
+        vault.rebalance(netuid);
+        assertEq(vault.recordedSlots(tokenId)[0].hotkey, hotkey4, "the record follows the rename");
+        assertApproxEqAbs(vault.recordedSlots(tokenId)[0].tracked, 1e7, 1e3, "the backing is kept, not swept");
+    }
+
     // -------------------- Honest views and recovery ------------------------------
 
     function test_IsBackingIntact_TrueWithoutPosition() public view {
