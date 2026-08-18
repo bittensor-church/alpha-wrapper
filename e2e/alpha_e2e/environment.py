@@ -112,6 +112,13 @@ class Environment:
         """The minimum the vault reads on every floor check. A runtime constant."""
         return int(chain.cast_call(config.STAKING_PRECOMPILE, "getDefaultMinStake()(uint256)"))
 
+    def backing_intact(self, token_id: int) -> bool:
+        """Whether the vault can account for the alpha it expects under every
+        validator it records."""
+        return chain.cast_call(
+            self.vault_address, "isBackingIntact(uint256)(bool)", token_id,
+        ).strip() == "true"
+
     def hotkey_in_last_seen(self, token_id: int, hotkey_pubkey: str) -> bool:
         """Whether the vault's remembered validator set still references `hotkey_pubkey`."""
         remembered = chain.run(

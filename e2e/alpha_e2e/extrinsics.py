@@ -251,6 +251,17 @@ def keypair_ss58(uri: str) -> str:
     return _sdk().sp_core.Keypair.create_from_uri(uri).ss58_address
 
 
+def fund_account(
+    dest_ss58: str, amount_rao: int, *, chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Send TAO from Alice so `dest_ss58` can pay its own transaction fees, rather
+    than the test resting on whatever the chainspec happened to endow."""
+    with _connect(chain_endpoint) as client:
+        return _submit(client, _sdk().calls.Balances.transfer_keep_alive(
+            dest=dest_ss58, value=amount_rao,
+        ))
+
+
 def swap_hotkey_keep_stake(
     hotkey_ss58: str, new_hotkey_ss58: str,
     *, chain_endpoint: str = config.CHAIN_ENDPOINT,
