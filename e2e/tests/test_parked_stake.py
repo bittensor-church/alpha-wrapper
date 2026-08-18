@@ -8,12 +8,16 @@ then refused - as a move's origin, as its destination, and as an unstake source
 
 Clearing it needs nothing privileged and nothing from the attesters. Any account
 may take ownership of a hotkey nobody owns, and that restores exactly the record
-those refusals consult. The claimant gains no claim on the stake underneath:
-withdrawals answer to the coldkey that staked it, which is still the vault's.
+those refusals consult. An account with no part in the vault, the subnet or the
+swap does the claiming here, and the stake stays where it was: ownership of a
+hotkey carries no claim on what is delegated under it.
 """
 import pytest
 
 from alpha_e2e import config, extrinsics
+
+# A dev account with no role in the vault, the subnet, or the swap.
+STRANGER_URI = "//Bob"
 
 
 @pytest.mark.scenario
@@ -45,6 +49,8 @@ def test_parked_stake_frees_after_anyone_claims_the_hotkey(env):
         "the swap was meant to keep the stake in place"
     )
 
+    assert extrinsics.hotkey_owner(hotkey_ss58) == "", "the swap left the hotkey owned"
+
     # The backing check is satisfied - the alpha is exactly where the record expects
     # it - so what fails is the chain refusing to move it.
     env.vault_send_expect_revert(
@@ -52,7 +58,16 @@ def test_parked_stake_frees_after_anyone_claims_the_hotkey(env):
         "unwrap(uint256,uint256,bytes32)", token_id, shares // 2, env.wrapper_substrate_coldkey,
     )
 
-    extrinsics.associate_hotkey(hotkey_ss58)
+    # A signer with no part in any of this takes the abandoned hotkey. Nothing about
+    # the claim is privileged, and it is the claim alone that reopens the position.
+    stranger_ss58 = extrinsics.keypair_ss58(STRANGER_URI)
+    extrinsics.associate_hotkey(hotkey_ss58, signer_uri=STRANGER_URI)
+    assert extrinsics.hotkey_owner(hotkey_ss58) == stranger_ss58, (
+        "the stranger's claim did not take"
+    )
+    assert env.stake(hotkey_pubkey, clone_coldkey, netuid) == parked, (
+        "owning the hotkey must give no claim on the stake delegated under it"
+    )
 
     env.vault_send(
         2_500_000, "Parked: the exit should succeed once the hotkey is owned again",
