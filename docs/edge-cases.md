@@ -147,11 +147,16 @@ are exempt from the check, so a swept speck never freezes a token: the
 record settles to the swept state and the holders retire their shares
 against it as usual.
 
-One runtime state has no in-vault recovery: a rename that keeps its
-stake leaves the position counted but immovable under a key the chain
-deleted. The backing check passes - the stake is right where the
-record expects it - and any call that needs to move it fails on chain
-instead, until the key re-registers or the runtime changes.
+A rename that keeps its stake leaves the position counted but
+immovable: the backing check passes, since the stake is right where the
+record expects it, and any call that needs to move it fails on chain
+instead. Recovery is permissionless and needs nothing from the vault.
+The chain refuses those moves only because the hotkey has no owner, and
+anyone may take ownership of an unowned hotkey by associating it with
+their own coldkey for the price of a transaction. Doing so hands the
+new owner no claim on the stake underneath - withdrawals answer to the
+coldkey that staked - and the next `rebalance(netuid)` rolls the
+position back onto the attested validators.
 
 ## Third-party dust
 

@@ -331,6 +331,29 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         assertApproxEqAbs(vault.recordedSlots(tokenId)[0].tracked, 1e7, 1e3, "the backing is kept, not swept");
     }
 
+    /// @dev A rename that keeps its stake parks the position under an unowned hotkey, which the
+    ///      chain refuses to move from. Claiming the hotkey is permissionless and reopens the
+    ///      position with no attester involvement.
+    function test_ParkedStake_ClearsOnceHotkeyIsClaimed() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
+        _setValidators(
+            NETUID1, _hotkeys(hotkey4, hotkey2, hotkey3), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
+        );
+
+        // The backing is exactly where the record expects it, so the check passes and the roll
+        // off the rotated-out hotkey is what the chain turns down.
+        vm.expectRevert();
+        vault.rebalance(NETUID1);
+
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, false);
+        vault.rebalance(NETUID1);
+
+        assertEq(_getVaultStake(hotkey1, NETUID1), 0, "the parked position rolled off the claimed hotkey");
+        assertApproxEqAbs(vault.totalStake(TOKEN1), 30 ether, 0.01 ether, "backing whole after the roll");
+        assertTrue(vault.isBackingIntact(TOKEN1), "record intact once the position moved");
+    }
+
     // -------------------- Honest views and recovery ------------------------------
 
     function test_IsBackingIntact_TrueWithoutPosition() public view {
@@ -358,6 +381,26 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
         assertEq(vault.totalStake(TOKEN1), navBefore, "renamed backing counted at its successor");
         (uint256 previewAlpha,) = vault.previewUnwrap(TOKEN1, vault.balanceOf(alice, TOKEN1));
         assertApproxEqAbs(previewAlpha, 30 ether, 0.01 ether, "exit quote counts the successor");
+    }
+
+    /// @dev Attesters listing the successor before the vault next runs is the good case, and the
+    ///      quotes must not read it as a shortfall the operations sail straight through.
+    function test_AttestedSuccessor_ViewsAgreeWithOperations() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        _setValidators(
+            NETUID1, _hotkeys(hotkey4, hotkey2, hotkey3), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
+        );
+
+        assertTrue(vault.isBackingIntact(TOKEN1), "an attested successor explains the slot");
+        assertApproxEqAbs(vault.totalStake(TOKEN1), 30 ether, 0.01 ether, "counted once, not twice");
+        vault.previewWrap(TOKEN1, 1 ether);
+
+        _simulateAlphaDepositHotkey(bob, NETUID1, 30 ether, hotkey4);
+        _wrapHotkey(bob, NETUID1, hotkey4);
+        assertApproxEqRel(
+            vault.balanceOf(bob, TOKEN1), vault.balanceOf(alice, TOKEN1), 0.001e18, "the deposit priced fairly"
+        );
     }
 
     /// @dev An emptied position reads an honest zero rather than trapping integrators in reverts.

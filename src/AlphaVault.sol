@@ -721,10 +721,16 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             if (balances[i] + TRACKED_SLACK_RAO < tracked) {
                 (bool found, bytes32 successor, uint256 successorStake) =
                     _fundedSuccessor(tokenSlots[i].hotkey, netuid, coldkey, tracked);
-                if (found && !_contains(hotkeys, successor)) {
-                    // Recorded in the scratch union so a second slot cannot count it again.
-                    hotkeys[i] = successor;
-                    total += successorStake;
+                // The same verdict the gate reaches, on the same condition: only a successor that
+                // is not already a recorded slot can be adopted.
+                if (found && _slotIndexOf(tokenSlots, successor) == type(uint256).max) {
+                    // A successor the attesters already list sits in the union and is counted
+                    // there; only an unlisted one adds, marked in the scratch union so a later
+                    // slot cannot count it twice.
+                    if (!_contains(hotkeys, successor)) {
+                        hotkeys[i] = successor;
+                        total += successorStake;
+                    }
                 } else {
                     if (alphaPriceE18 == type(uint256).max) {
                         alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);

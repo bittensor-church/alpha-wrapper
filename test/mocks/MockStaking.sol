@@ -123,7 +123,7 @@ contract MockStaking {
         if (moveStakeReverts) {
             _fail("MockStaking: moveStake reverted");
         }
-        if (hotkeyDeleted[destination_hotkey]) {
+        if (hotkeyDeleted[origin_hotkey] || hotkeyDeleted[destination_hotkey]) {
             _fail("MockStaking: HotKeyAccountNotExists");
         }
         if (_belowMinTransfer(amount, origin_netuid)) {
@@ -137,8 +137,8 @@ contract MockStaking {
         return stakes[hotkey][coldkey][netuid];
     }
 
-    /// @dev A full rename deletes the old key's account, after which the chain rejects any stake
-    ///      operation naming it as a destination.
+    /// @dev A full rename leaves the old key unowned, after which the chain rejects every stake
+    ///      operation naming it - as move origin, as move destination, or as unstake source.
     mapping(bytes32 => bool) public hotkeyDeleted;
 
     function setHotkeyDeleted(bytes32 hotkey, bool deleted) external {
@@ -200,6 +200,9 @@ contract MockStaking {
     function removeStake(bytes32 hotkey, uint256 alphaAmount, uint256 netuid) external payable {
         if (removeStakeReverts || removeStakeRevertsFor[hotkey]) {
             _fail("MockStaking: removeStake reverted");
+        }
+        if (hotkeyDeleted[hotkey]) {
+            _fail("MockStaking: HotKeyAccountNotExists");
         }
         uint256 staked = stakes[hotkey][_senderColdkey()][netuid];
         // Unit seam: proceeds are credited 1:1 (rao as wei) for test readability; the real chain

@@ -85,6 +85,11 @@ over several sales.
   would let depositors mint cheap shares and would pay exiters backing
   that is still recoverable. Mailbox recovery stays open while it
   lasts.
+- A rename that keeps its stake parks the position under a hotkey the
+  chain left unowned, which freezes any call that has to move it. It
+  takes an unrelated on-chain step to clear - anyone may claim the
+  unowned hotkey, after which a `rebalance` rolls the position back -
+  and the claimant gains nothing over the stake by doing so.
 - Re-anchoring trusts the attesters to have found where the stake went.
   They already choose which hotkeys the vault stakes to, so this grants
   them no reach they did not have; it is bounded to one call per
