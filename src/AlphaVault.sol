@@ -723,7 +723,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                     _fundedSuccessor(tokenSlots[i].hotkey, netuid, coldkey, tracked);
                 // The same verdict the gate reaches, on the same condition: only a successor that
                 // is not already a recorded slot can be adopted.
-                if (found && _slotIndexOf(tokenSlots, successor) == type(uint256).max) {
+                if (found && !_slotsContain(tokenSlots, successor)) {
                     // A successor the attesters already list sits in the union and is counted
                     // there; only an unlisted one adds, marked in the scratch union so a later
                     // slot cannot count it twice.
@@ -733,8 +733,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                     }
                 } else {
                     if (alphaPriceE18 == type(uint256).max) {
-                        alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
-                        dustThresholdTao = IStaking(STAKING_PRECOMPILE).getNominatorMinRequiredStake();
+                        (alphaPriceE18, dustThresholdTao) = _dustExemptionInputs(netuid);
                     }
                     bool swept = _isSweepableDust(tracked, alphaPriceE18, dustThresholdTao);
                     if (!swept && shortIndex == type(uint256).max) {
@@ -1306,14 +1305,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                 // Two slots resolving onto one key would count that key's stake twice. A rename
                 // cannot produce it - the chain refuses a destination that already exists - so
                 // it is left to re-attestation rather than merged.
-                if (found && _slotIndexOf(tokenSlots, successor) == type(uint256).max) {
+                if (found && !_slotsContain(tokenSlots, successor)) {
                     tokenSlots[i].hotkey = successor;
                     emit HotkeySwapFollowed(tokenId, hotkey, successor);
                     return true;
                 }
                 if (alphaPriceE18 == type(uint256).max) {
-                    alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
-                    dustThresholdTao = IStaking(STAKING_PRECOMPILE).getNominatorMinRequiredStake();
+                    (alphaPriceE18, dustThresholdTao) = _dustExemptionInputs(netuid);
                 }
                 if (!_isSweepableDust(tracked, alphaPriceE18, dustThresholdTao) && !resync) {
                     revert BackingShortfall(netuid, hotkey, tracked, balances[i]);
@@ -1355,6 +1353,17 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 stake = IStaking(STAKING_PRECOMPILE).getStake(next, coldkey, netuid);
         if (stake + TRACKED_SLACK_RAO < needed) return (false, bytes32(0), 0);
         return (true, next, stake);
+    }
+
+    /// @dev What the dust exemption judges against, read as a pair so the twins cannot come to
+    ///      differ on it. Reached only by a slot already short, so a clean pass pays for neither.
+    function _dustExemptionInputs(uint16 netuid)
+        private
+        view
+        returns (uint256 alphaPriceE18, uint256 dustThresholdTao)
+    {
+        alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
+        dustThresholdTao = IStaking(STAKING_PRECOMPILE).getNominatorMinRequiredStake();
     }
 
     /// @dev The chain force-clears positions below its dust threshold, so an expectation that
@@ -1441,14 +1450,15 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
     }
 
-    function _slotIndexOf(Slot[] storage tokenSlots, bytes32 hotkey) private view returns (uint256) {
+    /// @dev Whether a recorded slot already stands on `hotkey`.
+    function _slotsContain(Slot[] storage tokenSlots, bytes32 hotkey) private view returns (bool) {
         for (uint256 i; i < tokenSlots.length;) {
-            if (tokenSlots[i].hotkey == hotkey) return i;
+            if (tokenSlots[i].hotkey == hotkey) return true;
             unchecked {
                 ++i;
             }
         }
-        return type(uint256).max;
+        return false;
     }
 
     function _ensureMailboxClone(address user, uint256 netuid) private returns (address userClone) {

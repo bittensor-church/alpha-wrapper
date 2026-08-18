@@ -303,8 +303,7 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
     function test_DustSweep_DoesNotFreeze() public {
         uint256 netuid = 5;
         _registerSubnet(netuid, hotkey1);
-        _simulateAlphaDepositHotkey(alice, netuid, 1e7, hotkey1);
-        _wrapHotkey(alice, netuid, hotkey1);
+        _depositAndWrap(alice, netuid, 1e7);
         uint256 tokenId = vault.currentTokenId(netuid);
 
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(netuid), netuid, 0);
@@ -319,8 +318,7 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
     function test_DustScaleRename_IsFollowedNotWrittenOff() public {
         uint256 netuid = 5;
         _registerSubnet(netuid, hotkey1);
-        _simulateAlphaDepositHotkey(alice, netuid, 1e7, hotkey1);
-        _wrapHotkey(alice, netuid, hotkey1);
+        _depositAndWrap(alice, netuid, 1e7);
         uint256 tokenId = vault.currentTokenId(netuid);
 
         _simulateFollowedSwap(netuid, hotkey1, hotkey4);
@@ -556,13 +554,11 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
     function test_PartialExitAfterRename_PaysProperly() public {
         uint256 netuid = 5;
         _registerSubnet(netuid, hotkey1);
-        _simulateAlphaDepositHotkey(alice, netuid, 10 ether, hotkey1);
-        _wrapHotkey(alice, netuid, hotkey1);
+        uint256 shares = _depositAndWrap(alice, netuid, 10 ether);
         uint256 tokenId = vault.currentTokenId(netuid);
         _simulateFollowedSwap(netuid, hotkey1, hotkey4);
         MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
 
-        uint256 shares = vault.balanceOf(alice, tokenId);
         vm.prank(alice);
         vault.unwrap(tokenId, shares / 2, _toSubstrate(alice));
 
@@ -572,13 +568,11 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
     function test_FullBurnAfterRename_PaysFull() public {
         uint256 netuid = 5;
         _registerSubnet(netuid, hotkey1);
-        _simulateAlphaDepositHotkey(alice, netuid, 10 ether, hotkey1);
-        _wrapHotkey(alice, netuid, hotkey1);
+        uint256 shares = _depositAndWrap(alice, netuid, 10 ether);
         uint256 tokenId = vault.currentTokenId(netuid);
         _simulateFollowedSwap(netuid, hotkey1, hotkey4);
         MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
 
-        uint256 shares = vault.balanceOf(alice, tokenId);
         vm.prank(alice);
         vault.unwrap(tokenId, shares, _toSubstrate(alice));
 
@@ -589,14 +583,12 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
     function test_FullBurnForTaoAfterRename_SellsFull() public {
         uint256 netuid = 5;
         _registerSubnet(netuid, hotkey1);
-        _simulateAlphaDepositHotkey(alice, netuid, 10 ether, hotkey1);
-        _wrapHotkey(alice, netuid, hotkey1);
+        uint256 shares = _depositAndWrap(alice, netuid, 10 ether);
         uint256 tokenId = vault.currentTokenId(netuid);
         _simulateFollowedSwap(netuid, hotkey1, hotkey4);
         MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
 
         uint256 balanceBefore = alice.balance;
-        uint256 shares = vault.balanceOf(alice, tokenId);
         vm.prank(alice);
         vault.unwrapForTao(tokenId, shares, 0);
 
@@ -609,12 +601,10 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
     function test_TwoHopRename_ExitsFailClosed() public {
         uint256 netuid = 5;
         _registerSubnet(netuid, hotkey1);
-        _simulateAlphaDepositHotkey(alice, netuid, 10 ether, hotkey1);
-        _wrapHotkey(alice, netuid, hotkey1);
+        uint256 shares = _depositAndWrap(alice, netuid, 10 ether);
         uint256 tokenId = vault.currentTokenId(netuid);
         _buildRenameTrail(netuid, hotkey1, 2);
 
-        uint256 shares = vault.balanceOf(alice, tokenId);
         vm.prank(alice);
         vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
         vault.unwrap(tokenId, shares / 2, _toSubstrate(alice));
@@ -631,12 +621,10 @@ contract HotkeySwapTripwireTest is AlphaVaultTestBase {
     function test_SweepResidue_StaysExitable() public {
         uint256 netuid = 5;
         _registerSubnet(netuid, hotkey1);
-        _simulateAlphaDepositHotkey(alice, netuid, 1e7, hotkey1);
-        _wrapHotkey(alice, netuid, hotkey1);
+        uint256 shares = _depositAndWrap(alice, netuid, 1e7);
         uint256 tokenId = vault.currentTokenId(netuid);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(netuid), netuid, 500);
 
-        uint256 shares = vault.balanceOf(alice, tokenId);
         vm.prank(alice);
         vault.unwrap(tokenId, shares, _toSubstrate(alice));
 
