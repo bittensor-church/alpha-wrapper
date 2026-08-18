@@ -38,6 +38,8 @@ def test_stranded_holder_exits_after_anyone_claims_the_hotkey(env):
     shares = env.vault_shares(token_id)
     assert shares != 0, "no shares minted by the setup wrap"
 
+    # A live subnet emits, so the position only ever grows between reads; the
+    # comparisons below are floors rather than equalities for that reason.
     clone_coldkey = env.clone_coldkey(token_id)
     parked = env.stake(hotkey_pubkey, clone_coldkey, netuid)
     assert parked > 0, "the setup left no stake on the hotkey about to be stranded"
@@ -50,8 +52,8 @@ def test_stranded_holder_exits_after_anyone_claims_the_hotkey(env):
 
     # The identity moved and the owner went with it; the alpha stayed put.
     assert extrinsics.hotkey_owner(hotkey_ss58) == "", "the swap left the hotkey owned"
-    assert env.stake(hotkey_pubkey, clone_coldkey, netuid) == parked, (
-        "the swap was meant to keep the stake in place"
+    assert env.stake(hotkey_pubkey, clone_coldkey, netuid) >= parked, (
+        "the swap was meant to leave the stake where it was"
     )
 
     # The vault is not the one objecting: it still counts the position and reads its
@@ -75,7 +77,7 @@ def test_stranded_holder_exits_after_anyone_claims_the_hotkey(env):
     assert extrinsics.hotkey_owner(hotkey_ss58) == stranger_ss58, (
         "the stranger's claim did not take"
     )
-    assert env.stake(hotkey_pubkey, clone_coldkey, netuid) == parked, (
+    assert env.stake(hotkey_pubkey, clone_coldkey, netuid) >= parked, (
         "owning the hotkey must carry no claim on the stake delegated under it"
     )
 
