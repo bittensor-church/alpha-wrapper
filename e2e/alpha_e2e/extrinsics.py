@@ -242,3 +242,34 @@ def dissolve_network(
     if still_registered:
         raise ExtrinsicError(f"dissolve_network netuid={netuid} left the subnet registered")
     return block_hash
+
+
+def keypair_ss58(uri: str) -> str:
+    """The ss58 address behind a dev key URI, for keys that only need an identity."""
+    return _sdk().sp_core.Keypair.create_from_uri(uri).ss58_address
+
+
+def swap_hotkey_keep_stake(
+    hotkey_ss58: str, new_hotkey_ss58: str,
+    *, chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Move a hotkey's identity across every subnet while its stake stays behind.
+
+    The old hotkey is left with no recorded owner, which is the state the chain
+    refuses to move stake out of. Signed by Alice, who owns the registered
+    validator hotkeys."""
+    with _connect(chain_endpoint) as client:
+        return _submit(client, _sdk().calls.SubtensorModule.swap_hotkey_v2(
+            hotkey=hotkey_ss58, new_hotkey=new_hotkey_ss58, netuid=None, keep_stake=True,
+        ))
+
+
+def associate_hotkey(
+    hotkey_ss58: str, *, chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Take ownership of a hotkey nobody owns. Open to any signer and free beyond
+    the fee; a hotkey that already has an owner is left alone."""
+    with _connect(chain_endpoint) as client:
+        return _submit(client, _sdk().calls.SubtensorModule.try_associate_hotkey(
+            hotkey=hotkey_ss58,
+        ))

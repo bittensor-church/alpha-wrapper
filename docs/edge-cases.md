@@ -155,8 +155,8 @@ The chain refuses those moves only because the hotkey has no owner, and
 anyone may take ownership of an unowned hotkey by associating it with
 their own coldkey for the price of a transaction. Doing so hands the
 new owner no claim on the stake underneath - withdrawals answer to the
-coldkey that staked - and the next `rebalance(netuid)` rolls the
-position back onto the attested validators.
+coldkey that staked - and the vault's next operation moves the position
+as it normally would.
 
 ## Third-party dust
 
