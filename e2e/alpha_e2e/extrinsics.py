@@ -278,11 +278,17 @@ def associate_hotkey(
         ), signer_uri=signer_uri)
 
 
+# The ownership map answers for every hotkey, so "nobody owns this" arrives as the
+# all-zero account rather than as an absent entry.
+UNOWNED_ACCOUNT = "5C4hrfjw9DjXZTzV3MwzrrAr9P1MJhSrvWGWqi1eSuyUpnhM"
+
+
 def hotkey_owner(
     hotkey_ss58: str, *, chain_endpoint: str = config.CHAIN_ENDPOINT,
 ) -> str:
-    """The coldkey recorded as owning `hotkey_ss58`, or "" when nobody owns it.
-    This record is what every stake operation checks the hotkey against."""
+    """The coldkey recorded as owning `hotkey_ss58`, or "" when nobody does. This
+    record is what every stake operation checks the hotkey against."""
     with _connect(chain_endpoint) as client:
         value = client.query(_sdk().storage.SubtensorModule.Owner, [hotkey_ss58])
-    return "" if value is None else str(value)
+    owner = "" if value is None else str(value)
+    return "" if owner == UNOWNED_ACCOUNT else owner
