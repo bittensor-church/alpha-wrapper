@@ -57,7 +57,6 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
 
     event SignersUpdated(address[] newSigners, uint8 newThreshold);
     event ValidatorsUpdated(uint256 indexed netuid, uint256 nonce, bytes32[] hotkeys, uint256[] weights);
-    event BackingWrittenDown(address indexed vault, uint256 indexed tokenId, uint256 nonce, bytes32 slotsHash);
 
     error ZeroAddress();
     error ZeroValue();
@@ -118,6 +117,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     ///         the vault's to check, and it reverts if not.
     function consumeWriteDown(BackingWriteDown calldata approval, bytes[] calldata signatures) external {
         if (msg.sender != approval.vault) revert NotApprovedVault();
+        // forge-lint: disable-next-line(block-timestamp)
         if (block.timestamp > approval.deadline) revert ExpiredAttestation();
         uint256 expected = writeDownNonces[approval.vault][approval.tokenId] + 1;
         if (approval.nonce != expected) revert StaleNonce();
@@ -125,7 +125,6 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         _verifySignatures(_hashWriteDown(approval), signatures);
 
         writeDownNonces[approval.vault][approval.tokenId] = approval.nonce;
-        emit BackingWrittenDown(approval.vault, approval.tokenId, approval.nonce, approval.slotsHash);
     }
 
     /// @inheritdoc IValidatorRegistry

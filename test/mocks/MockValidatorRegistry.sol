@@ -11,30 +11,14 @@ contract MockValidatorRegistry is IValidatorRegistry {
 
     mapping(uint256 => Slot) private _slots;
 
-    /// @dev Seeds corrupt slots (e.g. zero hotkey + non-zero weight, or mismatched lengths) that the
-    ///      real registry would reject; tests deploy a fresh vault against this mock when needed.
     mapping(uint256 => uint256) public nonces;
 
-    /// @dev Recorded rather than verified: signature checking is the real registry's job, and the
-    ///      vault's own gates are what these tests are about.
-    mapping(address => mapping(uint256 => uint256)) public writeDownNonces;
-    BackingWriteDown public lastWriteDown;
-    bool public writeDownReverts;
+    /// @dev Write-downs are exercised against the real registry; this stub only satisfies the
+    ///      interface for the malformed-set tests that reach for this mock.
+    function consumeWriteDown(BackingWriteDown calldata, bytes[] calldata) external { }
 
-    function setWriteDownReverts(bool v) external {
-        writeDownReverts = v;
-    }
-
-    function consumeWriteDown(BackingWriteDown calldata approval, bytes[] calldata) external {
-        require(!writeDownReverts, "MockValidatorRegistry: write-down refused");
-        require(msg.sender == approval.vault, "MockValidatorRegistry: wrong vault");
-        require(block.timestamp <= approval.deadline, "MockValidatorRegistry: expired");
-        uint256 expected = writeDownNonces[approval.vault][approval.tokenId] + 1;
-        require(approval.nonce == expected, "MockValidatorRegistry: stale nonce");
-        writeDownNonces[approval.vault][approval.tokenId] = approval.nonce;
-        lastWriteDown = approval;
-    }
-
+    /// @dev Seeds corrupt slots (e.g. zero hotkey + non-zero weight, or mismatched lengths) that the
+    ///      real registry would reject; tests deploy a fresh vault against this mock when needed.
     function setRaw(uint256 netuid, bytes32[] memory hotkeys, uint16[] memory weights) external {
         Slot storage slot = _slots[netuid];
         slot.hotkeys = hotkeys;
