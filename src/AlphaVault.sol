@@ -447,7 +447,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // swept-sale proceeds claimable, so the shares are retired instead of trapped.
         if (totalAlpha == 0) {
             _burn(msg.sender, tokenId, shares);
-            _reanchorTracked(tokenId, coldkey, netuid);
+            _settleSlots(tokenId, coldkey, logicalSet, hotkeys);
             emit Unwrapped(msg.sender, tokenId, shares, 0);
             return;
         }
@@ -466,7 +466,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 alphaOut = _deliverAndAlign(
             tokenId, clone, hotkeys, weights, balances, coldkey, userSubstrateColdkey, assets, alphaPriceE18
         );
-        _reanchorTracked(tokenId, coldkey, netuid);
+        _settleSlots(tokenId, coldkey, logicalSet, hotkeys);
 
         emit Unwrapped(msg.sender, tokenId, shares, alphaOut);
     }
@@ -1398,12 +1398,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
     }
 
-    /// @dev Refreshes what the record expects to find, leaving every slot's identity alone. A
-    ///      withdrawal lowers balances without changing which validator holds what, so the amounts
-    ///      are the only stale part - and left stale, the holder's own exit reads as the next
-    ///      call's shortfall, and an ordinary rename after it as one the vault must refuse to
-    ///      follow. Unlike a settle this drops no slot, so an exit that skipped consolidation
-    ///      cannot strand stake still sitting on a validator the attesters have dropped.
+    /// @dev Refreshes what the record expects to find, leaving every slot's identity alone. Left
+    ///      stale, the holder's own exit reads as the next call's shortfall, and an ordinary
+    ///      rename after it as one the vault must refuse to follow. The TAO rail sells straight
+    ///      off rotated-out validators instead of consolidating first, so unlike a settle this
+    ///      drops no slot: dropping one that still holds alpha would strand it.
     function _reanchorTracked(uint256 tokenId, bytes32 coldkey, uint16 netuid) private {
         Slot[] storage tokenSlots = _slots[tokenId];
         for (uint256 i; i < tokenSlots.length;) {
