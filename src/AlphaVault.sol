@@ -65,6 +65,18 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
     /// @dev Settled only at the end of a clean operation, so a failed one leaves the evidence in
     ///      place for the next caller to see.
+    /// @dev One reading of a position: the keys it can see, what each holds, and what it cannot
+    ///      account for. Carried as a struct because the coverage build compiles at minimum
+    ///      optimization, where returning the parts separately runs the stack out.
+    struct Plan {
+        bytes32[] keys;
+        bool[] unaccounted;
+        uint256 total;
+        uint256 missing;
+        uint256 shortIndex;
+        uint256 shortPresent;
+    }
+
     mapping(uint256 => Slot[]) private _slots;
 
     /// @dev When a write-down was acknowledged, per token. Deposits wait out the challenge window
@@ -701,16 +713,14 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @return Alpha staked under the clone for this token.
     function totalStake(uint256 tokenId) public view returns (uint256) {
-        (uint256 total,,,) = _resolveBacking(tokenId);
-        return total;
+        return _resolveBacking(tokenId).total;
     }
 
     /// @notice Whether the record still accounts for the position. False means an operation would
     ///         refuse until the attesters name where the missing alpha went, or acknowledge it as
     ///         gone. A rename the vault can follow reads true: the next call repairs it unaided.
     function isBackingIntact(uint256 tokenId) external view returns (bool) {
-        (, uint256 missing,,) = _resolveBacking(tokenId);
-        return missing == 0;
+        return _resolveBacking(tokenId).missing == 0;
     }
 
     /// @notice When deposits reopen after an acknowledged loss, as a unix timestamp. Zero when no
@@ -722,22 +732,18 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
     /// @dev The same plan the operations run, without applying it. Reporting rather than reverting,
     ///      so a monitor can read the state that is refusing calls.
-    function _resolveBacking(uint256 tokenId)
-        private
-        view
-        returns (uint256 total, uint256 missing, uint256 shortIndex, bytes32[] memory keys)
-    {
+    function _resolveBacking(uint256 tokenId) private view returns (Plan memory plan) {
+        plan.shortIndex = type(uint256).max;
         address clone = subnetClone[tokenId];
-        if (clone == address(0)) return (0, 0, type(uint256).max, keys);
+        if (clone == address(0)) return plan;
         uint16 netuid = _netuid(tokenId);
         bytes32 coldkey = _coldkeyOf(clone);
         if (_isIssuedForDissolvedSubnet(tokenId)) {
-            (,, total) = _unionStake(tokenId, netuid, coldkey);
-            return (total, 0, type(uint256).max, keys);
+            (,, plan.total) = _unionStake(tokenId, netuid, coldkey);
+            return plan;
         }
         (bytes32[] memory current,) = validatorRegistry.getValidators(netuid);
-        uint256[] memory balances;
-        (keys, balances, total, missing, shortIndex,) = _planBacking(tokenId, netuid, coldkey, current);
+        plan = _planBacking(tokenId, netuid, coldkey, current);
     }
 
     /// @dev The total a deposit may be priced against. Reads the same plan the operations run, and
@@ -745,17 +751,14 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///      would then refuse. Exits quote against `totalStake` instead, which reports what the
     ///      vault can locate whether or not anything is missing.
     function _depositableTotal(uint256 tokenId) private view returns (uint256) {
-        (uint256 total, uint256 missing, uint256 shortIndex,) = _resolveBacking(tokenId);
+        Plan memory plan = _resolveBacking(tokenId);
         if (_writtenDownAt[tokenId] != 0) {
             _requireChallengeWindowClosed(tokenId);
-        } else if (missing != 0) {
-            Slot storage short = _slots[tokenId][shortIndex];
-            uint16 netuid = _netuid(tokenId);
-            uint256 present =
-                IStaking(STAKING_PRECOMPILE).getStake(short.active, _coldkeyOf(subnetClone[tokenId]), netuid);
-            revert BackingShortfall(netuid, short.active, short.tracked, present);
+        } else if (plan.missing != 0) {
+            Slot storage short = _slots[tokenId][plan.shortIndex];
+            revert BackingShortfall(_netuid(tokenId), short.active, short.tracked, plan.shortPresent);
         }
-        return total;
+        return plan.total;
     }
 
     /// @notice Price of one share in 1e18 precision, expressed in alpha.
@@ -1235,8 +1238,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint16 netuid = _netuid(tokenId);
         _requireNotDissolving(netuid);
 
-        (uint256 located, uint256 missing,, bytes32[] memory keys) = _resolveBacking(tokenId);
-        if (missing == 0) revert BackingIntact();
+        Plan memory plan = _resolveBacking(tokenId);
+        uint256 located = plan.total;
+        if (plan.missing == 0) revert BackingIntact();
         if (approval.slotsHash != slotsHash(tokenId)) revert RecordMoved();
         if (located < approval.minimumBacking) revert BelowApprovedBacking(located, approval.minimumBacking);
 
@@ -1251,7 +1255,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         //
         // Deposits wait out the window from here. Nothing else does: exits, mailbox reclaims and
         // TAO claims stay open throughout, so the wait costs only new money coming in.
-        _applyFollows(tokenId, keys);
+        _applyFollows(tokenId, plan.keys);
         // forge-lint: disable-next-line(block-timestamp)
         _writtenDownAt[tokenId] = block.timestamp;
         emit BackingWrittenDown(tokenId, approval.nonce, located);
@@ -1289,16 +1293,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32[] memory logicalSet,
         bool refuseShortfall
     ) private returns (uint256 located, bool[] memory unaccounted) {
-        uint256 missing;
-        uint256 shortIndex;
-        bytes32[] memory keys;
-        uint256[] memory balances;
-        (keys, balances, located, missing, shortIndex, unaccounted) = _planBacking(tokenId, netuid, coldkey, logicalSet);
-        if (missing != 0 && refuseShortfall) {
-            Slot storage short = _slots[tokenId][shortIndex];
-            revert BackingShortfall(netuid, short.active, short.tracked, balances[shortIndex]);
+        Plan memory plan = _planBacking(tokenId, netuid, coldkey, logicalSet);
+        if (plan.missing != 0 && refuseShortfall) {
+            Slot storage short = _slots[tokenId][plan.shortIndex];
+            revert BackingShortfall(netuid, short.active, short.tracked, plan.shortPresent);
         }
-        _applyFollows(tokenId, keys);
+        _applyFollows(tokenId, plan.keys);
+        return (plan.total, plan.unaccounted);
     }
 
     /// @dev After an acknowledged loss, deposits wait out the window so anyone who can still find
@@ -1337,35 +1338,32 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     function _planBacking(uint256 tokenId, uint16 netuid, bytes32 coldkey, bytes32[] memory currentSet)
         private
         view
-        returns (
-            bytes32[] memory keys,
-            uint256[] memory balances,
-            uint256 total,
-            uint256 missing,
-            uint256 shortIndex,
-            bool[] memory unaccounted
-        )
+        returns (Plan memory plan)
     {
         Slot[] storage tokenSlots = _slots[tokenId];
-        keys = _unionSlots(tokenId, currentSet);
-        balances = _fetchBalances(keys, coldkey, netuid);
-        total = _sumBalances(balances);
-        shortIndex = type(uint256).max;
+        plan.keys = _unionSlots(tokenId, currentSet);
+        uint256[] memory balances = _fetchBalances(plan.keys, coldkey, netuid);
+        plan.total = _sumBalances(balances);
+        plan.shortIndex = type(uint256).max;
 
         uint256 count = tokenSlots.length;
-        unaccounted = new bool[](count);
+        plan.unaccounted = new bool[](count);
         for (uint256 i; i < count;) {
             uint256 tracked = tokenSlots[i].tracked;
             if (balances[i] + TRACKED_SLACK_RAO < tracked) {
-                (bool accounted, uint256 found) = _accountForSlot(tokenSlots, i, netuid, coldkey, keys, count, tracked);
-                total += found;
+                (bool accounted, uint256 found) =
+                    _accountForSlot(tokenSlots, i, netuid, coldkey, plan.keys, count, tracked);
+                plan.total += found;
                 if (!accounted) {
-                    missing += tracked - balances[i];
-                    if (shortIndex == type(uint256).max) shortIndex = i;
+                    plan.missing += tracked - balances[i];
+                    if (plan.shortIndex == type(uint256).max) {
+                        plan.shortIndex = i;
+                        plan.shortPresent = balances[i];
+                    }
                     // The settle that follows re-reads every slot from the chain, which would file
                     // this loss as an ordinary balance change. Flagging the slot keeps its
                     // expectation standing until the alpha is found or acknowledged as gone.
-                    unaccounted[i] = true;
+                    plan.unaccounted[i] = true;
                 }
             }
             unchecked {
