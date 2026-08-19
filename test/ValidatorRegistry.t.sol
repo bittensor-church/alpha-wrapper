@@ -619,13 +619,13 @@ contract ValidatorRegistryTest is AttestationHelper {
         registry.updateValidators(att, sigs);
     }
 
-    /// @dev Signatures carry no expiry: the subnet's nonce is what ends an attestation's life, and
-    ///      `test_RevertWhen_NonceLessThanExpected` covers the landing that ends it.
-    function testFuzz_Update_AcceptsAfterAnyElapsedTime(uint256 elapsed) public {
+    /// @dev Signatures carry no expiry, so no amount of elapsed time invalidates one. What ends an
+    ///      attestation's life is a landing on the same subnet, covered by the nonce reverts above.
+    function test_Update_AcceptsAfterLongDelay() public {
         ValidatorRegistry.WeightAttestation memory att = _att(SN1, 3, 1);
         bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
 
-        vm.warp(block.timestamp + bound(elapsed, 0, 100 * 365 days));
+        vm.warp(block.timestamp + 100 * 365 days);
         registry.updateValidators(att, sigs);
 
         assertEq(registry.nonces(SN1), 1);
