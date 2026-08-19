@@ -69,3 +69,7 @@ over several sales.
 - A partial `unwrapForTao` can fill short and refund the unsold part as
   shares instead of reverting; callers bound the damage with
   `minTaoOut`.
+- A quorum-signed attestation stays submittable until one lands for its
+  subnet, so a list the signers have moved away from can still be
+  installed by anyone holding its signatures. Landing a replacement is
+  what retires it.

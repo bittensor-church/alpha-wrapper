@@ -27,15 +27,23 @@ The registry enforces at submission time:
 
 A signature stays usable until an attestation lands for that subnet.
 Once one does, `nonces(netuid)` advances and every signature still
-outstanding for the old nonce is spent - sign again at the new nonce to
-replace it.
+outstanding for the old nonce stops working - sign again at the new
+nonce to replace it.
 
 Signatures carry no clock of their own, so one signed today and
 submitted a month later still applies, as long as nothing landed for
 that subnet in between. What ages is the list inside it: it stays the
-list you picked when you signed. Sign again at the current nonce
-whenever your selection changes, and the newer payload wins the moment
-someone submits it.
+list you picked when you signed.
+
+Signing again at the same nonce adds a competitor rather than a
+replacement. Whichever payload reaches the chain first commits, and the
+others revert against the nonce it advanced - so landing yours is what
+settles which list takes effect. Once one has landed, the next nonce
+opens and a signature there supersedes it.
+
+A signature you have handed out is also beyond recall: anyone holding it
+can submit it. Treat each one as final, and retire a list you have moved
+away from by landing its replacement.
 
 ## Agreeing with the other signers
 
