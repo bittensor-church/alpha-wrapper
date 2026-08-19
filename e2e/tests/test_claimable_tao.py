@@ -7,9 +7,11 @@ at that moment, let them withdraw it, and give none of it to later
 depositors.
 
 The threshold raise clears sub-threshold nominations on EVERY subnet and
-force-sells the vault's whole (deliberately tiny) position. The test restores
-the threshold it found and then retires the swept position's shares, so
-sibling suites sharing the session localnet see the subnet in a normal state.
+force-sells the vault's whole (deliberately tiny) position. Nothing on chain
+records that as the cause, so the attesters acknowledge the loss before the
+position can be retired. The test restores the threshold it found and then
+retires the swept position's shares, so sibling suites sharing the session
+localnet see the subnet in a normal state.
 """
 import pytest
 
@@ -81,6 +83,16 @@ def test_root_sweep_tao_becomes_claimable(env):
             extrinsics.set_nominator_min_required_stake(previous_factor)
         except Exception as restore_error:  # noqa: BLE001
             print(f"  WARNING: dust threshold not restored to {previous_factor}: {restore_error}")
+
+    # A sweep leaves nothing on chain naming where the alpha went, and a rename whose edge the
+    # chain has since cleared looks identical, so the vault refuses to guess and holds the
+    # expectation. The attesters acknowledge the loss against what the sweep left behind, which
+    # reopens the rails.
+    if not env.backing_intact(token_id):
+        located = env.vault_total_stake(token_id)
+        env.write_down_backing(token_id, located)
+        assert env.backing_intact(token_id), "the write-down did not re-anchor the record"
+        print(f"  Attesters wrote the backing down to the {located} alpha RAO the sweep left")
 
     # The clearing pass empties the vault's position but its shares remain outstanding. How
     # empty depends on the runtime build: an exactly-zero position retires shares through the

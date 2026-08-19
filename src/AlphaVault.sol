@@ -164,6 +164,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     error RecordMoved();
     error BelowApprovedBacking(uint256 located, uint256 minimumBacking);
     error GatherBelowFloor();
+    error HotkeyClaimedTwice(bytes32 hotkey);
 
     // -------------------- Constructor -------------------------------------------
     /// @param _uri ERC1155 metadata URI template, fixed for the contract's lifetime.
@@ -1300,10 +1301,15 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @dev What became of one slot's missing alpha, decided on what the chain recorded rather than
     ///      on what the position is worth today.
     ///
-    ///      A rename writes a lineage edge; the chain's dust sweep writes none and leaves the key
-    ///      owned. The two rename paths cover each other - a per-subnet swap always records the
-    ///      edge, a global swap always clears the old key's owner - so an edge-free shortfall under
-    ///      a key that still exists is the sweep, and the settle simply re-anchors to it.
+    ///      One case resolves itself: the recorded key has a successor edge, no other slot leans on
+    ///      that successor, and the successor holds what the record expects. That is the ordinary
+    ///      validator rename, and following it costs nobody a signature.
+    ///
+    ///      Every other shortfall stands, the chain's own dust sweep included. A missing edge is no
+    ///      evidence of one, because the chain drops a key's successor as soon as that key is
+    ///      registered again - so an operator who renames away and re-registers can erase the trail
+    ///      behind them. Standing shortfalls clear through the attesters naming where the alpha
+    ///      went, or through a signed write-down once it is gone for good.
     ///
     ///      Deliberately no price and no threshold: judging a past event by today's valuation gets
     ///      it wrong in both directions as the market moves.
@@ -1318,9 +1324,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ) private view returns (bool accounted, uint256 found) {
         bytes32 active = tokenSlots[index].active;
         (bool exists, bytes32 next) = IStaking(STAKING_PRECOMPILE).getHotkeySuccessor(active, netuid);
-        if (!exists || next == active) {
-            return (_hotkeyExists(active), 0);
-        }
+        if (!exists || next == active) return (false, 0);
         // An edge says the alpha moved. Two slots cannot lean on one balance, so a successor another
         // slot already holds or has already claimed this pass reads as unaccounted for.
         if (_slotsHold(tokenSlots, next) || _keysHold(keys, 0, count, next)) return (false, 0);
@@ -1331,17 +1335,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         found = _keysHold(keys, count, keys.length, next) ? 0 : stake;
         keys[index] = next;
         return (true, found);
-    }
-
-    /// @dev The chain's sweep leaves ownership untouched, so a key that no longer exists was
-    ///      renamed even where this subnet recorded no lineage for it. Reached only by an edge-free
-    ///      shortfall, never on the clean path. A build that cannot answer reads as "exists",
-    ///      degrading to the prior behaviour rather than bricking the call.
-    function _hotkeyExists(bytes32 hotkey) private view returns (bool) {
-        (bool ok, bytes memory data) = STAKING_PRECOMPILE.staticcall(abi.encodeCall(IStaking.getHotkeyOwner, (hotkey)));
-        if (!ok || data.length != 64) return true;
-        (bool exists,) = abi.decode(data, (bool, bytes32));
-        return exists;
     }
 
     function _slotsHold(Slot[] storage tokenSlots, bytes32 hotkey) private view returns (bool) {
@@ -1391,6 +1384,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                         ++j;
                     }
                 }
+            }
+            // A followed rename can land on a key the attesters also name in its own right. Two
+            // slots leaning on one balance would count it twice, so the collision is refused
+            // rather than priced; the attesters resolve it by dropping one of the pair.
+            if (effective[i] != logical && _contains(logicalSet, effective[i])) {
+                revert HotkeyClaimedTwice(effective[i]);
             }
             unchecked {
                 ++i;

@@ -1,9 +1,13 @@
-"""EIP-712 validator-set attestations for the ValidatorRegistry.
+"""EIP-712 attestations for the ValidatorRegistry.
 
-Builds a WeightAttestation, signs it with every listed signer key, sorts the
-signatures by recovered signer address ascending (contract requirement), and
-submits updateValidators(att, sigs[]). The first signer key also pays for the
-transaction.
+Two kinds are signed here. A WeightAttestation names the validator set for a
+subnet. A BackingWriteDown acknowledges that a token's backing is gone and lets
+the vault re-anchor on whatever is left, which is the only way to reopen a token
+whose alpha vanished with nothing on chain naming where it went.
+
+Both are signed with every listed signer key, sorted by recovered signer address
+ascending (a contract requirement), and submitted by the first key, which also
+pays for the transaction.
 """
 import pathlib
 import sys
@@ -111,4 +115,100 @@ def set_validators(
     receipt = w3.eth.wait_for_transaction_receipt(transaction_hash, timeout=60)
     if receipt.status != 1:
         raise ValidatorUpdateError(f"updateValidators failed (tx {transaction_hash.hex()})")
+    return transaction_hash.hex()
+
+
+def write_down_backing(
+    vault_address: str,
+    registry_address: str,
+    signer_private_keys: List[str],
+    token_id: int,
+    minimum_backing: int,
+    *, deadline_secs: int = 3600, rpc_url: str = config.RPC_URL,
+) -> str:
+    """Sign and spend one backing write-down for `token_id`.
+
+    `minimum_backing` is the floor the signers commit to: the call refuses if the
+    vault locates less than this. They acknowledge the loss; the chain sizes it.
+    """
+    from eth_account import Account
+    from web3 import Web3
+
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+    from common import get_web3_connection, load_abi
+
+    w3 = get_web3_connection(rpc_url)
+    vault_address = Web3.to_checksum_address(vault_address)
+    registry_address = Web3.to_checksum_address(registry_address)
+    chain_id = w3.eth.chain_id
+    registry_contract = w3.eth.contract(address=registry_address, abi=load_abi("ValidatorRegistry"))
+    vault_contract = w3.eth.contract(address=vault_address, abi=load_abi("AlphaVault"))
+
+    slots_hash = vault_contract.functions.slotsHash(token_id).call()
+    next_nonce = registry_contract.functions.writeDownNonces(vault_address, token_id).call() + 1
+    deadline = int(time.time()) + deadline_secs
+
+    typed_data = {
+        "types": {
+            "EIP712Domain": [
+                {"name": "name", "type": "string"},
+                {"name": "version", "type": "string"},
+                {"name": "chainId", "type": "uint256"},
+                {"name": "verifyingContract", "type": "address"},
+            ],
+            "BackingWriteDown": [
+                {"name": "vault", "type": "address"},
+                {"name": "tokenId", "type": "uint256"},
+                {"name": "slotsHash", "type": "bytes32"},
+                {"name": "minimumBacking", "type": "uint256"},
+                {"name": "nonce", "type": "uint256"},
+                {"name": "deadline", "type": "uint256"},
+            ],
+        },
+        "primaryType": "BackingWriteDown",
+        "domain": {
+            "name": "AlphaVault ValidatorRegistry",
+            "version": "1",
+            "chainId": chain_id,
+            "verifyingContract": registry_address,
+        },
+        "message": {
+            "vault": vault_address,
+            "tokenId": token_id,
+            "slotsHash": slots_hash,
+            "minimumBacking": minimum_backing,
+            "nonce": next_nonce,
+            "deadline": deadline,
+        },
+    }
+
+    pairs = []
+    for private_key in signer_private_keys:
+        signer = Account.from_key(private_key)
+        signed = Account.sign_typed_data(private_key, full_message=typed_data)
+        pairs.append((signer.address.lower(), bytes(signed.signature)))
+    pairs.sort(key=lambda pair: pair[0])
+    signatures = [signature for _, signature in pairs]
+
+    submitter_private_key = signer_private_keys[0]
+    submitter = Account.from_key(submitter_private_key)
+
+    approval_tuple = (
+        vault_address, token_id, slots_hash, minimum_backing, next_nonce, deadline,
+    )
+    transaction = vault_contract.functions.writeDownBacking(
+        approval_tuple, signatures
+    ).build_transaction(
+        {
+            "from": submitter.address,
+            "nonce": w3.eth.get_transaction_count(submitter.address),
+            "gasPrice": w3.to_wei(10, "gwei"),
+            "chainId": chain_id,
+        }
+    )
+    signed_transaction = w3.eth.account.sign_transaction(transaction, submitter_private_key)
+    transaction_hash = w3.eth.send_raw_transaction(signed_transaction.raw_transaction)
+    receipt = w3.eth.wait_for_transaction_receipt(transaction_hash, timeout=60)
+    if receipt.status != 1:
+        raise ValidatorUpdateError(f"writeDownBacking failed (tx {transaction_hash.hex()})")
     return transaction_hash.hex()

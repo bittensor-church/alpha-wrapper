@@ -297,6 +297,17 @@ class Environment:
             netuid, hotkey_pubkeys, weights,
         )
 
+    def write_down_backing(self, token_id: int, minimum_backing: int = 0) -> None:
+        """Have the attesters acknowledge that `token_id`'s missing backing is gone, via a real
+        2-of-2 EIP-712 approval. The rails refuse a shortfall no chain fact explains - the chain's
+        dust sweep leaves none - so this is what reopens such a token."""
+        validators.write_down_backing(
+            self.vault_address,
+            self.validator_registry_address,
+            [config.DEPLOYER_PRIVATE_KEY, config.WRAPPER_USER_PRIVATE_KEY],
+            token_id, minimum_backing,
+        )
+
     def crash_price_until_below(
         self, netuid: int, hotkey_pubkey: str, hotkey_ss58: str,
         alpha_rao: int, target_tao_rao: int, context: str,

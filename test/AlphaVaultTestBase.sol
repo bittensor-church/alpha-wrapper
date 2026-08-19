@@ -6,6 +6,7 @@ import { AlphaVault } from "src/AlphaVault.sol";
 import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
 import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
+import { IValidatorRegistry } from "src/interfaces/IValidatorRegistry.sol";
 import { MockStaking, CHAIN_MIN_STAKE, CHAIN_MIN_TRANSFER, CHAIN_NOMINATOR_MIN_STAKE } from "./mocks/MockStaking.sol";
 import { MockAddressMapping } from "./mocks/MockAddressMapping.sol";
 import { MockSubnetPrecompile } from "./mocks/MockSubnetPrecompile.sol";
@@ -17,6 +18,10 @@ import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 import { SUBNET_PRECOMPILE } from "src/interfaces/ISubnet.sol";
 
 abstract contract AlphaVaultTestBase is AttestationHelper {
+    /// @dev Storage slot of `AlphaVault._slots`, from `forge inspect AlphaVault storage-layout`.
+    ///      Only `_reanchorRecord` reads it, and it asserts the write landed.
+    uint256 private constant VAULT_SLOTS_STORAGE_SLOT = 8;
+
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
@@ -234,6 +239,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     function _setVaultStake(bytes32 hotkey, uint256 netuid, uint256 amount) internal {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey, _subnetColdkey(netuid), netuid, amount);
+        _reanchorRecord(netuid);
     }
 
     function _setVaultStakes(uint256 netuid, uint256 a, uint256 b, uint256 c) internal returns (uint256 total) {
@@ -241,7 +247,30 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneColdkey, netuid, a);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneColdkey, netuid, b);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneColdkey, netuid, c);
+        _reanchorRecord(netuid);
         total = a + b + c;
+    }
+
+    /// @dev Point the vault's record at what its validators now hold. Sculpting balances through
+    ///      the mock is a test convenience with no on-chain counterpart: the vault's alpha moves
+    ///      only when the vault itself moves it, and every such call re-reads the record before it
+    ///      returns. Skipping this leaves an emptying no chain fact explains, which every rail
+    ///      refuses by design - the tests that want that state write to the mock directly.
+    function _reanchorRecord(uint256 netuid) internal {
+        uint256 tokenId = vault.currentTokenId(netuid);
+        AlphaVault.Slot[] memory slots = vault.recordedSlots(tokenId);
+        uint256 base = uint256(keccak256(abi.encode(keccak256(abi.encode(tokenId, VAULT_SLOTS_STORAGE_SLOT)))));
+        for (uint256 i; i < slots.length; ++i) {
+            vm.store(address(vault), bytes32(base + i * 3 + 2), bytes32(_getVaultStake(slots[i].active, netuid)));
+        }
+        slots = vault.recordedSlots(tokenId);
+        for (uint256 i; i < slots.length; ++i) {
+            assertEq(
+                slots[i].tracked,
+                _getVaultStake(slots[i].active, netuid),
+                "AlphaVault storage layout moved: VAULT_SLOTS_STORAGE_SLOT is stale"
+            );
+        }
     }
 
     // Smallest share count whose pro-rata assets equal `targetAssets` under the share-price cushion.
@@ -285,6 +314,27 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     function _registerSubnet(uint256 netuid, bytes32 hotkey) internal {
         _setValidators(netuid, _hotkeys(hotkey), _weights(10_000));
         _setRegBlock(netuid, 300);
+    }
+
+    function _approval(uint256 tokenId, uint256 minimumBacking)
+        internal
+        view
+        returns (IValidatorRegistry.BackingWriteDown memory)
+    {
+        return IValidatorRegistry.BackingWriteDown({
+            vault: address(vault),
+            tokenId: tokenId,
+            slotsHash: vault.slotsHash(tokenId),
+            minimumBacking: minimumBacking,
+            nonce: registry.writeDownNonces(address(vault), tokenId) + 1,
+            deadline: block.timestamp + 1 days
+        });
+    }
+
+    /// @dev Signs an approval with the quorum the base installs and spends it.
+    function _writeDown(uint256 tokenId, uint256 minimumBacking) internal {
+        IValidatorRegistry.BackingWriteDown memory approval = _approval(tokenId, minimumBacking);
+        vault.writeDownBacking(approval, _sign(_writeDownDigest(registry, approval), signerPks));
     }
 
     function _simulateTaoAwardedOnDissolution(uint256 tokenId, uint256 taoAmount) internal {

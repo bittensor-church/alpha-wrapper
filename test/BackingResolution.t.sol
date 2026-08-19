@@ -156,11 +156,33 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.previewWrap(TOKEN1, 1 ether);
     }
 
-    // -------------------- The chain's own sweep ----------------------------------
+    /// @dev A followed rename leaves the record naming A while its alpha sits under B. If the
+    ///      attesters then name B in its own right, A's slot and B's slot resolve onto one balance
+    ///      and the token would report twice the backing it holds. The set is refused instead, and
+    ///      the attesters clear it by dropping one of the pair.
+    function test_SetNamingBothEndsOfARename_FailsClosed() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        vault.rebalance(NETUID1);
 
-    /// @dev A sweep records no rename and leaves the key owned, so it is recognised without any
-    ///      attestation and without consulting what the position is worth.
-    function test_DustSweep_SelfHeals() public {
+        _setValidators(NETUID1, _hotkeys(hotkey1, hotkey4, hotkey2), _weights(4000, 3000, 3000));
+
+        vm.expectPartialRevert(AlphaVault.HotkeyClaimedTwice.selector);
+        vault.rebalance(NETUID1);
+
+        _setValidators(NETUID1, _hotkeys(hotkey4, hotkey2), _weights(6000, 4000));
+        vault.rebalance(NETUID1);
+        assertTrue(vault.isBackingIntact(TOKEN1), "dropping the retired name clears the collision");
+    }
+
+    // -------------------- Emptyings the chain does not explain -------------------
+
+    /// @dev The chain's dust sweep records nothing at all. Reading that silence as proof of a sweep
+    ///      would be unsound, because a rename leaves the same silence once the old key is
+    ///      registered again and the chain drops the edge: an operator could rename away with the
+    ///      alpha, re-register, and have the vault write the loss off and reprice the token beneath
+    ///      it. So an emptying nothing explains stands, and the attesters settle what happened.
+    function test_EdgeFreeEmptying_FailsClosed() public {
         uint256 netuid = 5;
         _registerSubnet(netuid, hotkey1);
         _depositAndWrap(alice, netuid, 1e7);
@@ -168,49 +190,55 @@ contract BackingResolutionTest is AlphaVaultTestBase {
 
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(netuid), netuid, 0);
 
-        assertTrue(vault.isBackingIntact(tokenId), "an edge-free emptying under a live key is the sweep");
-        vault.rebalance(netuid);
-        assertEq(vault.recordedSlots(tokenId)[0].tracked, 0, "the record settled to the swept state");
-    }
-
-    /// @dev The old value-based rule froze exactly here, because a position swept while cheap stops
-    ///      looking sweep-sized once alpha appreciates. Nothing in the decision reads a price now.
-    function test_DustSweep_StaysHealedAfterAPriceRise() public {
-        uint256 netuid = 5;
-        _registerSubnet(netuid, hotkey1);
-        _depositAndWrap(alice, netuid, 1e7);
-        uint256 tokenId = vault.currentTokenId(netuid);
-
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(netuid), netuid, 0);
-        _setAlphaPrice(netuid, 10e18);
-
-        assertTrue(vault.isBackingIntact(tokenId), "a price move cannot revoke the reading");
+        assertFalse(vault.isBackingIntact(tokenId), "nothing on chain accounts for the emptying");
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
         vault.rebalance(netuid);
     }
 
-    /// @dev A whole position emptied under a live key is the same event at a larger size, and is
-    ///      recognised the same way rather than by how much it was worth.
-    function test_LargeSweep_SelfHeals() public {
+    /// @dev The same silence with the alpha demonstrably alive under another key. The vault has no
+    ///      way to tell this from the case above and does not guess between them.
+    function test_RenameWithNoEdge_FailsClosed() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
+
+        assertFalse(vault.isBackingIntact(TOKEN1), "an unrecorded move is not accounted for");
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.rebalance(NETUID1);
+    }
+
+    /// @dev An earlier value-based rule answered differently as the market moved. Nothing in the
+    ///      decision reads a price, so neither the size of the loss nor the price of alpha touches
+    ///      the verdict.
+    function test_EdgeFreeEmptying_RefusesAtAnyPriceOrSize() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, coldkey, NETUID1, 0);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, coldkey, NETUID1, 0);
+        _setAlphaPrice(NETUID1, 10e18);
 
-        assertTrue(vault.isBackingIntact(TOKEN1), "no rename recorded and the keys still exist");
-        assertEq(vault.totalStake(TOKEN1), 0, "an emptied position reads an honest zero");
-    }
-
-    /// @dev A rename across subnets deletes the old key even where this subnet recorded no lineage,
-    ///      so a vanished owner is the signal that the alpha moved rather than died.
-    function test_RenameWithoutLineage_IsNotMistakenForASweep() public {
-        _depositAndWrap(alice, NETUID1, 30 ether);
-        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
-        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
-
-        assertFalse(vault.isBackingIntact(TOKEN1), "a deleted key means a rename, not a sweep");
+        assertFalse(vault.isBackingIntact(TOKEN1), "a whole position is no better explained than dust");
         vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
         vault.rebalance(NETUID1);
+    }
+
+    /// @dev The way out when the chain really did take the position: the attesters acknowledge it,
+    ///      the record lands on what is left, and the holder's shares retire instead of trapping.
+    function test_SweptPosition_ReopensAfterAWriteDown() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
+        bytes32 coldkey = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, coldkey, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, coldkey, NETUID1, 0);
+
+        _writeDown(TOKEN1, 0);
+
+        assertTrue(vault.isBackingIntact(TOKEN1), "the record re-anchored on the emptied position");
+        assertEq(vault.totalStake(TOKEN1), 0, "an emptied position reads an honest zero");
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        assertEq(vault.totalSupply(TOKEN1), 0, "the shares retire rather than staying trapped");
     }
 
     // -------------------- Recovery by naming where the alpha went ----------------
@@ -500,27 +528,6 @@ contract BackingResolutionTest is AlphaVaultTestBase {
     }
 
     // -------------------- Helpers -------------------------------------------------
-
-    function _approval(uint256 tokenId, uint256 minimumBacking)
-        internal
-        view
-        returns (IValidatorRegistry.BackingWriteDown memory)
-    {
-        return IValidatorRegistry.BackingWriteDown({
-            vault: address(vault),
-            tokenId: tokenId,
-            slotsHash: vault.slotsHash(tokenId),
-            minimumBacking: minimumBacking,
-            nonce: registry.writeDownNonces(address(vault), tokenId) + 1,
-            deadline: block.timestamp + 1 days
-        });
-    }
-
-    /// @dev Signs an approval with the quorum the base installs and spends it.
-    function _writeDown(uint256 tokenId, uint256 minimumBacking) internal {
-        IValidatorRegistry.BackingWriteDown memory approval = _approval(tokenId, minimumBacking);
-        vault.writeDownBacking(approval, _sign(_writeDownDigest(registry, approval), signerPks));
-    }
 
     /// @dev Moves the clone's backing between hotkeys with no vault call and no lineage, standing
     ///      in for a rename this subnet recorded nothing for.

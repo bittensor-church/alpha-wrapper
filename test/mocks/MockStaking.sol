@@ -154,11 +154,6 @@ contract MockStaking {
     }
 
     /// @dev The mock never folds an absent entry to self; the caller does, matching the chain.
-    /// @dev The chain's sweep leaves ownership alone; a rename across subnets deletes it.
-    function getHotkeyOwner(bytes32 hotkey) external view returns (bool, bytes32) {
-        return (!hotkeyDeleted[hotkey], hotkeyDeleted[hotkey] ? bytes32(0) : bytes32(uint256(1)));
-    }
-
     function getHotkeySuccessor(bytes32 hotkey, uint16 netuid) external view returns (bool, bytes32) {
         return (_successorSet[hotkey][netuid], _successor[hotkey][netuid]);
     }

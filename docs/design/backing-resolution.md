@@ -28,31 +28,36 @@ that it cannot always be answered.
 
 ## What the chain tells us
 
-Two facts are recorded, and neither involves a price:
+One fact is recorded, and it involves no price:
 
 **A rename leaves a lineage edge.** `swap_hotkey` writes
 `HotkeySuccessor(netuid, old) -> new`. The per-subnet path records it
 unconditionally; the global path records it for every subnet where the old key
 was a member.
 
-**A global rename removes the old key's owner.** `Owner::<T>::remove(old_hotkey)`.
-The per-subnet path leaves ownership in place.
+**The edge is readable, not permanent.** The chain clears a key's outgoing
+successor whenever that key becomes live again - `clear_stale_hotkey_successor`
+runs on both UID replacement and append - and again whenever the key is written
+as a swap destination. Subtensor documents tip walks as advisory for this
+reason.
 
-**The dust sweep does neither.** It calls
-`decrease_stake_for_hotkey_and_coldkey_on_subnet` and touches no lineage and no
-ownership.
+**The dust sweep records nothing.** It calls
+`decrease_stake_for_hotkey_and_coldkey_on_subnet` and touches no lineage.
 
-The two rename paths differ in complementary ways, so between them every rename
-trips at least one signal:
+So an edge is evidence and its absence is not:
 
-| Event | Lineage edge | Owner removed |
-|---|---|---|
-| Rename, one subnet | always | no |
-| Rename, all subnets, key was a member | yes | yes |
-| Rename, all subnets, key had deregistered | no | yes |
-| Dust sweep | no | no |
+| Event | Edge readable afterwards |
+|---|---|
+| Rename, one subnet | yes, until the old key is registered again |
+| Rename, all subnets, key was a member | yes, same caveat |
+| Rename, all subnets, key had deregistered | no |
+| Dust sweep | no |
 
-"Neither signal" is therefore a sound reading of "the chain took it".
+An operator can therefore rename away and register the old key again, leaving
+the chain looking exactly as it does after a sweep. A design that read that
+silence as "the chain took it" would write off alpha the operator still holds,
+and reprice the token below its real backing on the way. The vault follows the
+edge where there is one and holds the expectation where there is not.
 
 ## Why value is the wrong signal
 
@@ -156,10 +161,14 @@ For each recorded slot where `balance + slack < tracked`:
 |---|---|---|
 | Edge from `active`, successor holds the expectation, unclaimed | renamed, reachable | plan `active = successor` |
 | Edge, successor short, or already claimed | moved, out of reach | add to `missing` |
-| No edge, `active` no longer owned | moved without lineage | add to `missing` |
-| No edge, `active` still owned | the chain took it | accept; the settle re-anchors |
+| No edge | nothing on chain explains it | add to `missing` |
 
-The last row is the sweep, and it self-heals: no attester, no price, no delay.
+The first row is the ordinary validator rename, and it is the one case that
+clears itself: no attester, no price, no delay. It is also the common one, which
+is why it is the case worth automating. Everything else waits for a recovery
+step, the chain's own dust sweep included - no on-chain fact separates a sweep
+from a rename whose edge has since been cleared, so the vault keeps the
+expectation and lets the attesters settle what happened.
 
 The vault follows at most one edge per operation. Renames of a registered key
 are rate-limited to one per subnet per day, and each clean operation persists
@@ -259,7 +268,7 @@ instead.
 | State | Cleared by | Needs anyone? |
 |---|---|---|
 | Rename the vault can follow | planning `active = successor` | no |
-| Dust sweep | accepted; the settle re-anchors | no |
+| Dust sweep | write-down approval | special attestation |
 | Rename it cannot follow, alpha findable | attesters naming the key | ordinary attestation |
 | Alpha genuinely gone | write-down approval | special attestation |
 | Stake parked under an unowned key | claiming the hotkey on chain | anyone, permissionless |
@@ -274,7 +283,10 @@ No path ends in a token that cannot be unstuck.
 - Each key satisfies at most one recorded expectation.
 - Every staking call targets `active`, never a retired `logical` predecessor.
 - An ordinary registry update cannot lower a recorded expectation.
-- A rename edge is never reclassified as a sweep.
+- Silence is never read as evidence: only an edge the chain still shows may move
+  a recorded expectation.
+- Two recorded slots never resolve onto one key. A set that would make them
+  collide is refused rather than priced.
 - Storage is written only from a fully valid plan, and records post-move
   balances actually read back.
 - Views and mutating paths consume one plan, so they agree on what the record
@@ -282,8 +294,7 @@ No path ends in a token that cannot be unstuck.
   where the alpha went as soon as it is published, while spending one is
   reserved to `rebalance`, so until that call the quote stands and the other
   rails refuse.
-- Only a holder withdrawal, an accepted sweep, or a bound write-down may lower
-  recorded backing.
+- Only a holder withdrawal or a bound write-down may lower recorded backing.
 
 ## Carried over from PR #42
 
@@ -302,8 +313,10 @@ test bank.
    on the successor.
 2. Settle after `A -> B`, then `B -> C` with the registry still naming `A`: all
    paths operate on `C` with no manual intervention.
-3. Dust sweep: self-heals with no attestation, and stays self-healing after the
-   alpha price rises.
+3. Dust sweep: fails closed at any alpha price, then clears through a
+   write-down. A rename whose edge the chain has since cleared behaves
+   identically, which is the point - the vault cannot tell them apart and does
+   not guess.
 4. Rename followed by a sweep at the successor: fails closed, then clears
    through a write-down.
 5. Rotation drops `A`, nothing settles, then `A -> X -> Y`: the stale rotation
@@ -318,6 +331,9 @@ test bank.
     zero is reclaimable on both rails.
 11. Sets that reorder, grow and shrink while `logical` and `active` differ:
     weights stay with the intended validators and active keys stay unique.
+12. A set naming both a slot's `logical` and the `active` its rename moved to:
+    refused before any balance is read, and cleared by the attesters dropping
+    one of the pair.
 
 ## Sizing
 
