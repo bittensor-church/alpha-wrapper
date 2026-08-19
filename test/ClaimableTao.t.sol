@@ -330,6 +330,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         _depositAndWrap(alice, NETUID1, seed);
         _simulateTaoAwardedOnDissolution(TOKEN1, 5 ether);
         _writeDown(TOKEN1, 0);
+        vm.warp(vault.depositsOpenFrom(TOKEN1));
         _depositAndWrap(bob, NETUID1, seed);
         assertLe(vault.totalSupply(TOKEN1), 1e45);
 
@@ -344,6 +345,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
         _simulateTaoAwardedOnDissolution(TOKEN1, 5 ether);
         _writeDown(TOKEN1, 0);
+        vm.warp(vault.depositsOpenFrom(TOKEN1));
 
         bytes32 chosen = vault.getCurrentValidators(NETUID1)[0];
         _simulateAlphaDeposit(bob, NETUID1, DEPOSIT);
