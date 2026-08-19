@@ -7,6 +7,10 @@ function is either open to everyone or acts only on the caller's own
 balance and mailbox. Its code and registry address are final at
 deployment.
 
+Recovering alpha the vault has lost sight of is permissionless too: anyone
+may point a position at a key holding its stake, because only the vault's
+own account can put stake there, so recognising it can only add backing.
+
 The only privileged parties live in `ValidatorRegistry`:
 
 - The signers, threshold-of-N, choose validator sets and weights per
@@ -65,11 +69,16 @@ over several sales.
   position while a successor subnet on the same netuid dissolves
   ([edge-cases.md](edge-cases.md)).
 - If the chain takes a position's stake and leaves no record of where it
-  went, deposits and both exits stay closed until a quorum signs the loss
-  off, and an unresponsive quorum keeps them closed indefinitely. The
-  alternative is to assume a loss and reprice the position, which would
-  hand value away whenever the alpha was really still out there. TAO
-  already credited to holders stays claimable while a position waits.
+  went, new deposits stay closed until someone finds the alpha or a quorum
+  signs the loss off. Holders are not shut in: exits pay out of whatever
+  the vault can locate, mailbox deposits stay reclaimable, and credited
+  TAO stays claimable throughout. Leaving while a position is short does
+  forfeit a share of anything recovered later, which is the cost of taking
+  an honest price early.
+- A write-down that is wrong, and that nobody challenges inside its
+  24-hour window, dilutes the existing holders once the alpha resurfaces.
+  Anyone can prevent that by pointing the vault at the key holding it,
+  which requires somebody to be watching.
 - Amounts below the chain's minimum stake size can leave the stake split
   drifted from target weights; share value is unaffected.
 - A partial `unwrapForTao` can fill short and refund the unsold part as

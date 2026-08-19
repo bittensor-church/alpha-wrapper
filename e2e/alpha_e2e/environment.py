@@ -308,6 +308,13 @@ class Environment:
             token_id, minimum_backing,
         )
 
+    def deposits_open_from(self, token_id: int) -> int:
+        """Unix time at which deposits resume after an acknowledged loss; 0 when none is
+        outstanding. Exits never wait on it."""
+        return int(chain.cast_call(
+            self.vault_address, "depositsOpenFrom(uint256)(uint256)", token_id,
+        ))
+
     def crash_price_until_below(
         self, netuid: int, hotkey_pubkey: str, hotkey_ss58: str,
         alpha_rao: int, target_tao_rao: int, context: str,

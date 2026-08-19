@@ -175,23 +175,52 @@ are rate-limited to one per subnet per day, and each clean operation persists
 the new `active`, so a longer trail is walked one hop per call rather than in a
 loop.
 
+## What a shortfall actually closes
+
+Only deposits. Minting against an understated position is the one direction the
+gap can be exploited from, so `wrap` waits. Everything else carries on:
+
+| | While a shortfall stands |
+|---|---|
+| Deposits | refused |
+| Both exits | open, paid out of the located total |
+| Quotes for exits | the located total, the number the exit pays |
+| Alpha parked in a mailbox | reclaimable |
+| Credited TAO | claimable |
+
+An exit paid out of what the vault can locate can only ever shortchange the
+caller who asked for it, so there is nobody to protect by refusing it, and
+refusing would shut holders in over a loss they did not cause.
+
+This puts one requirement on the settle. A withdrawal re-reads the record from
+the chain, which would file the loss as an ordinary balance change, erase it,
+and reopen deposits at the lowered price: the first withdrawal quietly
+performing the write-off that the rest of this design exists to require
+signatures for. So the plan tells the settle which slots it could not account
+for, and those keep their expectation.
+
 ## Recovery
 
 `missing` clears two ways.
 
-### Located
+### Found
 
-The attesters name where the alpha went, and the keys they have added since the
-vault last settled hold what the record cannot find:
+Anyone points a short slot at the key actually holding its alpha:
 
 ```
-attestedSince && adopted + slack >= missing
+recoverStray(tokenId, slotIndex, hotkey)
 ```
 
-`adopted` is the stake under union entries past the recorded slots — exactly the
-keys carrying the attesters' signature. A registry nonce that moved for an
-unrelated update authorizes nothing, because it names nothing. This is their
-ordinary job and grants no new power.
+No quorum, no delay. That is safe by construction rather than by permission:
+only the subnet clone can stake under its own coldkey, so a balance found there
+is already holders' backing, and moving a slot onto it can only raise the
+located total. There is nothing in it for a caller to take, which is exactly why
+it should not wait on a signing ceremony: the person who spots the discrepancy
+can act on it themselves.
+
+Locating the key off chain is a scan of the subnet's hotkeys against the clone's
+coldkey. That same scan is what lets the attesters establish that alpha is
+genuinely gone before signing the other door.
 
 ### Written down
 
@@ -230,16 +259,26 @@ Three gates apply at execution:
 1. The token must independently be in an unexplained-shortfall state. A healthy
    position cannot be written down, and no approval can be pre-authorized
    against a future loss.
-2. The record re-anchors to **exactly what the vault can locate**. The signers
-   authorize *that* a write-down happens; the chain decides *how much*. They
-   have no discretion over the amount. Re-anchoring lowers each expectation and
-   keeps every slot: rewriting the record to the attested set instead would drop
-   any validator the attesters had dropped meanwhile, alpha and all, and that
-   alpha is part of the total the signers were shown.
+2. The record is **left standing**. An acknowledgement says deposits may
+   resume; it does not say the alpha stopped existing. Erasing each slot's
+   expectation would put a premature acknowledgement beyond recovery, because
+   `recoverStray` needs a slot that still knows what it is owed. The first
+   deposit after the window settles the record onto what is really there.
 3. The located total must be at least `minimumBacking`, or execution refuses.
 
 Anyone may submit an approval, as with set attestations, so no new actor
 appears.
+
+Deposits then wait out a **24-hour challenge window**. Anyone who can still find
+the alpha may `recoverStray` during it, which ends the window along with the
+shortfall. The window costs holders nothing, since exits, mailbox reclaims and
+TAO claims never stop, so it falls only on new money. The asymmetry argues for
+being generous with it: too short and a premature acknowledgement dilutes
+existing holders permanently, too long and deposits merely wait.
+
+An earlier draft rejected a timelock here, on the grounds that a warning is
+useless while exits are frozen. Exits are no longer frozen, so the window now
+has an audience that can act on it.
 
 ## What this trusts, stated plainly
 
@@ -270,11 +309,12 @@ instead.
 
 | State | Cleared by | Needs anyone? |
 |---|---|---|
-| Rename the vault can follow | planning `active = successor` | no |
-| Dust sweep | write-down approval | special attestation |
-| Rename it cannot follow, alpha findable | attesters naming the key | ordinary attestation |
-| Alpha genuinely gone | write-down approval | special attestation |
+| Hotkey swap the vault can follow | planning `active = successor` | no |
+| Hotkey swap it cannot follow, alpha findable | `recoverStray` | anyone, permissionless |
+| Dust sweep, or alpha genuinely gone | write-down approval, then the window | special attestation |
 | Stake parked under an unowned key | claiming the hotkey on chain | anyone, permissionless |
+
+Holders can leave in every row, including while a row is still unresolved.
 
 No path ends in a token that cannot be unstuck.
 
@@ -295,12 +335,14 @@ No path ends in a token that cannot be unstuck.
   the attesters drop one of the pair.
 - Storage is written only from a fully valid plan, and records post-move
   balances actually read back.
-- Views and mutating paths consume one plan, so they agree on what the record
-  accounts for. They part on one point: a view honours an attestation naming
-  where the alpha went as soon as it is published, while spending one is
-  reserved to `rebalance`, so until that call the quote stands and the other
-  rails refuse.
-- Only a holder withdrawal or a bound write-down may lower recorded backing.
+- Views and mutating paths consume one plan and agree without caveat. An exit's
+  quote is the number that exit pays; a deposit's quote refuses on the same
+  terms the deposit does.
+- A withdrawal never lowers an expectation the plan could not account for.
+  Only a bound write-down does that, and only by letting the next deposit
+  settle it.
+- Only a holder withdrawal, or a bound write-down and the deposit that follows
+  it, may lower recorded backing.
 
 ## Carried over from PR #42
 

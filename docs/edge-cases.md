@@ -86,12 +86,17 @@ becomes claimable as described below. What the vault cannot do is tell
 that apart from a validator quietly moving the alpha somewhere else: the
 chain records nothing either way, and it stops showing a rename's trail
 once the old name is registered again. Guessing wrong would price the
-position below what it really holds, so the vault holds it closed and
-waits for the attesters to say which happened
-([attester-guide.md](attester-guide.md)). Deposits and both exits pause
-until they do, and stay paused for as long as the attesters take. TAO
-already credited to holders stays claimable throughout - a pause never
-reaches money the vault has set aside for you.
+position below what it really holds, so the vault stops taking new
+deposits until someone establishes which happened. If the alpha is
+findable, anyone can point the vault at the key holding it and deposits
+reopen at once. If it is genuinely gone, the attesters acknowledge it and
+deposits resume a day later
+([attester-guide.md](attester-guide.md)).
+
+You are never shut in while that runs. Exits pay out of whatever the vault
+can locate, a deposit still sitting in a mailbox stays reclaimable, and
+TAO already credited to you stays claimable. Leaving while a position is
+short does forfeit your share of anything recovered afterwards.
 
 ## Stray TAO
 

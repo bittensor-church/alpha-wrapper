@@ -84,17 +84,14 @@ def test_root_sweep_tao_becomes_claimable(env):
         except Exception as restore_error:  # noqa: BLE001
             print(f"  WARNING: dust threshold not restored to {previous_factor}: {restore_error}")
 
-    # A sweep leaves nothing on chain naming where the alpha went, and a rename whose edge the
-    # chain has since cleared looks identical, so the vault refuses to guess and holds the
-    # expectation. The attesters acknowledge the loss against what the sweep left behind, which
-    # reopens the rails.
-    if not env.backing_intact(token_id):
-        located = env.vault_total_stake(token_id)
-        # A floor of zero, not `located`: the clearing pass is asynchronous, so backing read in one
-        # call can be lower by the next transaction and the approval would refuse for that alone.
-        env.write_down_backing(token_id, 0)
-        assert env.backing_intact(token_id), "the write-down did not re-anchor the record"
-        print(f"  Attesters wrote the backing down to the {located} alpha RAO the sweep left")
+    # A sweep leaves nothing on chain naming where the alpha went, and a hotkey swap whose edge the
+    # chain has since cleared looks identical, so the vault will not guess and holds the
+    # expectation. What it must not do is shut the holder in over it: the exit below runs with the
+    # shortfall standing and no attester involved.
+    swept_short = not env.backing_intact(token_id)
+    if swept_short:
+        print("  Position reads short by design; exiting anyway against the located "
+              f"{env.vault_total_stake(token_id)} alpha RAO")
 
     # The clearing pass empties the vault's position but its shares remain outstanding. How
     # empty depends on the runtime build: an exactly-zero position retires shares through the
@@ -111,3 +108,11 @@ def test_root_sweep_tao_becomes_claimable(env):
             "unwrapForTao(uint256,uint256,uint256)", token_id, all_shares, 0,
         )
     assert env.vault_total_supply(token_id) == 0, "cleanup left outstanding shares"
+
+    # Only new deposits wait on the attesters. Acknowledging the loss starts the window they wait
+    # out; the approval is a real 2-of-2 EIP-712 message, signed and spent against the live chain.
+    if swept_short:
+        env.write_down_backing(token_id, 0)
+        opens_from = env.deposits_open_from(token_id)
+        assert opens_from > 0, "the acknowledgement did not start the deposit window"
+        print(f"  Attesters acknowledged the loss; deposits reopen at {opens_from}")

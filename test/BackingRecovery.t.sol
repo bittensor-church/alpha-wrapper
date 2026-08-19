@@ -83,6 +83,45 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
     }
 
+    function test_RevertWhen_RecoveringOntoAKeyHoldingNothing() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+
+        vm.expectPartialRevert(AlphaVault.NothingStrayUnder.selector);
+        vault.recoverStray(TOKEN1, 0, hotkey5);
+    }
+
+    function test_RevertWhen_RecoveringOntoAKeyAnotherSlotHolds() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+
+        vm.expectPartialRevert(AlphaVault.HotkeyClaimedTwice.selector);
+        vault.recoverStray(TOKEN1, 0, hotkey2);
+    }
+
+    /// @dev A slot that is not short has nothing to recover, so pointing it elsewhere would move
+    ///      backing between slots rather than find any.
+    function test_RevertWhen_RecoveringOntoAHealthySlot() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+
+        vm.expectRevert(AlphaVault.BackingIntact.selector);
+        vault.recoverStray(TOKEN1, 1, hotkey4);
+    }
+
+    /// @dev The key has to cover what the slot is owed. A partial find leaves the position short,
+    ///      and accepting it would report the rest as backing that is not there.
+    function test_RevertWhen_TheFoundKeyDoesNotCoverTheSlot() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        bytes32 coldkey = _subnetColdkey(NETUID1);
+        uint256 owed = _getVaultStake(hotkey1, NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, coldkey, NETUID1, owed / 2);
+
+        vm.expectPartialRevert(AlphaVault.NothingStrayUnder.selector);
+        vault.recoverStray(TOKEN1, 0, hotkey4);
+    }
+
     // -------------------- Recovery by acknowledging the loss ---------------------
 
     /// @dev The acknowledgement does not touch the record - it opens the deposit gate, and only

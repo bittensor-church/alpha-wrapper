@@ -62,17 +62,19 @@ under one stays reclaimable by its owner.
 ## Acknowledging a loss
 
 Sometimes the vault finds less alpha under a validator than it left
-there, and nothing on chain says where it went. It stops pricing and
-moving that position until someone accounts for the difference, because
-guessing wrong hands value from one set of holders to another. You settle
-it one of two ways.
+there, and nothing on chain says where it went. It stops taking new
+deposits into that position until someone establishes what happened,
+because pricing it wrong hands value from one set of holders to another.
 
-If the alpha is findable, name the key holding it in an ordinary
-attestation. The next `rebalance` adopts it and the position reopens with
-nothing further from you.
+Most of the time this is not yours to solve. If the alpha is findable,
+anyone at all can call the vault's `recoverStray` and point the position
+at the key holding it - no signature, no delay, and nothing further from
+you. Finding it is a scan of the subnet's hotkeys against the vault's own
+coldkey.
 
-If it is genuinely gone - the chain sold a slice that fell below its dust
-line, say - co-sign a write-down:
+You are needed only when that scan comes back empty, because the chain
+sold a slice that fell below its dust line and no key holds it any more.
+Then co-sign a write-down:
 
     struct BackingWriteDown {
         address vault;           // the vault this approval is for
@@ -85,15 +87,21 @@ line, say - co-sign a write-down:
 
 Signed over the same domain as an attestation, and submitted by anyone to
 the vault's `writeDownBacking`. You acknowledge that a loss happened; you
-do not decide its size. The position re-anchors to exactly what the chain
-reports it still holds, and `minimumBacking` only lets you refuse if less
-than that survived. `slotsHash` ties the approval to the record you
-looked at, so it stops being valid the moment anything moves. The vault
-refuses a write-down against a position that can account for itself.
+do not decide its size, and you do not erase it. The position keeps its
+record of what it is owed, so if you turn out to be wrong, anyone can
+still recover it afterwards. `minimumBacking` lets you refuse if less
+survived than you expected, and `slotsHash` ties the approval to the
+record you looked at, so it stops being valid the moment anything moves.
+The vault refuses a write-down against a position that can account for
+itself.
 
-Until one of the two lands, that position takes no deposits and allows no
-exits, so a position waiting on an unreachable quorum stays shut. TAO
-already credited to holders stays claimable regardless.
+Deposits then wait 24 hours before resuming, so anyone who can still find
+the alpha has time to say so. Do the scan before you sign; that window is
+the safety net, not the check.
+
+Throughout all of this holders can still leave. Exits pay out of whatever
+the vault can locate, mailbox deposits stay reclaimable, and credited TAO
+stays claimable. Only new deposits wait on you.
 
 ## Signer set changes
 
