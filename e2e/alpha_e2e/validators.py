@@ -7,7 +7,6 @@ transaction.
 """
 import pathlib
 import sys
-import time
 from typing import List
 
 from . import config
@@ -25,7 +24,7 @@ def set_validators(
     netuid: int,
     hotkeys: List[str],
     weights: List[int],
-    *, deadline_secs: int = 3600, rpc_url: str = config.RPC_URL,
+    *, rpc_url: str = config.RPC_URL,
 ) -> str:
     from eth_account import Account
     from web3 import Web3
@@ -47,7 +46,6 @@ def set_validators(
 
     current_nonce = registry_contract.functions.nonces(netuid).call()
     next_nonce = current_nonce + 1
-    deadline = int(time.time()) + deadline_secs
 
     hotkey_bytes = [bytes.fromhex(hotkey.removeprefix("0x")) for hotkey in hotkeys]
 
@@ -64,7 +62,6 @@ def set_validators(
                 {"name": "hotkeys", "type": "bytes32[]"},
                 {"name": "weights", "type": "uint256[]"},
                 {"name": "nonce", "type": "uint256"},
-                {"name": "deadline", "type": "uint256"},
             ],
         },
         "primaryType": "WeightAttestation",
@@ -79,7 +76,6 @@ def set_validators(
             "hotkeys": hotkey_bytes,
             "weights": weights,
             "nonce": next_nonce,
-            "deadline": deadline,
         },
     }
 
@@ -94,7 +90,7 @@ def set_validators(
     submitter_private_key = signer_private_keys[0]
     submitter = Account.from_key(submitter_private_key)
 
-    attestation_tuple = (netuid, hotkey_bytes, weights, next_nonce, deadline)
+    attestation_tuple = (netuid, hotkey_bytes, weights, next_nonce)
     transaction_nonce = w3.eth.get_transaction_count(submitter.address)
     transaction = registry_contract.functions.updateValidators(
         attestation_tuple, signatures

@@ -44,14 +44,13 @@ contract ValidatorRegistryTest is AttestationHelper {
         registry = new ValidatorRegistry(admin, init, 2);
     }
 
-    function _att(uint256 netuid, uint256 len, uint256 nonce, uint256 deadline)
+    function _att(uint256 netuid, uint256 len, uint256 nonce)
         private
         view
         returns (ValidatorRegistry.WeightAttestation memory att)
     {
         att.netuid = netuid;
         att.nonce = nonce;
-        att.deadline = deadline;
         att.hotkeys = new bytes32[](len);
         att.weights = new uint256[](len);
         if (len == 1) {
@@ -74,12 +73,12 @@ contract ValidatorRegistryTest is AttestationHelper {
 
     /// @dev Attestation over `count` distinct hotkeys, evenly weighted with the rounding remainder
     ///      on the last. Use for set sizes the fixed `_att` fixtures above do not cover.
-    function _attN(uint256 netuid, uint256 count, uint256 nonce, uint256 deadline)
+    function _attN(uint256 netuid, uint256 count, uint256 nonce)
         private
         pure
         returns (ValidatorRegistry.WeightAttestation memory)
     {
-        return _buildAttestation(netuid, _hotkeysFrom("validator", count), _evenWeights(count), nonce, deadline);
+        return _buildAttestation(netuid, _hotkeysFrom("validator", count), _evenWeights(count), nonce);
     }
 
     /// @dev Sign with each privkey in the order given. Caller is responsible for ordering
@@ -348,7 +347,7 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_Update_PersistsTwoValidators() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 2, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 2, 1);
         bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
 
         vm.expectEmit(true, true, true, true);
@@ -366,10 +365,10 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_Update_ShrinkLeavesNoStaleTail() public {
-        ValidatorRegistry.WeightAttestation memory wide = _attN(SN1, MAX_VALIDATORS, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory wide = _attN(SN1, MAX_VALIDATORS, 1);
         registry.updateValidators(wide, _sign(wide, _pks2(PK2, PK1)));
 
-        ValidatorRegistry.WeightAttestation memory narrow = _attN(SN1, 3, 2, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory narrow = _attN(SN1, 3, 2);
         registry.updateValidators(narrow, _sign(narrow, _pks2(PK2, PK1)));
 
         assertEq(registry.nonces(SN1), 2);
@@ -383,10 +382,10 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_Update_GrowsToFullValidatorCap() public {
-        ValidatorRegistry.WeightAttestation memory narrow = _attN(SN1, 1, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory narrow = _attN(SN1, 1, 1);
         registry.updateValidators(narrow, _sign(narrow, _pks2(PK2, PK1)));
 
-        ValidatorRegistry.WeightAttestation memory wide = _attN(SN1, MAX_VALIDATORS, 2, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory wide = _attN(SN1, MAX_VALIDATORS, 2);
         registry.updateValidators(wide, _sign(wide, _pks2(PK2, PK1)));
 
         (bytes32[] memory hks, uint16[] memory wts) = registry.getValidators(SN1);
@@ -401,10 +400,10 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_Update_OverwritesPreviousAttestationOnGrow() public {
-        ValidatorRegistry.WeightAttestation memory att1 = _att(SN1, 1, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att1 = _att(SN1, 1, 1);
         registry.updateValidators(att1, _sign(att1, _pks2(PK2, PK1)));
 
-        ValidatorRegistry.WeightAttestation memory att2 = _att(SN1, 3, 2, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att2 = _att(SN1, 3, 2);
         registry.updateValidators(att2, _sign(att2, _pks2(PK2, PK1)));
 
         assertEq(registry.nonces(SN1), 2);
@@ -418,13 +417,13 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_Update_NetuidsHaveIndependentState() public {
-        ValidatorRegistry.WeightAttestation memory a1 = _att(SN1, 2, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory a1 = _att(SN1, 2, 1);
         registry.updateValidators(a1, _sign(a1, _pks2(PK2, PK1)));
 
-        ValidatorRegistry.WeightAttestation memory a2 = _att(SN2, 3, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory a2 = _att(SN2, 3, 1);
         registry.updateValidators(a2, _sign(a2, _pks2(PK2, PK1)));
 
-        ValidatorRegistry.WeightAttestation memory a3 = _att(SN1, 1, 2, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory a3 = _att(SN1, 1, 2);
         registry.updateValidators(a3, _sign(a3, _pks2(PK2, PK1)));
 
         assertEq(registry.nonces(SN1), 2);
@@ -450,7 +449,7 @@ contract ValidatorRegistryTest is AttestationHelper {
 
     function testFuzz_Update_PersistsAnySetSize(uint256 count) public {
         count = bound(count, 1, MAX_VALIDATORS);
-        ValidatorRegistry.WeightAttestation memory att = _attN(SN1, count, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _attN(SN1, count, 1);
 
         registry.updateValidators(att, _sign(att, _pks2(PK2, PK1)));
 
@@ -471,10 +470,10 @@ contract ValidatorRegistryTest is AttestationHelper {
         firstCount = bound(firstCount, 1, MAX_VALIDATORS);
         secondCount = bound(secondCount, 1, MAX_VALIDATORS);
 
-        ValidatorRegistry.WeightAttestation memory first = _attN(SN1, firstCount, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory first = _attN(SN1, firstCount, 1);
         registry.updateValidators(first, _sign(first, _pks2(PK2, PK1)));
 
-        ValidatorRegistry.WeightAttestation memory second = _attN(SN1, secondCount, 2, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory second = _attN(SN1, secondCount, 2);
         registry.updateValidators(second, _sign(second, _pks2(PK2, PK1)));
 
         (bytes32[] memory hks, uint16[] memory wts) = registry.getValidators(SN1);
@@ -490,7 +489,6 @@ contract ValidatorRegistryTest is AttestationHelper {
         ValidatorRegistry.WeightAttestation memory att;
         att.netuid = SN1;
         att.nonce = 1;
-        att.deadline = block.timestamp + 60;
         att.hotkeys = new bytes32[](0);
         att.weights = new uint256[](0);
         bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
@@ -499,7 +497,7 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_RevertWhen_UpdateTooManyHotkeys() public {
-        ValidatorRegistry.WeightAttestation memory att = _attN(SN1, MAX_VALIDATORS + 1, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _attN(SN1, MAX_VALIDATORS + 1, 1);
         bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
         vm.expectRevert(ValidatorRegistry.InvalidValidatorCount.selector);
         registry.updateValidators(att, sigs);
@@ -509,7 +507,6 @@ contract ValidatorRegistryTest is AttestationHelper {
         ValidatorRegistry.WeightAttestation memory att;
         att.netuid = SN1;
         att.nonce = 1;
-        att.deadline = block.timestamp + 60;
         att.hotkeys = new bytes32[](3);
         att.weights = new uint256[](2);
         att.hotkeys[0] = hk1;
@@ -523,21 +520,21 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_RevertWhen_NetuidExceedsUint16Max() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(uint256(type(uint16).max) + 1, 1, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(uint256(type(uint16).max) + 1, 1, 1);
         bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
         vm.expectRevert(ValidatorRegistry.NetuidOutOfRange.selector);
         registry.updateValidators(att, sigs);
     }
 
     function test_Update_AcceptsNetuidAtUint16Max() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(uint256(type(uint16).max), 1, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(uint256(type(uint16).max), 1, 1);
         bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
         registry.updateValidators(att, sigs);
         assertEq(registry.nonces(uint256(type(uint16).max)), 1);
     }
 
     function test_RevertWhen_HotkeyAtSlot0IsZero() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 2, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 2, 1);
         att.hotkeys[0] = bytes32(0);
         bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
         vm.expectRevert(ValidatorRegistry.ZeroValue.selector);
@@ -545,7 +542,7 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_RevertWhen_HotkeyAtSlot1IsZero() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 2, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 2, 1);
         att.hotkeys[1] = bytes32(0);
         bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
         vm.expectRevert(ValidatorRegistry.ZeroValue.selector);
@@ -553,7 +550,7 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_RevertWhen_WeightAtSlot0IsZero() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 3, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 3, 1);
         att.weights[0] = 0;
         att.weights[1] = 5_000;
         att.weights[2] = 5_000;
@@ -563,7 +560,7 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_RevertWhen_WeightAtMiddleSlotIsZero() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 3, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 3, 1);
         att.weights[0] = 3_000;
         att.weights[1] = 0;
         att.weights[2] = 7_000;
@@ -573,7 +570,7 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_RevertWhen_HotkeysContainDuplicate() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 3, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 3, 1);
         att.hotkeys[2] = hk1;
         bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
         vm.expectRevert(ValidatorRegistry.DuplicateValue.selector);
@@ -581,7 +578,7 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_RevertWhen_WeightsSumBelowBpsBase() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 2, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 2, 1);
         att.weights[0] = 6_000;
         att.weights[1] = 3_999; // sum 9_999
         bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
@@ -590,7 +587,7 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_RevertWhen_WeightsSumAboveBpsBase() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 2, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 2, 1);
         att.weights[0] = 6_000;
         att.weights[1] = 4_001; // sum 10_001
         bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
@@ -599,56 +596,52 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_RevertWhen_NonceLessThanExpected() public {
-        ValidatorRegistry.WeightAttestation memory att1 = _att(SN1, 1, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att1 = _att(SN1, 1, 1);
         registry.updateValidators(att1, _sign(att1, _pks2(PK2, PK1)));
 
-        ValidatorRegistry.WeightAttestation memory att2 = _att(SN1, 1, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att2 = _att(SN1, 1, 1);
         bytes[] memory sigs = _sign(att2, _pks2(PK2, PK1));
         vm.expectRevert(ValidatorRegistry.StaleNonce.selector);
         registry.updateValidators(att2, sigs);
     }
 
     function test_RevertWhen_NonceIsZero() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 0, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 0);
         bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
         vm.expectRevert(ValidatorRegistry.StaleNonce.selector);
         registry.updateValidators(att, sigs);
     }
 
     function test_RevertWhen_NonceSkipsAhead() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 2, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 2);
         bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
         vm.expectRevert(ValidatorRegistry.StaleNonce.selector);
         registry.updateValidators(att, sigs);
     }
 
-    function test_RevertWhen_DeadlineInPast() public {
-        uint256 deadline = block.timestamp + 60;
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 1, deadline);
+    /// @dev Signatures carry no expiry: the subnet's nonce is what ends an attestation's life, and
+    ///      `test_RevertWhen_NonceLessThanExpected` covers the landing that ends it.
+    function testFuzz_Update_AcceptsAfterAnyElapsedTime(uint256 elapsed) public {
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 3, 1);
         bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
-        vm.warp(deadline + 1);
-        vm.expectRevert(ValidatorRegistry.ExpiredAttestation.selector);
-        registry.updateValidators(att, sigs);
-    }
 
-    function test_Update_AcceptsDeadlineEqualToBlockTimestamp() public {
-        uint256 deadline = block.timestamp + 60;
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 1, deadline);
-        bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
-        vm.warp(deadline); // boundary: contract uses `>` not `>=`
+        vm.warp(block.timestamp + bound(elapsed, 0, 100 * 365 days));
         registry.updateValidators(att, sigs);
+
         assertEq(registry.nonces(SN1), 1);
+        (bytes32[] memory hks,) = registry.getValidators(SN1);
+        assertEq(hks.length, 3);
     }
 
     function test_RevertWhen_NoSignaturesProvided() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 1);
         bytes[] memory sigs = new bytes[](0);
         vm.expectRevert(ValidatorRegistry.NotEnoughSignatures.selector);
         registry.updateValidators(att, sigs);
     }
 
     function test_RevertWhen_FewerSignaturesThanThreshold() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 1);
         uint256[] memory pks = new uint256[](1);
         pks[0] = PK1;
         bytes[] memory sigs = _sign(att, pks);
@@ -657,14 +650,14 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_RevertWhen_RecoveredSignerNotInSet() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 1);
         bytes[] memory sigs = _sign(att, _pks2(PK1, PK_UNKNOWN));
         vm.expectRevert(abi.encodeWithSelector(ValidatorRegistry.UnknownSigner.selector, vm.addr(PK_UNKNOWN)));
         registry.updateValidators(att, sigs);
     }
 
     function test_RevertWhen_SignaturesNotSortedByRecoveredAddress() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 1);
         // Intentionally non-ascending: PK1's address > PK2's, so passing (PK1, PK2) breaks order.
         bytes[] memory sigs = _sign(att, _pks2(PK1, PK2));
         vm.expectRevert(ValidatorRegistry.SignersNotSorted.selector);
@@ -672,7 +665,7 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_RevertWhen_SameSignerProvidesTwoSignatures() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 1);
         bytes32 digest = _attestationDigest(registry, att);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(PK1, digest);
         bytes memory sig = abi.encodePacked(r, s, v);
@@ -685,23 +678,23 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_Update_AcceptsExtraValidSignatures() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 1);
         bytes[] memory sigs = _sign(att, _pks3(PK2, PK3, PK1));
         registry.updateValidators(att, sigs);
         assertEq(registry.nonces(SN1), 1);
     }
 
     function test_RevertWhen_ExtraSignatureIsFromUnknownSigner() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 1);
         bytes[] memory sigs = _sign(att, _pks3(PK2, PK1, PK_UNKNOWN));
         vm.expectRevert(abi.encodeWithSelector(ValidatorRegistry.UnknownSigner.selector, vm.addr(PK_UNKNOWN)));
         registry.updateValidators(att, sigs);
     }
 
     /// @dev Sign with the current set, rotate to a new set, then submit. The verify-time
-    ///      `isSigner` check kills the stockpiled attestation regardless of its deadline.
+    ///      `isSigner` check kills the stockpiled attestation.
     function test_RevertWhen_AttestationSignedByRotatedOutSigner() public {
-        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 1, 1);
         bytes[] memory oldSigs = _sign(att, _pks2(PK2, PK1));
 
         address d = vm.addr(0xD);
@@ -720,11 +713,11 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_Update_FirstAttestationWithNonceWinsRace() public {
-        ValidatorRegistry.WeightAttestation memory a1 = _att(SN1, 1, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory a1 = _att(SN1, 1, 1);
         bytes[] memory sigs1 = _sign(a1, _pks2(PK2, PK1));
 
         // Construct an alternative attestation also at nonce 1 with different content
-        ValidatorRegistry.WeightAttestation memory a2 = _att(SN1, 2, 1, block.timestamp + 60);
+        ValidatorRegistry.WeightAttestation memory a2 = _att(SN1, 2, 1);
         bytes[] memory sigs2 = _sign(a2, _pks2(PK2, PK1));
 
         registry.updateValidators(a1, sigs1);
@@ -744,9 +737,9 @@ contract ValidatorRegistryTest is AttestationHelper {
 
     function test_Batch_CommitsAllEntries() public {
         ValidatorRegistry.WeightAttestation[] memory atts = new ValidatorRegistry.WeightAttestation[](3);
-        atts[0] = _att(SN1, 3, 1, block.timestamp + 60);
-        atts[1] = _att(SN2, 2, 1, block.timestamp + 60);
-        atts[2] = _att(100, 1, 1, block.timestamp + 60);
+        atts[0] = _att(SN1, 3, 1);
+        atts[1] = _att(SN2, 2, 1);
+        atts[2] = _att(100, 1, 1);
 
         bytes[][] memory sigs = new bytes[][](3);
         sigs[0] = _sign(atts[0], _pks2(PK2, PK1));
@@ -770,9 +763,9 @@ contract ValidatorRegistryTest is AttestationHelper {
 
     function test_Batch_EmitsValidatorsUpdatedPerEntry() public {
         ValidatorRegistry.WeightAttestation[] memory atts = new ValidatorRegistry.WeightAttestation[](3);
-        atts[0] = _att(SN1, 3, 1, block.timestamp + 60);
-        atts[1] = _att(SN2, 2, 1, block.timestamp + 60);
-        atts[2] = _att(100, 1, 1, block.timestamp + 60);
+        atts[0] = _att(SN1, 3, 1);
+        atts[1] = _att(SN2, 2, 1);
+        atts[2] = _att(100, 1, 1);
 
         bytes[][] memory sigs = new bytes[][](3);
         sigs[0] = _sign(atts[0], _pks2(PK2, PK1));
@@ -793,8 +786,8 @@ contract ValidatorRegistryTest is AttestationHelper {
 
     function test_RevertWhen_BatchAttsAndSigsLengthMismatch() public {
         ValidatorRegistry.WeightAttestation[] memory atts = new ValidatorRegistry.WeightAttestation[](2);
-        atts[0] = _att(SN1, 1, 1, block.timestamp + 60);
-        atts[1] = _att(SN2, 1, 1, block.timestamp + 60);
+        atts[0] = _att(SN1, 1, 1);
+        atts[1] = _att(SN2, 1, 1);
         bytes[][] memory sigs = new bytes[][](1);
         sigs[0] = _sign(atts[0], _pks2(PK2, PK1));
 
@@ -804,9 +797,9 @@ contract ValidatorRegistryTest is AttestationHelper {
 
     function test_Batch_EntriesUseDifferentSignerPairs() public {
         ValidatorRegistry.WeightAttestation[] memory atts = new ValidatorRegistry.WeightAttestation[](3);
-        atts[0] = _att(SN1, 1, 1, block.timestamp + 60);
-        atts[1] = _att(SN2, 1, 1, block.timestamp + 60);
-        atts[2] = _att(100, 1, 1, block.timestamp + 60);
+        atts[0] = _att(SN1, 1, 1);
+        atts[1] = _att(SN2, 1, 1);
+        atts[2] = _att(100, 1, 1);
 
         bytes[][] memory sigs = new bytes[][](3);
         sigs[0] = _sign(atts[0], _pks2(PK2, PK1));
@@ -825,7 +818,7 @@ contract ValidatorRegistryTest is AttestationHelper {
         ValidatorRegistry.WeightAttestation[] memory atts = new ValidatorRegistry.WeightAttestation[](n);
         bytes[][] memory sigs = new bytes[][](n);
         for (uint256 i = 0; i < n; i++) {
-            atts[i] = _att(1000 + i, 3, 1, block.timestamp + 600);
+            atts[i] = _att(1000 + i, 3, 1);
             sigs[i] = _sign(atts[i], _pks2(PK2, PK1));
         }
 
@@ -849,8 +842,8 @@ contract ValidatorRegistryTest is AttestationHelper {
 
     function test_Batch_SameNetuidConsecutiveNoncesAllCommit() public {
         ValidatorRegistry.WeightAttestation[] memory atts = new ValidatorRegistry.WeightAttestation[](2);
-        atts[0] = _att(SN1, 1, 1, block.timestamp + 60);
-        atts[1] = _att(SN1, 2, 2, block.timestamp + 60);
+        atts[0] = _att(SN1, 1, 1);
+        atts[1] = _att(SN1, 2, 2);
 
         bytes[][] memory sigs = new bytes[][](2);
         sigs[0] = _sign(atts[0], _pks2(PK2, PK1));
