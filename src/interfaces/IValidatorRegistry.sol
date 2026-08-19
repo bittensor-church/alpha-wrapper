@@ -5,12 +5,15 @@ pragma solidity ^0.8.20;
 /// @notice Read interface that AlphaVault consumes to learn which validator hotkeys
 ///         to stake under, and in what BPS proportions, for a given subnet.
 interface IValidatorRegistry {
-    /// @notice Signed acknowledgement that a token's backing is gone. `slotsHash` pins the record
-    ///         the signers examined, so an approval cannot be kept back for a later, different loss.
+    /// @notice Signed acknowledgement that a token's backing is gone. `shortfallHash` pins the
+    ///         loss the signers examined - which slots cannot be accounted for and what each is
+    ///         owed - so an approval covers that loss and no other. A different or additional
+    ///         shortfall, whether it appears before the approval is spent or after, is outside
+    ///         what was signed and needs its own.
     struct BackingWriteDown {
         address vault;
         uint256 tokenId;
-        bytes32 slotsHash;
+        bytes32 shortfallHash;
         uint256 minimumBacking;
         uint256 nonce;
         uint256 deadline;

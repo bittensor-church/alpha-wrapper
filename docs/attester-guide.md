@@ -79,7 +79,7 @@ Then co-sign a write-down:
     struct BackingWriteDown {
         address vault;           // the vault this approval is for
         uint256 tokenId;         // the position it applies to
-        bytes32 slotsHash;       // the exact record you examined
+        bytes32 shortfallHash;   // the exact loss you examined
         uint256 minimumBacking;  // least backing you expect to survive
         uint256 nonce;           // orders write-downs for this position
         uint256 deadline;        // submission cutoff, unix seconds
@@ -90,8 +90,10 @@ the vault's `writeDownBacking`. You acknowledge that a loss happened; you
 do not decide its size, and you do not erase it. The position keeps its
 record of what it is owed, so if you turn out to be wrong, anyone can
 still recover it afterwards. `minimumBacking` lets you refuse if less
-survived than you expected, and `slotsHash` ties the approval to the
-record you looked at, so it stops being valid the moment anything moves.
+survived than you expected, and `shortfallHash` ties the approval to the
+loss you looked at: which slots could not be accounted for and what each
+was owed. A different or additional loss is not covered by it, whether it
+appears before you spend the approval or after, and needs its own.
 The vault refuses a write-down against a position that can account for
 itself.
 

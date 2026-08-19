@@ -202,6 +202,62 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.writeDownBacking(approval, sigs);
     }
 
+    /// @dev Nothing about an acknowledgement, pending or matured, may stand between a holder and
+    ///      the door. Only the rails that refuse a shortfall consult it, and only they wait.
+    function test_ExitDuringTheChallengeWindow_IsNotBlocked() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
+        _buildSwapTrail(NETUID1, hotkey1, 2);
+        _writeDown(TOKEN1, 0);
+        assertGt(vault.depositsOpenFrom(TOKEN1), block.timestamp, "the window is running");
+
+        (uint256 quoted,) = vault.previewUnwrap(TOKEN1, shares / 4);
+        assertGt(quoted, 0, "the exit is quoted, not refused");
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice));
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares / 4, 0);
+    }
+
+    /// @dev An approval names one loss. If a second appears between signing and spending, the
+    ///      approval no longer describes what is in front of it and is refused - otherwise an
+    ///      honest signature for slot A could be spent against a loss at B that nobody examined.
+    function test_WriteDown_RefusedOnceASecondLossAppears() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _buildSwapTrail(NETUID1, hotkey1, 2);
+
+        IValidatorRegistry.BackingWriteDown memory approval = _approval(TOKEN1, 0);
+        bytes[] memory sigs = _sign(_writeDownDigest(registry, approval), signerPks);
+
+        _buildSwapTrail(NETUID1, hotkey2, 2);
+
+        vm.expectRevert(AlphaVault.RecordMoved.selector);
+        vault.writeDownBacking(approval, sigs);
+    }
+
+    /// @dev And the same after it is spent. A loss that appears while the window runs was never
+    ///      approved and gets no free ride out of it: the acknowledgement stops applying, so the
+    ///      first call after the window refuses instead of writing both off together.
+    function test_ALossAfterTheWriteDown_IsNotCoveredByIt() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _buildSwapTrail(NETUID1, hotkey1, 2);
+        _writeDown(TOKEN1, 0);
+
+        _buildSwapTrail(NETUID1, hotkey2, 2);
+        vm.warp(vault.depositsOpenFrom(TOKEN1));
+
+        _simulateAlphaDepositHotkey(bob, NETUID1, 1 ether, hotkey3);
+        vm.prank(bob);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.wrap(NETUID1, hotkey3);
+
+        // Naming the whole loss reopens it, which is the point: the signers see what they approve.
+        _writeDown(TOKEN1, 0);
+        vm.warp(vault.depositsOpenFrom(TOKEN1));
+        vm.prank(bob);
+        vault.wrap(NETUID1, hotkey3);
+        assertGt(vault.balanceOf(bob, TOKEN1), 0, "a fresh approval covering both losses lets it in");
+    }
+
     /// @dev The acknowledgement is applied by whichever settling rail runs first. Keyed to deposits
     ///      alone, the permissionless maintenance rail would go on refusing a shortfall that had
     ///      already been acknowledged, with nothing short of a deposit able to clear it.
@@ -274,7 +330,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.writeDownBacking(approval, sigs);
 
         _buildSwapTrail(NETUID1, hotkey2, 2);
-        vm.expectRevert(ValidatorRegistry.StaleNonce.selector);
+        vm.expectRevert(AlphaVault.RecordMoved.selector);
         vault.writeDownBacking(approval, sigs);
     }
 

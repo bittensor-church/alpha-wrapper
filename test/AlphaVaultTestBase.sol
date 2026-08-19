@@ -328,7 +328,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         return IValidatorRegistry.BackingWriteDown({
             vault: address(vault),
             tokenId: tokenId,
-            slotsHash: vault.slotsHash(tokenId),
+            shortfallHash: vault.shortfallHash(tokenId),
             minimumBacking: minimumBacking,
             nonce: registry.writeDownNonces(address(vault), tokenId) + 1,
             deadline: block.timestamp + 1 days

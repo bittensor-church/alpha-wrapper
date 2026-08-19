@@ -48,7 +48,7 @@ abstract contract AttestationHelper is Test {
                 registry.WRITE_DOWN_TYPEHASH(),
                 approval.vault,
                 approval.tokenId,
-                approval.slotsHash,
+                approval.shortfallHash,
                 approval.minimumBacking,
                 approval.nonce,
                 approval.deadline

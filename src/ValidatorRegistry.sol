@@ -23,7 +23,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     /// @dev Signed separately from a validator set, and by its own typehash, so that publishing
     ///      one can never be read as consent for the other.
     bytes32 public constant WRITE_DOWN_TYPEHASH = keccak256(
-        "BackingWriteDown(address vault,uint256 tokenId,bytes32 slotsHash,uint256 minimumBacking,uint256 nonce,uint256 deadline)"
+        "BackingWriteDown(address vault,uint256 tokenId,bytes32 shortfallHash,uint256 minimumBacking,uint256 nonce,uint256 deadline)"
     );
 
     uint16 private constant BPS_BASE = 10_000;
@@ -243,7 +243,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
                     WRITE_DOWN_TYPEHASH,
                     approval.vault,
                     approval.tokenId,
-                    approval.slotsHash,
+                    approval.shortfallHash,
                     approval.minimumBacking,
                     approval.nonce,
                     approval.deadline

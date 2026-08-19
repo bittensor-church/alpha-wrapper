@@ -242,14 +242,26 @@ attestation, sharing no type hash and no nonce with one:
 |---|---|
 | chain id, vault address | replay across deployments |
 | tokenId | applying to another position |
-| hash of the current `(logical, active, tracked)` slots | spending a stale approval on a later, different loss |
+| hash of the shortfall itself: which slots are unaccounted for, and what each is owed | spending the approval on a different or additional loss, before or after |
 | minimum backing that must remain | executing against a state worse than the signers saw |
 | dedicated write-down nonce | replay |
 | deadline | indefinite standing authority |
 
-The slot hash is what makes it causal, and it is the property a bare registry
-nonce lacked. It also voids the approval automatically the moment anyone locates
-the alpha and attests it, since that changes the state it was signed against.
+The shortfall hash is what makes it causal, and it is the property a bare
+registry nonce lacked. It voids the approval automatically the moment anyone
+locates the alpha, since that changes the loss it was signed against.
+
+It deliberately digests the shortfall rather than the whole record. A digest
+over every slot would move on any ordinary withdrawal, so an acknowledgement
+could never be applied after one; a digest over the shortfall alone is stable
+under activity that loses nothing, and moves the moment a different or
+additional loss appears - exactly when the signers' approval stops describing
+what is in front of it.
+
+The same digest is stored when the approval is spent, and re-checked before the
+acknowledgement is ever applied. Without that, a loss appearing while the window
+ran would be written off alongside the approved one by the first call after it,
+having been neither examined nor signed for, and with no window of its own.
 
 Verification belongs in `ValidatorRegistry`, which already holds the EIP-712
 machinery and has the bytecode room the vault does not.
@@ -299,11 +311,11 @@ of amount, so the attack is not tunable. And a write-down destroys nothing: if
 the alpha is later found and attested it re-enters the union and the total
 recovers, making the damage a transfer between share cohorts rather than a burn.
 
-A timelock was considered and rejected. Its purpose would be to let holders exit
-ahead of a write-down, but exits revert in precisely the state being recovered
-from, so the warning reaches an audience that cannot act on it. The
-auto-voiding property that would have justified it comes from the slot hash
-instead.
+A timelock was considered and rejected in an earlier draft, on the grounds that
+its purpose would be to let holders exit ahead of a write-down while exits
+revert in precisely the state being recovered from. Exits no longer revert, so
+the objection is gone and the challenge window above is that delay, with an
+audience that can act on it: anyone who finds the alpha.
 
 ## Every case terminates
 

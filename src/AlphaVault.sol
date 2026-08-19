@@ -72,6 +72,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 total;
         uint256 shortIndex;
         uint256 shortPresent;
+        bool acknowledged;
     }
 
     /// @dev Settled only at the end of a clean operation, so a failed one leaves the evidence in
@@ -81,6 +82,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @dev When a write-down was acknowledged, per token. Deposits wait out the challenge window
     ///      from here so anyone who can still find the alpha has time to say so.
     mapping(uint256 => uint256) private _writtenDownAt;
+
+    /// @dev The shortfall the signers examined, per token. An acknowledgement covers that loss and
+    ///      no other: without this a token could sit acknowledged while a second, unapproved loss
+    ///      appeared, and the first call after the window would write both off together.
+    mapping(uint256 => bytes32) private _writtenDownShortfall;
 
     /// @notice Cumulative TAO credited per share over a token's lifetime, scaled by
     ///         `TAO_INDEX_PRECISION`. Grows when the clone receives TAO the vault did not pay out.
@@ -269,8 +275,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
         // A hotkey swap carries mailbox stake along with everyone else's, so the deposit is read and
         // flushed from wherever the chosen validator's alpha now sits.
-        bool acknowledged = _acknowledgementMatured(tokenId);
-        _resolveAndFollow(tokenId, nid, destColdkey, hotkeys, !acknowledged);
+        bool acknowledged = _resolveAndFollow(tokenId, nid, destColdkey, hotkeys, true).acknowledged;
         bytes32[] memory effective = _effectiveSet(tokenId, hotkeys);
         bytes32 depositHotkey = effective[chosenIndex];
         uint256 totalDeposit = IStaking(STAKING_PRECOMPILE).getStake(depositHotkey, _coldkeyOf(userClone), netuid);
@@ -297,7 +302,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         _mint(msg.sender, tokenId, shares, "");
         // The rebalance above settled the record onto what is really there, so the acknowledgement
         // has been applied and the token is ordinary again.
-        if (acknowledged) delete _writtenDownAt[tokenId];
+        if (acknowledged) _clearAcknowledgement(tokenId);
 
         emit Deposited(msg.sender, tokenId, totalDeposit, shares);
     }
@@ -590,14 +595,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         _requireNotDissolving(nid);
         (bytes32[] memory logicalSet, uint16[] memory weights) = _resolveValidators(nid);
         bytes32 coldkey = _coldkeyOf(clone);
-        bool acknowledged = _acknowledgementMatured(tokenId);
-        _resolveAndFollow(tokenId, nid, coldkey, logicalSet, !acknowledged);
+        bool acknowledged = _resolveAndFollow(tokenId, nid, coldkey, logicalSet, true).acknowledged;
         bytes32[] memory effective = _effectiveSet(tokenId, logicalSet);
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
         _consolidateRotatedStake(tokenId, clone, coldkey, logicalSet, effective, alphaPriceE18);
         _rebalance(tokenId, clone, logicalSet, effective, weights, coldkey, alphaPriceE18);
         // The settle above applied the acknowledgement, so the token is ordinary again.
-        if (acknowledged) delete _writtenDownAt[tokenId];
+        if (acknowledged) _clearAcknowledgement(tokenId);
     }
 
     function _rebalance(
@@ -748,7 +752,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///      vault can locate whether or not anything is missing.
     function _depositableTotal(uint256 tokenId) private view returns (uint256) {
         Plan memory plan = _resolveBacking(tokenId);
-        if (!_acknowledgementMatured(tokenId) && plan.shortIndex != type(uint256).max) {
+        if (plan.shortIndex != type(uint256).max && !_acknowledgementMatured(tokenId, plan)) {
             Slot storage short = _slots[tokenId][plan.shortIndex];
             revert BackingShortfall(_netuid(tokenId), short.active, short.tracked, plan.shortPresent);
         }
@@ -1197,7 +1201,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
         slot.active = hotkey;
         // Finding the alpha shows any acknowledgement of its loss was premature.
-        if (_writtenDownAt[tokenId] != 0) _writtenDownAt[tokenId] = 0;
+        _clearAcknowledgement(tokenId);
         emit BackingRecovered(tokenId, hotkey, found);
     }
 
@@ -1229,7 +1233,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         Plan memory plan = _resolveBacking(tokenId);
         uint256 located = plan.total;
         if (plan.shortIndex == type(uint256).max) revert BackingIntact();
-        if (approval.slotsHash != slotsHash(tokenId)) revert RecordMoved();
+        bytes32 shortfall = _shortfallDigest(tokenId, plan);
+        if (approval.shortfallHash != shortfall) revert RecordMoved();
         if (located < approval.minimumBacking) revert BelowApprovedBacking(located, approval.minimumBacking);
 
         validatorRegistry.consumeWriteDown(approval, signatures);
@@ -1246,17 +1251,34 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         _applyFollows(tokenId, plan.keys);
         // forge-lint: disable-next-line(block-timestamp)
         _writtenDownAt[tokenId] = block.timestamp;
+        _writtenDownShortfall[tokenId] = shortfall;
         emit BackingWrittenDown(tokenId, approval.nonce, located);
     }
 
-    /// @notice Digest of a token's record, which a write-down approval has to name. Anything that
-    ///         touches the record moves it, so an approval cannot outlive the state it was given
-    ///         for. Exposed so the signers commit to the same bytes the vault checks.
-    function slotsHash(uint256 tokenId) public view returns (bytes32 digest) {
+    /// @notice Digest of the shortfall a write-down approval is for: which slots the vault cannot
+    ///         account for, and what each is owed. Exposed so the signers commit to the same bytes
+    ///         the vault checks.
+    /// @dev    Deliberately narrower than the whole record. A digest over every slot would move on
+    ///         any ordinary withdrawal, so an acknowledgement could never be applied after one; a
+    ///         digest over the shortfall alone is stable under activity that loses nothing, and
+    ///         moves the moment a different or additional loss appears - which is exactly when the
+    ///         signers' approval stops covering the state in front of it.
+    function shortfallHash(uint256 tokenId) public view returns (bytes32) {
+        return _shortfallDigest(tokenId, _resolveBacking(tokenId));
+    }
+
+    function _clearAcknowledgement(uint256 tokenId) private {
+        if (_writtenDownAt[tokenId] == 0) return;
+        delete _writtenDownAt[tokenId];
+        delete _writtenDownShortfall[tokenId];
+    }
+
+    function _shortfallDigest(uint256 tokenId, Plan memory plan) private view returns (bytes32 digest) {
         Slot[] storage tokenSlots = _slots[tokenId];
-        for (uint256 i; i < tokenSlots.length;) {
-            digest =
-                keccak256(abi.encodePacked(digest, tokenSlots[i].logical, tokenSlots[i].active, tokenSlots[i].tracked));
+        for (uint256 i; i < plan.unaccounted.length;) {
+            if (plan.unaccounted[i]) {
+                digest = keccak256(abi.encodePacked(digest, i, tokenSlots[i].active, tokenSlots[i].tracked));
+            }
             unchecked {
                 ++i;
             }
@@ -1282,9 +1304,15 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bool refuseShortfall
     ) private returns (Plan memory plan) {
         plan = _planBacking(tokenId, netuid, coldkey, logicalSet);
-        if (plan.shortIndex != type(uint256).max && refuseShortfall) {
-            Slot storage short = _slots[tokenId][plan.shortIndex];
-            revert BackingShortfall(netuid, short.active, short.tracked, plan.shortPresent);
+        // Only the refusing rails consult the acknowledgement, and only they wait out its window.
+        // An exit pays out of what is located either way, so nothing about a pending or matured
+        // acknowledgement should ever stand between a holder and the door.
+        if (refuseShortfall) {
+            plan.acknowledged = _acknowledgementMatured(tokenId, plan);
+            if (plan.shortIndex != type(uint256).max && !plan.acknowledged) {
+                Slot storage short = _slots[tokenId][plan.shortIndex];
+                revert BackingShortfall(netuid, short.active, short.tracked, plan.shortPresent);
+            }
         }
         _applyFollows(tokenId, plan.keys);
     }
@@ -1297,9 +1325,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///      Every rail that settles asks this, so the acknowledgement is applied by whichever runs
     ///      first. Keying it to deposits alone would leave `rebalance` refusing a shortfall that
     ///      has already been acknowledged, with no way to ever clear it.
-    function _acknowledgementMatured(uint256 tokenId) private view returns (bool) {
+    function _acknowledgementMatured(uint256 tokenId, Plan memory plan) private view returns (bool) {
         uint256 writtenDownAt = _writtenDownAt[tokenId];
         if (writtenDownAt == 0) return false;
+        // The signers approved one loss. A different or additional one is not theirs to have
+        // approved, so the acknowledgement simply does not apply and the shortfall stands until a
+        // fresh one names it.
+        if (_shortfallDigest(tokenId, plan) != _writtenDownShortfall[tokenId]) return false;
         uint256 openFrom = writtenDownAt + WRITE_DOWN_CHALLENGE_WINDOW;
         // forge-lint: disable-next-line(block-timestamp)
         if (block.timestamp < openFrom) revert ChallengeWindowOpen(openFrom);

@@ -144,7 +144,7 @@ def write_down_backing(
     registry_contract = w3.eth.contract(address=registry_address, abi=load_abi("ValidatorRegistry"))
     vault_contract = w3.eth.contract(address=vault_address, abi=load_abi("AlphaVault"))
 
-    slots_hash = vault_contract.functions.slotsHash(token_id).call()
+    shortfall_hash = vault_contract.functions.shortfallHash(token_id).call()
     next_nonce = registry_contract.functions.writeDownNonces(vault_address, token_id).call() + 1
     deadline = int(time.time()) + deadline_secs
 
@@ -159,7 +159,7 @@ def write_down_backing(
             "BackingWriteDown": [
                 {"name": "vault", "type": "address"},
                 {"name": "tokenId", "type": "uint256"},
-                {"name": "slotsHash", "type": "bytes32"},
+                {"name": "shortfallHash", "type": "bytes32"},
                 {"name": "minimumBacking", "type": "uint256"},
                 {"name": "nonce", "type": "uint256"},
                 {"name": "deadline", "type": "uint256"},
@@ -175,7 +175,7 @@ def write_down_backing(
         "message": {
             "vault": vault_address,
             "tokenId": token_id,
-            "slotsHash": slots_hash,
+            "shortfallHash": shortfall_hash,
             "minimumBacking": minimum_backing,
             "nonce": next_nonce,
             "deadline": deadline,
@@ -194,7 +194,7 @@ def write_down_backing(
     submitter = Account.from_key(submitter_private_key)
 
     approval_tuple = (
-        vault_address, token_id, slots_hash, minimum_backing, next_nonce, deadline,
+        vault_address, token_id, shortfall_hash, minimum_backing, next_nonce, deadline,
     )
     transaction = vault_contract.functions.writeDownBacking(
         approval_tuple, signatures
