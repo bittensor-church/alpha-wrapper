@@ -11,13 +11,6 @@ import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 /// @dev Covers getting a position back once the vault has lost sight of its alpha: anyone pointing
 ///      it at the key that holds it, and the attesters acknowledging a loss nobody can find.
 contract BackingRecoveryTest is AlphaVaultTestBase {
-    event BackingRecovered(uint256 indexed tokenId, bytes32 indexed hotkey, uint256 found);
-    event HotkeySwapFollowed(uint256 indexed tokenId, bytes32 indexed oldHotkey, bytes32 indexed newHotkey);
-    event BackingWrittenDown(uint256 indexed tokenId, uint256 nonce, uint256 located);
-
-    bytes32 internal hotkey5 = keccak256("hotkey5");
-    bytes32 internal hotkey6 = keccak256("hotkey6");
-
     // -------------------- Recovery by naming where the alpha went ----------------
 
     /// @dev Recovery needs nobody's signature. The alpha sits under the vault's own coldkey, so
@@ -141,7 +134,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
         assertGt(vault.depositsOpenFrom(TOKEN1), block.timestamp, "deposits wait out the window");
         _simulateAlphaDeposit(bob, NETUID1, 1 ether);
-        vm.expectPartialRevert(AlphaVault.DepositsPaused.selector);
+        vm.expectPartialRevert(AlphaVault.ChallengeWindowOpen.selector);
         vm.prank(bob);
         vault.wrap(NETUID1, hotkey1);
 
@@ -207,6 +200,24 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         bytes[] memory sigs = _sign(_writeDownDigest(registry, approval), signerPks);
         vm.expectRevert(AlphaVault.BackingIntact.selector);
         vault.writeDownBacking(approval, sigs);
+    }
+
+    /// @dev The acknowledgement is applied by whichever settling rail runs first. Keyed to deposits
+    ///      alone, the permissionless maintenance rail would go on refusing a shortfall that had
+    ///      already been acknowledged, with nothing short of a deposit able to clear it.
+    function test_RebalanceAfterAWriteDown_AppliesTheAcknowledgement() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _buildSwapTrail(NETUID1, hotkey1, 2);
+        _writeDown(TOKEN1, 0);
+
+        vm.expectPartialRevert(AlphaVault.ChallengeWindowOpen.selector);
+        vault.rebalance(NETUID1);
+
+        vm.warp(vault.depositsOpenFrom(TOKEN1));
+        vault.rebalance(NETUID1);
+
+        assertTrue(vault.isBackingIntact(TOKEN1), "the settle applied the acknowledgement");
+        assertEq(vault.depositsOpenFrom(TOKEN1), 0, "and the token is ordinary again");
     }
 
     /// @dev An approval signed against a shortfall is refused once someone has recovered it, so a
@@ -280,34 +291,5 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         bytes[] memory sigs = _sign(_writeDownDigest(registry, replayed), signerPks);
         vm.expectRevert(ValidatorRegistry.StaleNonce.selector);
         vault.writeDownBacking(replayed, sigs);
-    }
-
-    // -------------------- Helpers -------------------------------------------------
-
-    /// @dev Moves the clone's backing between hotkeys with no vault call and no lineage, standing
-    ///      in for a swap this subnet recorded nothing for.
-    function _simulateOffVaultSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
-        bytes32 coldkey = _subnetColdkey(netuid);
-        uint256 amount = _getStakeForColdkey(fromHotkey, coldkey, netuid);
-        MockStaking(STAKING_PRECOMPILE).setStake(fromHotkey, coldkey, netuid, 0);
-        MockStaking(STAKING_PRECOMPILE).setStake(toHotkey, coldkey, netuid, amount);
-    }
-
-    /// @dev A swap as the chain records it: the stake moves and the lineage points at it.
-    function _simulateFollowedSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
-        _simulateOffVaultSwap(netuid, fromHotkey, toHotkey);
-        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(fromHotkey, netuid, toHotkey);
-    }
-
-    /// @dev Chains `hops` swaps, leaving the backing at the far tip and the vault able to walk
-    ///      only the first edge.
-    function _buildSwapTrail(uint256 netuid, bytes32 fromHotkey, uint256 hops) internal returns (bytes32 tip) {
-        bytes32 previous = fromHotkey;
-        for (uint256 i; i < hops; ++i) {
-            tip = keccak256(abi.encode("trail-hop", fromHotkey, i));
-            MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(previous, netuid, tip);
-            previous = tip;
-        }
-        _simulateOffVaultSwap(netuid, fromHotkey, tip);
     }
 }

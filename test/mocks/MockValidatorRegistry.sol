@@ -11,8 +11,6 @@ contract MockValidatorRegistry is IValidatorRegistry {
 
     mapping(uint256 => Slot) private _slots;
 
-    mapping(uint256 => uint256) public nonces;
-
     /// @dev Write-downs are exercised against the real registry; this stub only satisfies the
     ///      interface for the malformed-set tests that reach for this mock.
     function consumeWriteDown(BackingWriteDown calldata, bytes[] calldata) external { }
@@ -23,9 +21,6 @@ contract MockValidatorRegistry is IValidatorRegistry {
         Slot storage slot = _slots[netuid];
         slot.hotkeys = hotkeys;
         slot.weights = weights;
-        // The real registry bumps its counter on every accepted update, and the vault reads that
-        // counter to tell a set it has already settled against from one it has not.
-        ++nonces[netuid];
     }
 
     function getValidators(uint256 netuid)

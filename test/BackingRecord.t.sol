@@ -3,21 +3,12 @@ pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
-import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
-import { IValidatorRegistry } from "src/interfaces/IValidatorRegistry.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 /// @dev Covers the record itself as the world moves around it: attested sets that reorder, grow
 ///      and shrink, and the ordinary operations that must never read as a loss.
 contract BackingRecordTest is AlphaVaultTestBase {
-    event BackingRecovered(uint256 indexed tokenId, bytes32 indexed hotkey, uint256 found);
-    event HotkeySwapFollowed(uint256 indexed tokenId, bytes32 indexed oldHotkey, bytes32 indexed newHotkey);
-    event BackingWrittenDown(uint256 indexed tokenId, uint256 nonce, uint256 located);
-
-    bytes32 internal hotkey5 = keccak256("hotkey5");
-    bytes32 internal hotkey6 = keccak256("hotkey6");
-
     // -------------------- What the record remembers ------------------------------
 
     function test_Wrap_RecordsWhereEachValidatorsAlphaIs() public {
@@ -208,34 +199,5 @@ contract BackingRecordTest is AlphaVaultTestBase {
 
         assertApproxEqAbs(vault.totalStake(tokenId), 64 ether, 0.01 ether, "backing whole across the wide set");
         assertTrue(vault.isBackingIntact(tokenId), "record sound after the follow");
-    }
-
-    // -------------------- Helpers -------------------------------------------------
-
-    /// @dev Moves the clone's backing between hotkeys with no vault call and no lineage, standing
-    ///      in for a swap this subnet recorded nothing for.
-    function _simulateOffVaultSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
-        bytes32 coldkey = _subnetColdkey(netuid);
-        uint256 amount = _getStakeForColdkey(fromHotkey, coldkey, netuid);
-        MockStaking(STAKING_PRECOMPILE).setStake(fromHotkey, coldkey, netuid, 0);
-        MockStaking(STAKING_PRECOMPILE).setStake(toHotkey, coldkey, netuid, amount);
-    }
-
-    /// @dev A swap as the chain records it: the stake moves and the lineage points at it.
-    function _simulateFollowedSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
-        _simulateOffVaultSwap(netuid, fromHotkey, toHotkey);
-        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(fromHotkey, netuid, toHotkey);
-    }
-
-    /// @dev Chains `hops` swaps, leaving the backing at the far tip and the vault able to walk
-    ///      only the first edge.
-    function _buildSwapTrail(uint256 netuid, bytes32 fromHotkey, uint256 hops) internal returns (bytes32 tip) {
-        bytes32 previous = fromHotkey;
-        for (uint256 i; i < hops; ++i) {
-            tip = keccak256(abi.encode("trail-hop", fromHotkey, i));
-            MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(previous, netuid, tip);
-            previous = tip;
-        }
-        _simulateOffVaultSwap(netuid, fromHotkey, tip);
     }
 }
