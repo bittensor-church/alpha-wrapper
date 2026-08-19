@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import { Test } from "forge-std/Test.sol";
 import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
+import { IValidatorRegistry } from "src/interfaces/IValidatorRegistry.sol";
 
 abstract contract AttestationHelper is Test {
     function _domainSeparator(ValidatorRegistry registry) internal view returns (bytes32) {
@@ -32,6 +33,25 @@ abstract contract AttestationHelper is Test {
                 keccak256(abi.encodePacked(att.weights)),
                 att.nonce,
                 att.deadline
+            )
+        );
+        return keccak256(abi.encodePacked("\x19\x01", _domainSeparator(registry), structHash));
+    }
+
+    function _writeDownDigest(ValidatorRegistry registry, IValidatorRegistry.BackingWriteDown memory approval)
+        internal
+        view
+        returns (bytes32)
+    {
+        bytes32 structHash = keccak256(
+            abi.encode(
+                registry.WRITE_DOWN_TYPEHASH(),
+                approval.vault,
+                approval.tokenId,
+                approval.slotsHash,
+                approval.minimumBacking,
+                approval.nonce,
+                approval.deadline
             )
         );
         return keccak256(abi.encodePacked("\x19\x01", _domainSeparator(registry), structHash));

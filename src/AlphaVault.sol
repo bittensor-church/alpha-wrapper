@@ -116,15 +116,15 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaOut);
     /// @notice A dissolved-subnet unwrap. `taoOut` is native TAO paid in EVM wei.
     event DissolvedSubnetUnwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 taoOut);
-    /// @notice Emitted only for weight-alignment moves; consolidation and gather hops are silent, so
-    ///         off-chain volume comes from Deposited and the Unwrapped / UnwrappedForTao /
-    ///         DissolvedSubnetUnwrapped / MailboxAlphaSoldForTao exit events, never from internal
-    ///         stake moves.
     /// @notice The attesters acknowledged a token's missing backing and the record re-anchored to
     ///         the alpha the chain still reports.
     event BackingWrittenDown(uint256 indexed tokenId, uint256 nonce, uint256 located);
     /// @notice A validator renamed its hotkey and the vault followed the position to the new key.
     event HotkeySwapFollowed(uint256 indexed tokenId, bytes32 indexed oldHotkey, bytes32 indexed newHotkey);
+    /// @notice Emitted only for weight-alignment moves; consolidation and gather hops are silent, so
+    ///         off-chain volume comes from Deposited and the Unwrapped / UnwrappedForTao /
+    ///         DissolvedSubnetUnwrapped / MailboxAlphaSoldForTao exit events, never from internal
+    ///         stake moves.
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
     /// @notice A live-subnet unwrap paid by selling the alpha. `shares` and `alphaSold` are net of
@@ -383,6 +383,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             if (alphaPriceE18 != 0 && _isBelowFloorAtReadPrice(unsold, alphaPriceE18)) unsold = 0;
         }
 
+        _reanchorTracked(tokenId, vaultColdkey, netuid);
+
         SubnetClone(payable(clone)).unwrapTao(payable(msg.sender), taoOut);
 
         // The mint must follow the payout: proceeds still in the clone would be folded into the
@@ -445,6 +447,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // swept-sale proceeds claimable, so the shares are retired instead of trapped.
         if (totalAlpha == 0) {
             _burn(msg.sender, tokenId, shares);
+            _reanchorTracked(tokenId, coldkey, netuid);
             emit Unwrapped(msg.sender, tokenId, shares, 0);
             return;
         }
@@ -463,6 +466,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 alphaOut = _deliverAndAlign(
             tokenId, clone, hotkeys, weights, balances, coldkey, userSubstrateColdkey, assets, alphaPriceE18
         );
+        _reanchorTracked(tokenId, coldkey, netuid);
 
         emit Unwrapped(msg.sender, tokenId, shares, alphaOut);
     }
@@ -703,14 +707,17 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
         (bytes32[] memory current,) = validatorRegistry.getValidators(netuid);
         uint256[] memory balances;
-        (, balances, total, missing, shortIndex) = _planBacking(tokenId, netuid, coldkey, current);
+        bytes32[] memory keys;
+        (keys, balances, total, missing, shortIndex) = _planBacking(tokenId, netuid, coldkey, current);
         if (missing != 0 && _attestedSince(tokenId, netuid)) {
-            if (_adoptedStake(balances, _slots[tokenId].length) + TRACKED_SLACK_RAO >= missing) missing = 0;
+            if (_adoptedStake(keys, balances, _slots[tokenId].length) + TRACKED_SLACK_RAO >= missing) missing = 0;
         }
     }
 
-    /// @dev The total a price quote may be taken against, refusing wherever the operation it
-    ///      previews would refuse. Both read the same plan, so they cannot disagree.
+    /// @dev The total a price quote may be taken against. It reads the same plan the operations
+    ///      run, and parts from them on one point only: a quote honours an attestation naming where
+    ///      the alpha went, while spending one is reserved to `rebalance`. So between the naming and
+    ///      the next rebalance a quote stands while the other rails still refuse.
     function _requireResolvedTotal(uint256 tokenId) private view returns (uint256) {
         (uint256 total, uint256 missing, uint256 shortIndex) = _resolveBacking(tokenId);
         if (missing != 0) {
@@ -1210,7 +1217,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256[] memory balances;
         (keys, balances, located, missing, shortIndex) = _planBacking(tokenId, netuid, coldkey, logicalSet);
         if (missing != 0) {
-            uint256 named = attestedSince ? _adoptedStake(balances, _slots[tokenId].length) : 0;
+            uint256 named = attestedSince ? _adoptedStake(keys, balances, _slots[tokenId].length) : 0;
             if (named + TRACKED_SLACK_RAO < missing) {
                 Slot storage short = _slots[tokenId][shortIndex];
                 revert BackingShortfall(netuid, short.active, short.tracked, balances[shortIndex]);
@@ -1236,9 +1243,15 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
     /// @dev What the keys added since the last settle hold between them - the union past the
     ///      recorded slots, which is the only part of it carrying the attesters' signature.
-    function _adoptedStake(uint256[] memory balances, uint256 recordedCount) private pure returns (uint256 total) {
+    ///      A key some slot has already leant on is skipped: one balance answering for two
+    ///      expectations is the very thing the plan refuses.
+    function _adoptedStake(bytes32[] memory keys, uint256[] memory balances, uint256 recordedCount)
+        private
+        pure
+        returns (uint256 total)
+    {
         for (uint256 i = recordedCount; i < balances.length;) {
-            total += balances[i];
+            if (!_keysHold(keys, 0, recordedCount, keys[i])) total += balances[i];
             unchecked {
                 ++i;
             }
@@ -1254,8 +1267,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///      entry `i` line up - with any rename this pass would follow already applied, which is
     ///      what the caller persists. `missing` is what nothing accounts for.
     ///
-    ///      One planner serves both the operations and the quotes, so a preview cannot reach a
-    ///      different verdict from the call it previews.
+    ///      One planner serves the operations and the quotes alike, so what counts as accounted
+    ///      for is settled in a single place rather than by two scans kept in step by hand.
     function _planBacking(uint256 tokenId, uint16 netuid, bytes32 coldkey, bytes32[] memory currentSet)
         private
         view
@@ -1360,18 +1373,42 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         returns (bytes32[] memory effective)
     {
         Slot[] storage tokenSlots = _slots[tokenId];
+        uint256 slotCount = tokenSlots.length;
         effective = new bytes32[](logicalSet.length);
         for (uint256 i; i < logicalSet.length;) {
-            effective[i] = logicalSet[i];
-            for (uint256 j; j < tokenSlots.length;) {
-                if (tokenSlots[j].logical == logicalSet[i]) {
-                    effective[i] = tokenSlots[j].active;
-                    break;
-                }
-                unchecked {
-                    ++j;
+            bytes32 logical = logicalSet[i];
+            effective[i] = logical;
+            // The record is written in set order, so it stays aligned until the attesters reorder.
+            if (i < slotCount && tokenSlots[i].logical == logical) {
+                effective[i] = tokenSlots[i].active;
+            } else {
+                for (uint256 j; j < slotCount;) {
+                    if (tokenSlots[j].logical == logical) {
+                        effective[i] = tokenSlots[j].active;
+                        break;
+                    }
+                    unchecked {
+                        ++j;
+                    }
                 }
             }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @dev Refreshes what the record expects to find, leaving every slot's identity alone. A
+    ///      withdrawal lowers balances without changing which validator holds what, so the amounts
+    ///      are the only stale part - and left stale, the holder's own exit reads as the next
+    ///      call's shortfall, and an ordinary rename after it as one the vault must refuse to
+    ///      follow. Unlike a settle this drops no slot, so an exit that skipped consolidation
+    ///      cannot strand stake still sitting on a validator the attesters have dropped.
+    function _reanchorTracked(uint256 tokenId, bytes32 coldkey, uint16 netuid) private {
+        Slot[] storage tokenSlots = _slots[tokenId];
+        for (uint256 i; i < tokenSlots.length;) {
+            uint256 stake = IStaking(STAKING_PRECOMPILE).getStake(tokenSlots[i].active, coldkey, netuid);
+            if (tokenSlots[i].tracked != stake) tokenSlots[i].tracked = stake;
             unchecked {
                 ++i;
             }
@@ -1397,9 +1434,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             uint256 tracked = IStaking(STAKING_PRECOMPILE).getStake(effectiveSet[i], coldkey, netuid);
             if (i < tokenSlots.length) {
                 Slot storage slot = tokenSlots[i];
-                if (slot.logical != logicalSet[i]) slot.logical = logicalSet[i];
-                if (slot.active != effectiveSet[i]) slot.active = effectiveSet[i];
-                if (slot.tracked != tracked) slot.tracked = tracked;
+                slot.logical = logicalSet[i];
+                slot.active = effectiveSet[i];
+                slot.tracked = tracked;
             } else {
                 tokenSlots.push(Slot({ logical: logicalSet[i], active: effectiveSet[i], tracked: tracked }));
             }

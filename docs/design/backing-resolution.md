@@ -127,8 +127,14 @@ struct Plan {
 A state-changing operation plans, rejects an unacceptable status, performs the
 moves, re-reads the balances those moves touched, and only then persists. No
 repair is written before the whole plan is known to be valid. Views consume the
-same plan and never apply it, so a quote and the operation it previews cannot
-reach different verdicts — by construction rather than by discipline.
+same plan and never apply it, so what counts as accounted for is decided in one
+place — by construction rather than by discipline.
+
+The one point where a view and an operation part is deliberate: a view honours an
+attestation naming where the alpha went as soon as it is published, while
+spending one is reserved to `rebalance`. Between the naming and that call a quote
+stands while the other rails still refuse, and a permissionless `rebalance`
+closes the gap.
 
 ## Two scratch sets, not one
 
@@ -271,8 +277,11 @@ No path ends in a token that cannot be unstuck.
 - A rename edge is never reclassified as a sweep.
 - Storage is written only from a fully valid plan, and records post-move
   balances actually read back.
-- Strict views and mutating paths return the same verdict, because they consume
-  the same plan.
+- Views and mutating paths consume one plan, so they agree on what the record
+  accounts for. They part on one point: a view honours an attestation naming
+  where the alpha went as soon as it is published, while spending one is
+  reserved to `rebalance`, so until that call the quote stands and the other
+  rails refuse.
 - Only a holder withdrawal, an accepted sweep, or a bound write-down may lower
   recorded backing.
 
