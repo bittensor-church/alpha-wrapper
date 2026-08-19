@@ -175,6 +175,24 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         assertTrue(vault.isBackingIntact(TOKEN1), "dropping the retired name clears the collision");
     }
 
+    /// @dev A rename can carry one slot's alpha onto a name the set still lists, when that name's
+    ///      own slot has itself moved on. Nothing answers twice there, and refusing it would freeze
+    ///      a healthy token, so the check reads the keys the slots resolve to rather than the names
+    ///      the attesters wrote.
+    function test_RenameOntoAStillListedName_StaysOperable() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey2, hotkey5);
+        vault.rebalance(NETUID1);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey2);
+
+        vault.rebalance(NETUID1);
+
+        AlphaVault.Slot[] memory slots = vault.recordedSlots(TOKEN1);
+        assertEq(slots[0].active, hotkey2, "the first slot followed onto the freed name");
+        assertEq(slots[1].active, hotkey5, "the second slot kept the key its own rename reached");
+        assertTrue(vault.isBackingIntact(TOKEN1), "no balance answers for two slots");
+    }
+
     // -------------------- Emptyings the chain does not explain -------------------
 
     /// @dev The chain's dust sweep records nothing at all. Reading that silence as proof of a sweep
@@ -315,6 +333,24 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         assertTrue(vault.isBackingIntact(TOKEN1), "the record re-anchored on what the chain holds");
         vm.prank(alice);
         vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));
+    }
+
+    /// @dev A write-down settles the record, so it owes the record the renames its own plan
+    ///      followed. Dropping them would re-anchor onto the key the alpha departed and strand what
+    ///      the signers were shown as surviving.
+    function test_WriteDown_KeepsAFollowedRenameInTheRecord() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        uint256 moved = _getVaultStake(hotkey1, NETUID1);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, _subnetColdkey(NETUID1), NETUID1, 0);
+
+        uint256 located = vault.totalStake(TOKEN1);
+        _writeDown(TOKEN1, located);
+
+        AlphaVault.Slot[] memory slots = vault.recordedSlots(TOKEN1);
+        assertEq(slots[0].active, hotkey4, "the record kept the key the rename reached");
+        assertEq(slots[0].tracked, moved, "and still expects the alpha sitting there");
+        assertEq(vault.totalStake(TOKEN1), located, "the write-down discarded no live backing");
     }
 
     /// @dev The signers acknowledge the loss; they do not size it. Whatever they name as a floor,

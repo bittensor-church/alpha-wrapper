@@ -261,15 +261,15 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         AlphaVault.Slot[] memory slots = vault.recordedSlots(tokenId);
         uint256 base = uint256(keccak256(abi.encode(keccak256(abi.encode(tokenId, VAULT_SLOTS_STORAGE_SLOT)))));
         for (uint256 i; i < slots.length; ++i) {
-            vm.store(address(vault), bytes32(base + i * 3 + 2), bytes32(_getVaultStake(slots[i].active, netuid)));
-        }
-        slots = vault.recordedSlots(tokenId);
-        for (uint256 i; i < slots.length; ++i) {
+            // Read a neighbouring field back where the layout says it sits, before writing. Checking
+            // the written value instead would pass whenever it already held what we meant to write,
+            // and a moved layout would scribble into unrelated vault storage unnoticed.
             assertEq(
-                slots[i].tracked,
-                _getVaultStake(slots[i].active, netuid),
+                vm.load(address(vault), bytes32(base + i * 3 + 1)),
+                slots[i].active,
                 "AlphaVault storage layout moved: VAULT_SLOTS_STORAGE_SLOT is stale"
             );
+            vm.store(address(vault), bytes32(base + i * 3 + 2), bytes32(_getVaultStake(slots[i].active, netuid)));
         }
     }
 
@@ -331,9 +331,14 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         });
     }
 
-    /// @dev Signs an approval with the quorum the base installs and spends it.
+    /// @dev Signs an approval with the quorum the base installs and spends it. The signing is kept
+    ///      behind its own call so the struct and the signature array never share a stack frame:
+    ///      inlined, the pair puts viaIR one slot over the limit in any test contract of real size.
     function _writeDown(uint256 tokenId, uint256 minimumBacking) internal {
-        IValidatorRegistry.BackingWriteDown memory approval = _approval(tokenId, minimumBacking);
+        _spendApproval(_approval(tokenId, minimumBacking));
+    }
+
+    function _spendApproval(IValidatorRegistry.BackingWriteDown memory approval) internal {
         vault.writeDownBacking(approval, _sign(_writeDownDigest(registry, approval), signerPks));
     }
 

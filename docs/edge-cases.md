@@ -79,6 +79,20 @@ stays staked comes back to the caller as shares, except
 on a burn of the entire supply, which drops a leftover below the chain's
 minimum.
 
+The sweep can reach the vault's own stake too, when a threshold rise
+leaves one of its validator slices below the new line. The chain sells
+that slice and the TAO lands on the vault's subnet account, where it
+becomes claimable as described below. What the vault cannot do is tell
+that apart from a validator quietly moving the alpha somewhere else: the
+chain records nothing either way, and it stops showing a rename's trail
+once the old name is registered again. Guessing wrong would price the
+position below what it really holds, so the vault holds it closed and
+waits for the attesters to say which happened
+([attester-guide.md](attester-guide.md)). Deposits and both exits pause
+until they do, and stay paused for as long as the attesters take. TAO
+already credited to holders stays claimable throughout - a pause never
+reaches money the vault has set aside for you.
+
 ## Stray TAO
 
 Native TAO can arrive on a clone outside any exit: the chain force-sold

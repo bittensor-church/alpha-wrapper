@@ -286,7 +286,10 @@ No path ends in a token that cannot be unstuck.
 - Silence is never read as evidence: only an edge the chain still shows may move
   a recorded expectation.
 - Two recorded slots never resolve onto one key. A set that would make them
-  collide is refused rather than priced.
+  collide is refused rather than priced. This is a property of the set, not of
+  the backing, so the operating paths raise it and the views go on reporting the
+  record as sound - a collided token is fully backed and merely unusable until
+  the attesters drop one of the pair.
 - Storage is written only from a fully valid plan, and records post-move
   balances actually read back.
 - Views and mutating paths consume one plan, so they agree on what the record

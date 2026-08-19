@@ -679,7 +679,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @return Alpha staked under the clone for this token.
     function totalStake(uint256 tokenId) public view returns (uint256) {
-        (uint256 total,,) = _resolveBacking(tokenId);
+        (uint256 total,,,) = _resolveBacking(tokenId);
         return total;
     }
 
@@ -687,7 +687,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///         refuse until the attesters name where the missing alpha went, or acknowledge it as
     ///         gone. A rename the vault can follow reads true: the next call repairs it unaided.
     function isBackingIntact(uint256 tokenId) external view returns (bool) {
-        (, uint256 missing,) = _resolveBacking(tokenId);
+        (, uint256 missing,,) = _resolveBacking(tokenId);
         return missing == 0;
     }
 
@@ -696,19 +696,18 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     function _resolveBacking(uint256 tokenId)
         private
         view
-        returns (uint256 total, uint256 missing, uint256 shortIndex)
+        returns (uint256 total, uint256 missing, uint256 shortIndex, bytes32[] memory keys)
     {
         address clone = subnetClone[tokenId];
-        if (clone == address(0)) return (0, 0, type(uint256).max);
+        if (clone == address(0)) return (0, 0, type(uint256).max, keys);
         uint16 netuid = _netuid(tokenId);
         bytes32 coldkey = _coldkeyOf(clone);
         if (_isIssuedForDissolvedSubnet(tokenId)) {
             (,, total) = _unionStake(tokenId, netuid, coldkey);
-            return (total, 0, type(uint256).max);
+            return (total, 0, type(uint256).max, keys);
         }
         (bytes32[] memory current,) = validatorRegistry.getValidators(netuid);
         uint256[] memory balances;
-        bytes32[] memory keys;
         (keys, balances, total, missing, shortIndex) = _planBacking(tokenId, netuid, coldkey, current);
         if (missing != 0 && _attestedSince(tokenId, netuid)) {
             if (_adoptedStake(keys, balances, _slots[tokenId].length) + TRACKED_SLACK_RAO >= missing) missing = 0;
@@ -720,7 +719,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///      the alpha went, while spending one is reserved to `rebalance`. So between the naming and
     ///      the next rebalance a quote stands while the other rails still refuse.
     function _requireResolvedTotal(uint256 tokenId) private view returns (uint256) {
-        (uint256 total, uint256 missing, uint256 shortIndex) = _resolveBacking(tokenId);
+        (uint256 total, uint256 missing, uint256 shortIndex,) = _resolveBacking(tokenId);
         if (missing != 0) {
             Slot storage short = _slots[tokenId][shortIndex];
             uint16 netuid = _netuid(tokenId);
@@ -1170,7 +1169,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint16 netuid = _netuid(tokenId);
         _requireNotDissolving(netuid);
 
-        (uint256 located, uint256 missing,) = _resolveBacking(tokenId);
+        (uint256 located, uint256 missing,, bytes32[] memory keys) = _resolveBacking(tokenId);
         if (missing == 0) revert BackingIntact();
         if (approval.slotsHash != slotsHash(tokenId)) revert RecordMoved();
         if (located < approval.minimumBacking) revert BelowApprovedBacking(located, approval.minimumBacking);
@@ -1179,6 +1178,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
         (bytes32[] memory logicalSet,) = _resolveValidators(netuid);
         bytes32 coldkey = _coldkeyOf(clone);
+        // `located` counts the alpha a rename carried elsewhere, so the settle has to be told where
+        // that is. Left unapplied, the record would re-anchor on the key the alpha departed and
+        // strand what the signers were shown. A shortfall implies a plan ran, so `keys` is real.
+        _applyFollows(tokenId, keys);
         bytes32[] memory effective = _effectiveSet(tokenId, logicalSet);
         _settleSlots(tokenId, coldkey, logicalSet, effective);
         emit BackingWrittenDown(tokenId, approval.nonce, located);
@@ -1385,16 +1388,33 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                     }
                 }
             }
-            // A followed rename can land on a key the attesters also name in its own right. Two
-            // slots leaning on one balance would count it twice, so the collision is refused
-            // rather than priced; the attesters resolve it by dropping one of the pair.
-            if (effective[i] != logical && _contains(logicalSet, effective[i])) {
+            unchecked {
+                ++i;
+            }
+        }
+        // A followed rename can land on a key another slot already answers for, and two slots
+        // leaning on one balance would count it twice. Only a slot a rename has moved can collide -
+        // the registry rejects a set naming one validator twice - so an untouched set pays a single
+        // comparison per entry. The attesters clear a real collision by dropping one of the pair.
+        for (uint256 i; i < logicalSet.length;) {
+            if (effective[i] != logicalSet[i] && _appearsTwice(effective, i)) {
                 revert HotkeyClaimedTwice(effective[i]);
             }
             unchecked {
                 ++i;
             }
         }
+    }
+
+    function _appearsTwice(bytes32[] memory set, uint256 index) private pure returns (bool) {
+        bytes32 key = set[index];
+        for (uint256 i; i < set.length;) {
+            if (i != index && set[i] == key) return true;
+            unchecked {
+                ++i;
+            }
+        }
+        return false;
     }
 
     /// @dev Refreshes what the record expects to find, leaving every slot's identity alone. Left

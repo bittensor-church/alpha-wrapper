@@ -64,6 +64,12 @@ over several sales.
 - The netuid-scoped dissolution blackout can temporarily freeze an old
   position while a successor subnet on the same netuid dissolves
   ([edge-cases.md](edge-cases.md)).
+- If the chain takes a position's stake and leaves no record of where it
+  went, deposits and both exits stay closed until a quorum signs the loss
+  off, and an unresponsive quorum keeps them closed indefinitely. The
+  alternative is to assume a loss and reprice the position, which would
+  hand value away whenever the alpha was really still out there. TAO
+  already credited to holders stays claimable while a position waits.
 - Amounts below the chain's minimum stake size can leave the stake split
   drifted from target weights; share value is unaffected.
 - A partial `unwrapForTao` can fill short and refund the unsold part as

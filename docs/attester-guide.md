@@ -59,6 +59,42 @@ Deposits parked under a dropped hotkey stay recoverable: `wrap` refuses
 out-of-set hotkeys up front, and stake already sitting in a mailbox
 under one stays reclaimable by its owner.
 
+## Acknowledging a loss
+
+Sometimes the vault finds less alpha under a validator than it left
+there, and nothing on chain says where it went. It stops pricing and
+moving that position until someone accounts for the difference, because
+guessing wrong hands value from one set of holders to another. You settle
+it one of two ways.
+
+If the alpha is findable, name the key holding it in an ordinary
+attestation. The next `rebalance` adopts it and the position reopens with
+nothing further from you.
+
+If it is genuinely gone - the chain sold a slice that fell below its dust
+line, say - co-sign a write-down:
+
+    struct BackingWriteDown {
+        address vault;           // the vault this approval is for
+        uint256 tokenId;         // the position it applies to
+        bytes32 slotsHash;       // the exact record you examined
+        uint256 minimumBacking;  // least backing you expect to survive
+        uint256 nonce;           // orders write-downs for this position
+        uint256 deadline;        // submission cutoff, unix seconds
+    }
+
+Signed over the same domain as an attestation, and submitted by anyone to
+the vault's `writeDownBacking`. You acknowledge that a loss happened; you
+do not decide its size. The position re-anchors to exactly what the chain
+reports it still holds, and `minimumBacking` only lets you refuse if less
+than that survived. `slotsHash` ties the approval to the record you
+looked at, so it stops being valid the moment anything moves. The vault
+refuses a write-down against a position that can account for itself.
+
+Until one of the two lands, that position takes no deposits and allows no
+exits, so a position waiting on an unreachable quorum stays shut. TAO
+already credited to holders stays claimable regardless.
+
 ## Signer set changes
 
 The registry admin replaces the signer set with
