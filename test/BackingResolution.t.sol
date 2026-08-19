@@ -335,6 +335,33 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));
     }
 
+    /// @dev A write-down acknowledges the alpha it cannot find; it must not lose the alpha it can.
+    ///      A validator the attesters dropped while the token was frozen still holds its stake, and
+    ///      rewriting the record to the attested set would erase the key holding it - stranding
+    ///      backing the signers were shown as surviving.
+    function test_WriteDown_KeepsADroppedValidatorsStake() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        uint256 stranded = _getVaultStake(hotkey3, NETUID1);
+        assertGt(stranded, 0, "the dropped validator must hold something to strand");
+
+        // The loss nothing on chain explains, which freezes the token.
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(NETUID1), NETUID1, 0);
+        // While it is frozen the attesters rotate hotkey3 out; the record still names it.
+        _setValidators(NETUID1, _hotkeys(hotkey2, hotkey4), _weights(5000, 5000));
+
+        uint256 located = vault.totalStake(TOKEN1);
+        _writeDown(TOKEN1, located);
+
+        assertTrue(vault.isBackingIntact(TOKEN1), "the record re-anchored on what is left");
+        assertEq(vault.totalStake(TOKEN1), located, "the dropped validator's stake still counts");
+        assertEq(_getVaultStake(hotkey3, NETUID1), stranded, "and is still sitting where it was");
+
+        // The ordinary path puts it back on the attested set with nobody's help.
+        vault.rebalance(NETUID1);
+        assertEq(_getVaultStake(hotkey3, NETUID1), 0, "the next rebalance rolls it in");
+        assertApproxEqAbs(vault.totalStake(TOKEN1), located, 2, "and conserves it on the way");
+    }
+
     /// @dev A write-down settles the record, so it owes the record the renames its own plan
     ///      followed. Dropping them would re-anchor onto the key the alpha departed and strand what
     ///      the signers were shown as surviving.

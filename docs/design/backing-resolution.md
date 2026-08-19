@@ -232,7 +232,10 @@ Three gates apply at execution:
    against a future loss.
 2. The record re-anchors to **exactly what the vault can locate**. The signers
    authorize *that* a write-down happens; the chain decides *how much*. They
-   have no discretion over the amount.
+   have no discretion over the amount. Re-anchoring lowers each expectation and
+   keeps every slot: rewriting the record to the attested set instead would drop
+   any validator the attesters had dropped meanwhile, alpha and all, and that
+   alpha is part of the total the signers were shown.
 3. The located total must be at least `minimumBacking`, or execution refuses.
 
 Anyone may submit an approval, as with set attestations, so no new actor

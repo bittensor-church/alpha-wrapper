@@ -1176,20 +1176,21 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
         validatorRegistry.consumeWriteDown(approval, signatures);
 
-        (bytes32[] memory logicalSet,) = _resolveValidators(netuid);
-        bytes32 coldkey = _coldkeyOf(clone);
-        // `located` counts the alpha a rename carried elsewhere, so the settle has to be told where
-        // that is. Left unapplied, the record would re-anchor on the key the alpha departed and
-        // strand what the signers were shown. A shortfall implies a plan ran, so `keys` is real.
+        // Follow first, so a rename the plan walked is counted where its alpha actually sits: a
+        // shortfall implies a plan ran, so `keys` is real. Then re-anchor rather than settle. This
+        // is the door of last resort, and a settle rewrites the record to the attested set - it
+        // would drop any validator the attesters have since dropped, alpha and all, exactly the
+        // backing `located` just showed the signers. Re-anchoring keeps every slot and lowers each
+        // expectation to what the chain reports, which is the whole of what a write-down is for;
+        // the next deposit or exit rolls the dropped validators back onto the set as usual.
         _applyFollows(tokenId, keys);
-        bytes32[] memory effective = _effectiveSet(tokenId, logicalSet);
-        _settleSlots(tokenId, coldkey, logicalSet, effective);
+        _reanchorTracked(tokenId, _coldkeyOf(clone), netuid);
         emit BackingWrittenDown(tokenId, approval.nonce, located);
     }
 
-    /// @notice Digest of a token's record, which a write-down approval has to name. Any settle
-    ///         moves it, so an approval cannot outlive the state it was given for. Exposed so the
-    ///         signers commit to the same bytes the vault checks.
+    /// @notice Digest of a token's record, which a write-down approval has to name. Anything that
+    ///         touches the record moves it, so an approval cannot outlive the state it was given
+    ///         for. Exposed so the signers commit to the same bytes the vault checks.
     function slotsHash(uint256 tokenId) public view returns (bytes32 digest) {
         Slot[] storage tokenSlots = _slots[tokenId];
         for (uint256 i; i < tokenSlots.length;) {
