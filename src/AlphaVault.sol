@@ -50,7 +50,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @dev One record per validator the position is spread across.
     ///
     ///      `logical` is the identity the registry assigns weight to; `active` is the key actually
-    ///      holding the alpha. They start equal and diverge when a rename moves the stake: the
+    ///      holding the alpha. They start equal and diverge when a hotkey swap moves the stake: the
     ///      chain advances `active`, and the attesters catch `logical` up in their own time. Every
     ///      staking call names `active`, so nothing is ever aimed at a key the chain retired, and
     ///      the vault never has to rediscover from lineage what it already followed itself.
@@ -108,7 +108,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     uint256 private constant VIRTUAL_ASSETS = 1;
     uint16 private constant BPS_BASE = 10_000;
     /// @dev The chain's share arithmetic credits any position a few RAO short of the amount asked
-    ///      for, its own rename migration included, so expectations are compared with this much
+    ///      for, its own hotkey-swap migration included, so expectations are compared with this much
     ///      give rather than for equality.
     uint256 private constant TRACKED_SLACK_RAO = 1e3;
 
@@ -143,7 +143,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @notice Alpha the vault had given up on was found under `hotkey` and is backing shares again.
     event BackingRecovered(uint256 indexed tokenId, bytes32 indexed hotkey, uint256 found);
 
-    /// @notice A validator renamed its hotkey and the vault followed the position to the new key.
+    /// @notice A validator swapped its hotkey and the vault followed the position to the new key.
     event HotkeySwapFollowed(uint256 indexed tokenId, bytes32 indexed oldHotkey, bytes32 indexed newHotkey);
     /// @notice Emitted only for weight-alignment moves; consolidation and gather hops are silent, so
     ///         off-chain volume comes from Deposited and the Unwrapped / UnwrappedForTao /
@@ -272,7 +272,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         address userClone = _ensureMailboxClone(msg.sender, netuid);
         bytes32 destColdkey = _coldkeyOf(clone);
 
-        // A rename carries mailbox stake along with everyone else's, so the deposit is read and
+        // A hotkey swap carries mailbox stake along with everyone else's, so the deposit is read and
         // flushed from wherever the chosen validator's alpha now sits.
         // An acknowledged loss stops refusing deposits once its challenge window is out. Until
         // then the expectation stands, so anyone who can still find the alpha can point at it.
@@ -718,7 +718,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
     /// @notice Whether the record still accounts for the position. False means an operation would
     ///         refuse until the attesters name where the missing alpha went, or acknowledge it as
-    ///         gone. A rename the vault can follow reads true: the next call repairs it unaided.
+    ///         gone. A hotkey swap the vault can follow reads true: the next call repairs it unaided.
     function isBackingIntact(uint256 tokenId) external view returns (bool) {
         return _resolveBacking(tokenId).missing == 0;
     }
@@ -1102,7 +1102,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 alphaPriceE18
     ) private {
         // Whether a slot was rotated out is a question about the validator the registry named, not
-        // about where a rename has since carried its alpha. A slot whose `logical` is still
+        // about where a hotkey swap has since carried its alpha. A slot whose `logical` is still
         // attested stays put, wherever `active` now points.
         bytes32[] memory lastSeen = _rotatedOutActiveKeys(tokenId, logicalSet);
         if (lastSeen.length != 0) {
@@ -1215,7 +1215,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
     /// @notice Resume a token whose backing the attesters have acknowledged as gone.
     /// @dev    Alpha that has ceased to exist cannot be named by anyone, so a shortfall the chain
-    ///         attributes to a rename it cannot follow would otherwise hold the token closed for
+    ///         attributes to a hotkey swap it cannot follow would otherwise hold the token closed for
     ///         good. This is the way out, and the only one that does not require the alpha to
     ///         still be somewhere.
     ///
@@ -1313,7 +1313,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         if (block.timestamp < openFrom) revert DepositsPaused(openFrom);
     }
 
-    /// @dev Persists the renames the plan followed. Storage is touched only once the whole plan is
+    /// @dev Persists the hotkey swaps the plan followed. Storage is touched only once the whole plan
     ///      known to be acceptable, so a refused call leaves the evidence exactly as it found it.
     function _applyFollows(uint256 tokenId, bytes32[] memory keys) private {
         Slot[] storage tokenSlots = _slots[tokenId];
@@ -1330,7 +1330,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
     /// @dev Reads the position and decides, without writing anything, whether the record still
     ///      accounts for it. `keys` is the union - recorded active keys first, so slot `i` and
-    ///      entry `i` line up - with any rename this pass would follow already applied, which is
+    ///      entry `i` line up - with any hotkey swap this pass would follow already applied, which is
     ///      what the caller persists. `missing` is what nothing accounts for.
     ///
     ///      One planner serves the operations and the quotes alike, so what counts as accounted
@@ -1377,11 +1377,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///
     ///      One case resolves itself: the recorded key has a successor edge, no other slot leans on
     ///      that successor, and the successor holds what the record expects. That is the ordinary
-    ///      validator rename, and following it costs nobody a signature.
+    ///      validator hotkey swap, and following it costs nobody a signature.
     ///
     ///      Every other shortfall stands, the chain's own dust sweep included. A missing edge is no
     ///      evidence of one, because the chain drops a key's successor as soon as that key is
-    ///      registered again - so an operator who renames away and re-registers can erase the trail
+    ///      registered again - so an operator who swaps away and re-registers can erase the trail
     ///      behind them. Standing shortfalls clear through the attesters naming where the alpha
     ///      went, or through a signed write-down once it is gone for good.
     ///
@@ -1432,7 +1432,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     }
 
     /// @dev Where each attested validator's stake actually belongs: its own key, unless the record
-    ///      shows a rename has carried that validator's alpha somewhere else. Read straight from
+    ///      shows a hotkey swap has carried that validator's alpha somewhere else. Read straight from
     ///      the record, so no lineage lookup and no hop limit come into it.
     function _effectiveSet(uint256 tokenId, bytes32[] memory logicalSet)
         private
@@ -1463,8 +1463,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                 ++i;
             }
         }
-        // A followed rename can land on a key another slot already answers for, and two slots
-        // leaning on one balance would count it twice. Only a slot a rename has moved can collide -
+        // A followed hotkey swap can land on a key another slot already answers for, and two slots
+        // leaning on one balance would count it twice. Only a slot a swap has moved can collide -
         // the registry rejects a set naming one validator twice - so an untouched set pays a single
         // comparison per entry. The attesters clear a real collision by dropping one of the pair.
         for (uint256 i; i < logicalSet.length;) {
@@ -1490,7 +1490,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
     /// @dev Refreshes what the record expects to find, leaving every slot's identity alone. Left
     ///      stale, the holder's own exit reads as the next call's shortfall, and an ordinary
-    ///      rename after it as one the vault must refuse to follow. The TAO rail sells straight
+    ///      swap after it as one the vault must refuse to follow. The TAO rail sells straight
     ///      off rotated-out validators instead of consolidating first, so unlike a settle this
     ///      drops no slot: dropping one that still holds alpha would strand it.
     function _reanchorTracked(uint256 tokenId, bytes32 coldkey, uint16 netuid, bool[] memory unaccounted) private {

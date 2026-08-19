@@ -25,7 +25,7 @@ interface IStaking {
 
     function getStake(bytes32 hotkey, bytes32 coldkey, uint256 netuid) external view returns (uint256);
 
-    /// @notice The hotkey `hotkey` on `netuid` was renamed to, if any. The chain keys this getter
+    /// @notice The hotkey `hotkey` on `netuid` was swapped for, if any. The chain keys this getter
     ///         with a narrower netuid type than the rest of the interface.
     function getHotkeySuccessor(bytes32 hotkey, uint16 netuid) external view returns (bool exists, bytes32 successor);
 

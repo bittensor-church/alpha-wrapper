@@ -6,7 +6,7 @@ still where the vault left it, to be built fresh on current `main`.
 ## The problem
 
 The vault stakes users' alpha to validator hotkeys. A validator's operator can
-rename its hotkey on chain, and the chain quietly carries every delegator's
+swap its hotkey on chain, and the chain quietly carries every delegator's
 stake to the new name. The vault reads the old name, sees nothing, and concludes
 it is poorer than it is. It then prices shares off that number: new depositors
 mint too many, exits are underpaid.
@@ -30,7 +30,7 @@ that it cannot always be answered.
 
 One fact is recorded, and it involves no price:
 
-**A rename leaves a lineage edge.** `swap_hotkey` writes
+**A hotkey swap leaves a lineage edge.** `swap_hotkey` writes
 `HotkeySuccessor(netuid, old) -> new`. The per-subnet path records it
 unconditionally; the global path records it for every subnet where the old key
 was a member.
@@ -48,12 +48,12 @@ So an edge is evidence and its absence is not:
 
 | Event | Edge readable afterwards |
 |---|---|
-| Rename, one subnet | yes, until the old key is registered again |
-| Rename, all subnets, key was a member | yes, same caveat |
-| Rename, all subnets, key had deregistered | no |
+| Swap, one subnet | yes, until the old key is registered again |
+| Swap, all subnets, key was a member | yes, same caveat |
+| Swap, all subnets, key had deregistered | no |
 | Dust sweep | no |
 
-An operator can therefore rename away and register the old key again, leaving
+An operator can therefore swap away and register the old key again, leaving
 the chain looking exactly as it does after a sweep. A design that read that
 silence as "the chain took it" would write off alpha the operator still holds,
 and reprice the token below its real backing on the way. The vault follows the
@@ -80,13 +80,13 @@ struct Slot {
 }
 ```
 
-One `Slot.hotkey` cannot mean both things. Before a rename they are the same;
+One `Slot.hotkey` cannot mean both things. Before a swap they are the same;
 after one they differ, and collapsing them forces the vault to rediscover the
 mapping by walking chain lineage — which is both redundant, since the vault
 performed the follow itself, and unreliable, since lineage is not recorded on
 every path.
 
-Keeping both makes repeated renames an ordinary progression:
+Keeping both makes repeated hotkey swaps an ordinary progression:
 
 ```
                         logical   active
@@ -121,7 +121,7 @@ enum Status { Clean, Repairable, NeedsLocating, NeedsWriteDown, Collision }
 struct Plan {
     Status status;
     bytes32[] logical;
-    bytes32[] active;      // with planned rename follows applied
+    bytes32[] active;      // with planned swap follows applied
     uint256[] balances;
     uint256 totalLocated;
     uint256 missing;
@@ -159,18 +159,18 @@ For each recorded slot where `balance + slack < tracked`:
 
 | Observation | Conclusion | Action |
 |---|---|---|
-| Edge from `active`, successor holds the expectation, unclaimed | renamed, reachable | plan `active = successor` |
+| Edge from `active`, successor holds the expectation, unclaimed | swapped, reachable | plan `active = successor` |
 | Edge, successor short, or already claimed | moved, out of reach | add to `missing` |
 | No edge | nothing on chain explains it | add to `missing` |
 
-The first row is the ordinary validator rename, and it is the one case that
+The first row is the ordinary validator hotkey swap, and it is the one case that
 clears itself: no attester, no price, no delay. It is also the common one, which
 is why it is the case worth automating. Everything else waits for a recovery
 step, the chain's own dust sweep included - no on-chain fact separates a sweep
-from a rename whose edge has since been cleared, so the vault keeps the
+from a swap whose edge has since been cleared, so the vault keeps the
 expectation and lets the attesters settle what happened.
 
-The vault follows at most one edge per operation. Renames of a registered key
+The vault follows at most one edge per operation. Swaps of a registered key
 are rate-limited to one per subnet per day, and each clean operation persists
 the new `active`, so a longer trail is walked one hop per call rather than in a
 loop.
@@ -225,7 +225,7 @@ genuinely gone before signing the other door.
 ### Written down
 
 The classifier cannot be completed, and this is the reason the second path
-exists rather than a concession that the first is badly built. A rename records
+exists rather than a concession that the first is badly built. A swap records
 an edge; if the successor's position is then swept, the edge still points at a
 key holding nothing. The edge says "moved", the truth is "moved, then died", and
 no further on-chain fact separates them. Walking deeper only relocates the
@@ -287,7 +287,7 @@ not exist. No on-chain check closes that gap, and the write-down should be
 described in the security model as the attesters ratifying a loss, not as the
 contract detecting one.
 
-The gap is exploitable by a malicious quorum: rename a validator they control
+The gap is exploitable by a malicious quorum: swap a validator they control
 twice, producing a genuine unexplained shortfall; sign a write-down, which every
 gate passes honestly; deposit at the depressed price; then attest the hidden key
 and profit on the cheap shares. This is a capability they do not have today,
@@ -357,15 +357,15 @@ test bank.
 
 ## Regression matrix
 
-1. Rename the vault can follow; wrap, both exit rails, and rebalance all proceed
+1. Swap the vault can follow; wrap, both exit rails, and rebalance all proceed
    on the successor.
 2. Settle after `A -> B`, then `B -> C` with the registry still naming `A`: all
    paths operate on `C` with no manual intervention.
 3. Dust sweep: fails closed at any alpha price, then clears through a
-   write-down. A rename whose edge the chain has since cleared behaves
+   write-down. A swap whose edge the chain has since cleared behaves
    identically, which is the point - the vault cannot tell them apart and does
    not guess.
-4. Rename followed by a sweep at the successor: fails closed, then clears
+4. Swap followed by a sweep at the successor: fails closed, then clears
    through a write-down.
 5. Rotation drops `A`, nothing settles, then `A -> X -> Y`: the stale rotation
    cannot excuse the shortfall.
@@ -379,7 +379,7 @@ test bank.
     zero is reclaimable on both rails.
 11. Sets that reorder, grow and shrink while `logical` and `active` differ:
     weights stay with the intended validators and active keys stay unique.
-12. A set naming both a slot's `logical` and the `active` its rename moved to:
+12. A set naming both a slot's `logical` and the `active` its swap moved to:
     refused before any balance is read, and cleared by the attesters dropping
     one of the pair.
 

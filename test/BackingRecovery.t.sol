@@ -47,7 +47,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
             NETUID1, _hotkeys(hotkey4, hotkey2, hotkey3), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
         );
         // Only now does the backing leave, down a trail the one-hop resolver cannot walk.
-        _buildRenameTrail(NETUID1, hotkey1, 2);
+        _buildSwapTrail(NETUID1, hotkey1, 2);
 
         vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
         vault.rebalance(NETUID1);
@@ -129,7 +129,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
     ///      never shut out: the exit works before it, during it and after it.
     function test_WriteDown_ReopensATokenNobodyCanAccountFor() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
-        _buildRenameTrail(NETUID1, hotkey1, 2);
+        _buildSwapTrail(NETUID1, hotkey1, 2);
 
         vm.prank(alice);
         vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice));
@@ -168,10 +168,10 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey3, NETUID1), dropped, "and is still sitting where it was");
     }
 
-    /// @dev A write-down settles the record, so it owes the record the renames its own plan
+    /// @dev A write-down settles the record, so it owes the record the swaps its own plan
     ///      followed. Dropping them would re-anchor onto the key the alpha departed and strand what
     ///      the signers were shown as surviving.
-    function test_WriteDown_KeepsAFollowedRenameInTheRecord() public {
+    function test_WriteDown_KeepsAFollowedSwapInTheRecord() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 moved = _getVaultStake(hotkey1, NETUID1);
         _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
@@ -181,7 +181,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         _writeDown(TOKEN1, located);
 
         AlphaVault.Slot[] memory slots = vault.recordedSlots(TOKEN1);
-        assertEq(slots[0].active, hotkey4, "the record kept the key the rename reached");
+        assertEq(slots[0].active, hotkey4, "the record kept the key the swap reached");
         assertEq(slots[0].tracked, moved, "and still expects the alpha sitting there");
         assertEq(vault.totalStake(TOKEN1), located, "the write-down discarded no live backing");
     }
@@ -192,7 +192,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
     function test_WriteDown_KeepsTheRecordStanding() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 owed = _getVaultStake(hotkey1, NETUID1);
-        _buildRenameTrail(NETUID1, hotkey1, 2);
+        _buildSwapTrail(NETUID1, hotkey1, 2);
 
         _writeDown(TOKEN1, 0);
 
@@ -246,7 +246,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
     function test_WriteDown_RefusedWhenLessSurvivedThanTheSignersExpected() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
-        _buildRenameTrail(NETUID1, hotkey1, 2);
+        _buildSwapTrail(NETUID1, hotkey1, 2);
         uint256 located = vault.totalStake(TOKEN1);
 
         IValidatorRegistry.BackingWriteDown memory approval = _approval(TOKEN1, located + 1 ether);
@@ -257,12 +257,12 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
     function test_WriteDown_CannotBeReplayedAgainstALaterLoss() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
-        _buildRenameTrail(NETUID1, hotkey1, 2);
+        _buildSwapTrail(NETUID1, hotkey1, 2);
         IValidatorRegistry.BackingWriteDown memory approval = _approval(TOKEN1, 0);
         bytes[] memory sigs = _sign(_writeDownDigest(registry, approval), signerPks);
         vault.writeDownBacking(approval, sigs);
 
-        _buildRenameTrail(NETUID1, hotkey2, 2);
+        _buildSwapTrail(NETUID1, hotkey2, 2);
         vm.expectRevert(ValidatorRegistry.StaleNonce.selector);
         vault.writeDownBacking(approval, sigs);
     }
@@ -271,10 +271,10 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
     ///      it names is current.
     function test_WriteDown_RefusesASpentNonce() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
-        _buildRenameTrail(NETUID1, hotkey1, 2);
+        _buildSwapTrail(NETUID1, hotkey1, 2);
         _writeDown(TOKEN1, 0);
 
-        _buildRenameTrail(NETUID1, hotkey2, 2);
+        _buildSwapTrail(NETUID1, hotkey2, 2);
         IValidatorRegistry.BackingWriteDown memory replayed = _approval(TOKEN1, 0);
         replayed.nonce = 1;
         bytes[] memory sigs = _sign(_writeDownDigest(registry, replayed), signerPks);
@@ -285,7 +285,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
     // -------------------- Helpers -------------------------------------------------
 
     /// @dev Moves the clone's backing between hotkeys with no vault call and no lineage, standing
-    ///      in for a rename this subnet recorded nothing for.
+    ///      in for a swap this subnet recorded nothing for.
     function _simulateOffVaultSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
         bytes32 coldkey = _subnetColdkey(netuid);
         uint256 amount = _getStakeForColdkey(fromHotkey, coldkey, netuid);
@@ -293,15 +293,15 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         MockStaking(STAKING_PRECOMPILE).setStake(toHotkey, coldkey, netuid, amount);
     }
 
-    /// @dev A rename as the chain records it: the stake moves and the lineage points at it.
+    /// @dev A swap as the chain records it: the stake moves and the lineage points at it.
     function _simulateFollowedSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
         _simulateOffVaultSwap(netuid, fromHotkey, toHotkey);
         MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(fromHotkey, netuid, toHotkey);
     }
 
-    /// @dev Chains `hops` renames, leaving the backing at the far tip and the vault able to walk
+    /// @dev Chains `hops` swaps, leaving the backing at the far tip and the vault able to walk
     ///      only the first edge.
-    function _buildRenameTrail(uint256 netuid, bytes32 fromHotkey, uint256 hops) internal returns (bytes32 tip) {
+    function _buildSwapTrail(uint256 netuid, bytes32 fromHotkey, uint256 hops) internal returns (bytes32 tip) {
         bytes32 previous = fromHotkey;
         for (uint256 i; i < hops; ++i) {
             tip = keccak256(abi.encode("trail-hop", fromHotkey, i));

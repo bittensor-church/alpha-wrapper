@@ -84,7 +84,7 @@ leaves one of its validator slices below the new line. The chain sells
 that slice and the TAO lands on the vault's subnet account, where it
 becomes claimable as described below. What the vault cannot do is tell
 that apart from a validator quietly moving the alpha somewhere else: the
-chain records nothing either way, and it stops showing a rename's trail
+chain records nothing either way, and it stops showing a swap's trail
 once the old name is registered again. Guessing wrong would price the
 position below what it really holds, so the vault stops taking new
 deposits until someone establishes which happened. If the alpha is

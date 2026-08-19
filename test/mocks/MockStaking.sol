@@ -137,7 +137,7 @@ contract MockStaking {
         return stakes[hotkey][coldkey][netuid];
     }
 
-    /// @dev A full rename leaves the old key unowned, after which the chain rejects every stake
+    /// @dev A full swap leaves the old key unowned, after which the chain rejects every stake
     ///      operation naming it - as move origin, as move destination, or as unstake source.
     mapping(bytes32 => bool) public hotkeyDeleted;
 
