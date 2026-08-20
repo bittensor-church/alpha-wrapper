@@ -38,25 +38,6 @@ abstract contract AttestationHelper is Test {
         return keccak256(abi.encodePacked("\x19\x01", _domainSeparator(registry), structHash));
     }
 
-    function _writeDownDigest(ValidatorRegistry registry, IValidatorRegistry.BackingWriteDown memory approval)
-        internal
-        view
-        returns (bytes32)
-    {
-        bytes32 structHash = keccak256(
-            abi.encode(
-                registry.WRITE_DOWN_TYPEHASH(),
-                approval.vault,
-                approval.tokenId,
-                approval.shortfallHash,
-                approval.minimumBacking,
-                approval.nonce,
-                approval.deadline
-            )
-        );
-        return keccak256(abi.encodePacked("\x19\x01", _domainSeparator(registry), structHash));
-    }
-
     /// @dev `pks` must be ordered such that the recovered addresses ascend (the contract
     ///      enforces this in `_verifySignatures`).
     function _sign(bytes32 digest, uint256[] memory pks) internal pure returns (bytes[] memory sigs) {

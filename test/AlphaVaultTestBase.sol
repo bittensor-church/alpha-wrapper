@@ -27,7 +27,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
     event HotkeySwapFollowed(uint256 indexed tokenId, bytes32 indexed oldHotkey, bytes32 indexed newHotkey);
     event BackingRecovered(uint256 indexed tokenId, bytes32 indexed hotkey, uint256 found);
-    event BackingWrittenDown(uint256 indexed tokenId, uint256 nonce, uint256 located);
+    event ShortfallDeclared(uint256 indexed tokenId, bytes32 shortfall, uint256 located);
 
     AlphaVault public vault;
     DepositMailbox public mailboxLogic;
@@ -320,30 +320,11 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         _setRegBlock(netuid, 300);
     }
 
-    function _approval(uint256 tokenId, uint256 minimumBacking)
-        internal
-        view
-        returns (IValidatorRegistry.BackingWriteDown memory)
-    {
-        return IValidatorRegistry.BackingWriteDown({
-            vault: address(vault),
-            tokenId: tokenId,
-            shortfallHash: vault.shortfallHash(tokenId),
-            minimumBacking: minimumBacking,
-            nonce: registry.writeDownNonces(address(vault), tokenId) + 1,
-            deadline: block.timestamp + 1 days
-        });
-    }
-
-    /// @dev Signs an approval with the quorum the base installs and spends it. The signing is kept
-    ///      behind its own call so the struct and the signature array never share a stack frame:
-    ///      inlined, the pair puts viaIR one slot over the limit in any test contract of real size.
-    function _writeDown(uint256 tokenId, uint256 minimumBacking) internal {
-        _spendApproval(_approval(tokenId, minimumBacking));
-    }
-
-    function _spendApproval(IValidatorRegistry.BackingWriteDown memory approval) internal {
-        vault.writeDownBacking(approval, _sign(_writeDownDigest(registry, approval), signerPks));
+    /// @dev Records the loss and lets its recovery window run out, leaving the token at the point
+    ///      where the next call of any kind writes it off.
+    function _writeOffShortfall(uint256 tokenId) internal {
+        vault.declareShortfall(tokenId);
+        vm.warp(vault.depositsOpenFrom(tokenId));
     }
 
     /// @dev Moves the clone's backing between hotkeys with no vault call and no lineage, standing
