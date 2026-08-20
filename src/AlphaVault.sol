@@ -119,8 +119,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
     /// @dev How long anyone has to point the vault at missing alpha before the record gives up on
     ///      it. Deposits and quotes wait this out; exits, mailbox reclaims and TAO claims stay open
-    ///      throughout, so the wait costs only new money coming in. It also bounds how long a
-    ///      contract pricing off this vault can be held up, which is why it is short.
+    ///      throughout, so the wait costs only new money coming in. It is short because the
+    ///      contracts pricing off this vault cannot wait - though note it bounds one window and not
+    ///      the wait: a different loss is not the loss on file, and starts a window of its own.
     uint256 private constant RECOVERY_WINDOW = 3 hours;
     /// @dev `getAlphaPrice` rounds down to a multiple of this (e18 scale), so the true price is
     ///      always below the read plus one step.

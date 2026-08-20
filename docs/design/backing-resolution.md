@@ -320,16 +320,36 @@ and that nobody finds within three hours, is written off permanently. After the
 settle `tracked` equals what the chain reports, so `recoverStray` reverts
 `BackingIntact` and the alpha stops being claimable by anyone.
 
-Two things bound that, neither of which removes it. Nobody profits from it: the
-stranded alpha is unreachable by whoever caused the shortfall too, so a
-premature settle is destruction with no beneficiary rather than a transfer.
-And the evidence needed to prevent it is public — the vault's positions are one
-`StakingHotkeys` read against its own coldkey — so the scan is cheap for anyone
-willing to run it.
+And it has a beneficiary, which an earlier draft of this section wrongly denied.
+`recoverStray` is closed afterwards, but `_unionSlots` counts any key in the
+recorded set *or* the attested set, so the moment the attesters name the key
+holding the stranded alpha it re-enters `plan.total`. Whoever deposited at the
+deflated price takes a pro-rata slice of it. That is a transfer between share
+cohorts, not a burn, and under the signed design a threshold signature plus a
+minimum-backing floor gated it. Here the only gate is a three-hour timer any
+anonymous caller can start.
 
-The window is short because the contracts pricing off this vault cannot wait,
-and that is a deliberate trade: the cost of a bounded worst case is paid in
-monitoring.
+What does bound it: the write-off may settle only the loss its window was
+granted for, so a gap that grows under a running clock has to wait for a clock
+of its own — a trivial shortfall cannot mature into permission to write off a
+large one. And the evidence needed to prevent it entirely is public: the vault's
+positions are one `StakingHotkeys` read against its own coldkey, so the scan is
+cheap for anyone willing to run it.
+
+### The bound is on the window, not on the wait
+
+The three-hour figure bounds one window. It does not bound how long a position
+stays shut, because a *different* loss is not the loss on file and starts its
+own window. An operator holding one of the attested validator's keys can
+manufacture fresh distinct losses on demand — swap away with the edge erased,
+let it settle, swap back — and keep quotes refusing indefinitely for two hotkey
+swaps a cycle.
+
+So the honest statement of what dropping the signature bought is narrower than
+"a bounded worst case": it removes a quorum that could withhold the clock, and
+it removes the attack where that quorum settles a loss that was never real. It
+does not guarantee an integrator that the vault will answer within three hours
+of the first sign of trouble.
 
 ## Every case terminates
 
