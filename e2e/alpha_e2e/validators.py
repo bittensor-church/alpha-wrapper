@@ -1,13 +1,12 @@
 """EIP-712 attestations for the ValidatorRegistry.
 
-Two kinds are signed here. A WeightAttestation names the validator set for a
-subnet. A BackingWriteDown acknowledges that a token's backing is gone and lets
-the vault re-anchor on whatever is left, which is the only way to reopen a token
-whose alpha vanished with nothing on chain naming where it went.
-
-Both are signed with every listed signer key, sorted by recovered signer address
-ascending (a contract requirement), and submitted by the first key, which also
+One kind is signed here: a WeightAttestation naming the validator set for a
+subnet. It carries every listed signer key, sorted by recovered signer address
+ascending (a contract requirement), and is submitted by the first key, which also
 pays for the transaction.
+
+Reopening a token whose alpha vanished needs no signature at all - see
+declare_shortfall below, which anyone may call and which only starts a clock.
 """
 import pathlib
 import sys

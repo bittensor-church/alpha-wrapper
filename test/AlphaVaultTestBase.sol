@@ -6,7 +6,6 @@ import { AlphaVault } from "src/AlphaVault.sol";
 import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
 import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
-import { IValidatorRegistry } from "src/interfaces/IValidatorRegistry.sol";
 import { MockStaking, CHAIN_MIN_STAKE, CHAIN_MIN_TRANSFER, CHAIN_NOMINATOR_MIN_STAKE } from "./mocks/MockStaking.sol";
 import { MockAddressMapping } from "./mocks/MockAddressMapping.sol";
 import { MockSubnetPrecompile } from "./mocks/MockSubnetPrecompile.sol";

@@ -4,7 +4,9 @@ pragma solidity ^0.8.20;
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
+import { MockSubnetPrecompile } from "./mocks/MockSubnetPrecompile.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
+import { SUBNET_PRECOMPILE } from "src/interfaces/ISubnet.sol";
 
 /// @dev Covers getting a position back once the vault has lost sight of its alpha: anyone pointing
 ///      it at the key that holds it, and a loss nobody can find running out its window.
@@ -212,6 +214,72 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.declareShortfall(TOKEN1);
     }
 
+    function test_RevertWhen_DeclaringAgainstATokenWithNoPosition() public {
+        vm.expectRevert(AlphaVault.NothingToUnwrap.selector);
+        vault.declareShortfall(TOKEN1);
+    }
+
+    /// @dev Starting a clock persists followed swaps and settles nothing else, so it takes the same
+    ///      guards as every other rail that writes to the record.
+    function test_RevertWhen_DeclaringWhileTheSubnetIsDissolving() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _buildSwapTrail(NETUID1, hotkey1, 2);
+        MockSubnetPrecompile(SUBNET_PRECOMPILE).setDissolving(uint16(NETUID1), true);
+
+        vm.expectRevert(AlphaVault.SubnetInDissolutionBlackoutPeriod.selector);
+        vault.declareShortfall(TOKEN1);
+    }
+
+    /// @dev A loss deepening after its clock started is a different loss, and must not ride out the
+    ///      window granted for the smaller one. Without the present balance in the digest a slot
+    ///      short by a rao and the same slot emptied to zero read identically, because a slot the
+    ///      plan cannot account for never has its expectation re-anchored.
+    function test_ALossDeepeningUnderTheClock_DoesNotRideItOut() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        bytes32 coldkey = _subnetColdkey(NETUID1);
+        uint256 owed = _getVaultStake(hotkey1, NETUID1);
+
+        // Short by a hair: just past the slack the record forgives.
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, owed - 2e3);
+        vault.declareShortfall(TOKEN1);
+        uint256 deadline = vault.depositsOpenFrom(TOKEN1);
+
+        // The rest drains while the clock for that hair is still running. Same slot, same key, same
+        // expectation - only the size of the gap moved, which is why the digest cannot catch it.
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
+        assertEq(vault.depositsOpenFrom(TOKEN1), 0, "the clock no longer answers for this loss");
+
+        vm.warp(deadline);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.rebalance(NETUID1);
+
+        // The bigger loss earns its own window, and only then settles.
+        _writeOffShortfall(TOKEN1);
+        vault.rebalance(NETUID1);
+        assertTrue(vault.isBackingIntact(TOKEN1), "and settles once that one has run");
+    }
+
+    /// @dev The deadline is the whole mechanism, so it is worth pinning either side of rather than
+    ///      only at the boundary every other test warps to.
+    function testFuzz_WriteOffFallsDueOnlyOnceTheWindowIsOut(uint256 offset) public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _buildSwapTrail(NETUID1, hotkey1, 2);
+        vault.declareShortfall(TOKEN1);
+        uint256 deadline = vault.depositsOpenFrom(TOKEN1);
+
+        uint256 at = bound(offset, deadline - 3 hours, deadline + 3 hours);
+        vm.warp(at);
+
+        if (at < deadline) {
+            vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+            vault.rebalance(NETUID1);
+            assertFalse(vault.isBackingIntact(TOKEN1), "the loss still stands before the deadline");
+        } else {
+            vault.rebalance(NETUID1);
+            assertTrue(vault.isBackingIntact(TOKEN1), "and settles from the deadline onwards");
+        }
+    }
+
     /// @dev The clock starts once per loss and is never restarted, or anyone could hold a token shut
     ///      past its deadline by re-declaring the same loss every couple of hours. Asking again is
     ///      allowed and does nothing: an exit may have got there first, and no caller should have to
@@ -307,8 +375,10 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.declareShortfall(TOKEN1);
 
         _buildSwapTrail(NETUID1, hotkey2, 2);
-        vm.warp(vault.depositsOpenFrom(TOKEN1));
+        assertEq(vault.depositsOpenFrom(TOKEN1), 0, "the clock stopped answering for a loss it does not cover");
 
+        // Even long past the first deadline, the second loss has had no window of its own.
+        vm.warp(block.timestamp + 3 hours);
         _simulateAlphaDepositHotkey(bob, NETUID1, 1 ether, hotkey3);
         vm.prank(bob);
         vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);

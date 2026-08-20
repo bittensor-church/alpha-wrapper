@@ -3,7 +3,6 @@ pragma solidity ^0.8.20;
 
 import { Test } from "forge-std/Test.sol";
 import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
-import { IValidatorRegistry } from "src/interfaces/IValidatorRegistry.sol";
 
 abstract contract AttestationHelper is Test {
     function _domainSeparator(ValidatorRegistry registry) internal view returns (bytes32) {

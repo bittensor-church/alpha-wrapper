@@ -69,6 +69,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     struct Plan {
         bytes32[] keys;
         bool[] unaccounted;
+        uint256[] present;
         uint256 total;
         uint256 shortIndex;
         uint256 shortPresent;
@@ -86,6 +87,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///      a token could sit recorded while a second loss appeared, and the first call after the
     ///      window would write both off together.
     mapping(uint256 => bytes32) private _shortfallSeen;
+
+    /// @dev How big that loss was when the clock started. The write-off may settle that much and no
+    ///      more, so a loss deepening under a running clock has to wait for a clock of its own.
+    mapping(uint256 => uint256) private _shortfallOwed;
 
     /// @notice Cumulative TAO credited per share over a token's lifetime, scaled by
     ///         `TAO_INDEX_PRECISION`. Grows when the clone receives TAO the vault did not pay out.
@@ -750,11 +755,22 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         return _resolveBacking(tokenId).total;
     }
 
-    /// @notice When a recorded loss stops holding deposits and quotes shut, as a unix timestamp.
-    ///         Zero when no loss is recorded.
+    /// @notice When the loss on file stops holding deposits and quotes shut, as a unix timestamp.
+    /// @dev    Zero when no deadline governs the position right now, which covers three cases: no
+    ///         loss recorded, a recorded loss the position has since repaired, and a loss that has
+    ///         changed since it was recorded. The last is the one worth knowing about - the clock
+    ///         that was running was granted for a loss that is no longer the one in front of the
+    ///         vault, so the position stays shut with no deadline until someone declares the new
+    ///         one. Reading the raw timestamp instead would promise a reopening that will not
+    ///         happen.
     function depositsOpenFrom(uint256 tokenId) external view returns (uint256) {
         uint256 seenAt = _shortfallSeenAt[tokenId];
-        return seenAt == 0 ? 0 : seenAt + RECOVERY_WINDOW;
+        if (seenAt == 0) return 0;
+        Plan memory plan = _resolveBacking(tokenId);
+        if (plan.shortIndex == type(uint256).max) return 0;
+        if (_shortfallDigest(tokenId, plan) != _shortfallSeen[tokenId]) return 0;
+        if (_unaccountedGap(tokenId, plan) > _shortfallOwed[tokenId]) return 0;
+        return seenAt + RECOVERY_WINDOW;
     }
 
     /// @dev The same plan the operations run, without applying it. Reporting rather than reverting,
@@ -804,6 +820,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @notice Preview the unwrap of `shares` for a position.
     /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while the subnet is being dissolved
     ///         and `SubnetDissolved` for a dissolved position whose clone holds no TAO refund.
+    ///         Reverts `BackingShortfall` on the same terms as `totalStake`, which it divides -
+    ///         note the exit itself does not, so a holder may take a withdrawal this refuses to
+    ///         quote. That is deliberate: the door stays open on a loss they did not cause, but the
+    ///         figure behind the quote counts only what the vault can locate and is not one to size
+    ///         a withdrawal against. `locatedStake` reports that figure for anyone who wants it.
     ///         Live-path delivery is exact to within a few RAO of chain-side share rounding: unwrap
     ///         delivers this amount or reverts, so a sub-floor total is not deliverable here and
     ///         must be exited via unwrapForTao. That voluntary alpha-for-TAO sell is a market order
@@ -1189,9 +1210,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///         there is nothing here for a caller to take and no reason to make holders wait on a
     ///         quorum for it.
     ///
-    ///         This answers a swap whose trail the chain no longer shows, and equally an
-    ///         acknowledgement that turned out to be premature: the record keeps what each slot is
-    ///         owed either way, so the alpha stays reachable by whoever finds it.
+    ///         This answers a swap whose trail the chain no longer shows, and it is the only answer
+    ///         while the loss is on file: the record keeps what each slot is owed for as long as its
+    ///         window runs, so the alpha stays reachable by whoever finds it first. Once the window
+    ///         is out and a settle has re-anchored the expectation, there is nothing left to
+    ///         recover against and this refuses `BackingIntact`.
     /// @param  tokenId   ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @param  slotIndex The recorded slot that is short.
     /// @param  hotkey    The key actually holding what that slot is owed.
@@ -1236,7 +1259,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     function declareShortfall(uint256 tokenId) external nonReentrant {
         if (subnetClone[tokenId] == address(0)) revert NothingToUnwrap();
-        _requireNotDissolving(_netuid(tokenId));
+        uint16 netuid = _netuid(tokenId);
+        _requireNotDissolving(netuid);
+        // The plan below reads the registry raw, so this is what refuses a set that is missing or
+        // malformed. Every other rail that writes to the record takes the same guard first, and this
+        // one persists followed swaps and starts a clock off whatever it reads.
+        _resolveValidators(netuid);
 
         Plan memory plan = _resolveBacking(tokenId);
         if (plan.shortIndex == type(uint256).max) revert BackingIntact();
@@ -1252,8 +1280,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///      loss, and earns its own window.
     function _recordShortfall(uint256 tokenId, Plan memory plan) private {
         bytes32 shortfall = _shortfallDigest(tokenId, plan);
-        if (_shortfallSeen[tokenId] == shortfall) return;
+        uint256 gap = _unaccountedGap(tokenId, plan);
+        // The same slots short by more than the clock was granted for is a deeper loss, and takes a
+        // fresh window; by less is the position recovering, which nothing needs to answer for.
+        if (_shortfallSeen[tokenId] == shortfall && gap <= _shortfallOwed[tokenId]) return;
         _shortfallSeen[tokenId] = shortfall;
+        _shortfallOwed[tokenId] = gap;
         // forge-lint: disable-next-line(block-timestamp)
         _shortfallSeenAt[tokenId] = block.timestamp;
         emit ShortfallDeclared(tokenId, shortfall, plan.total);
@@ -1263,15 +1295,21 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         if (_shortfallSeenAt[tokenId] == 0) return;
         delete _shortfallSeenAt[tokenId];
         delete _shortfallSeen[tokenId];
+        delete _shortfallOwed[tokenId];
     }
 
     /// @dev Which slots the vault cannot account for, and what each is owed. Deliberately narrower
     ///      than the whole record: a digest over every slot would move on any ordinary withdrawal,
     ///      so a recorded loss could never survive one. Over the shortfall alone it is stable under
-    ///      activity that loses nothing, and moves the moment a different or additional loss
-    ///      appears - which is exactly when the window that was running stops covering the state in
-    ///      front of it. Zero for a position that accounts for itself, which is what lets a stored
-    ///      digest stand in for "a loss is on file".
+    ///      activity that loses nothing, and moves the moment a different or additional slot appears
+    ///      - which is exactly when the window that was running stops covering the state in front of
+    ///      it. Zero for a position that accounts for itself, which is what lets a stored digest
+    ///      stand in for "a loss is on file".
+    ///
+    ///      It says which slots, not how much: an exit re-splits toward the attested weights and can
+    ///      leave alpha on a short slot's key, so a digest sensitive to the amount present would be
+    ///      reset by ordinary withdrawals and the window would never mature. `_unaccountedGap`
+    ///      carries the size instead, where growth is what matters and shrinkage is harmless.
     function _shortfallDigest(uint256 tokenId, Plan memory plan) private view returns (bytes32 digest) {
         Slot[] storage tokenSlots = _slots[tokenId];
         for (uint256 i; i < plan.unaccounted.length;) {
@@ -1284,13 +1322,32 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
     }
 
+    /// @dev How much of what the unaccounted slots are owed is not there. The digest cannot carry
+    ///      this, so the window does: a slot the plan cannot account for never has its expectation
+    ///      re-anchored, so a loss that deepens under a running clock would otherwise mature into
+    ///      permission to write off far more than the clock was granted for - short by a rao at
+    ///      declare time, drained to nothing three hours later, settled in full.
+    function _unaccountedGap(uint256 tokenId, Plan memory plan) private view returns (uint256 gap) {
+        Slot[] storage tokenSlots = _slots[tokenId];
+        for (uint256 i; i < plan.unaccounted.length;) {
+            if (plan.unaccounted[i]) {
+                uint256 tracked = tokenSlots[i].tracked;
+                uint256 present = plan.present[i];
+                if (tracked > present) gap += tracked - present;
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
     /// @dev Runs before anything is priced: follows the hotkey swaps the plan found and books
     ///      anything it could not account for. Returns what the vault can locate.
     ///
-    ///      Only a deposit refuses. Minting against an understated position is the one direction
-    ///      the gap can be exploited from, so it waits. An exit paid out of the located total can
-    ///      only ever shortchange the caller who asked for it, so it proceeds - holders are never
-    ///      shut in by a loss they did not cause.
+    ///      The rails that could mint refuse, and so does every quote. Pricing against an
+    ///      understated position is the one direction the gap can be exploited from, so they wait.
+    ///      An exit paid out of the located total can only ever shortchange the caller who asked for
+    ///      it, so it proceeds - holders are never shut in by a loss they did not cause.
     ///
     ///      The booking has to be sticky. This call is followed by a settle that re-reads the
     ///      record from the chain, which would otherwise erase the very shortfall that closed
@@ -1331,6 +1388,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     function _writeOffDue(uint256 tokenId, Plan memory plan) private view returns (bool) {
         uint256 seenAt = _shortfallSeenAt[tokenId];
         if (seenAt == 0 || _shortfallDigest(tokenId, plan) != _shortfallSeen[tokenId]) return false;
+        if (_unaccountedGap(tokenId, plan) > _shortfallOwed[tokenId]) return false;
         // forge-lint: disable-next-line(block-timestamp)
         return block.timestamp >= seenAt + RECOVERY_WINDOW;
     }
@@ -1365,6 +1423,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         Slot[] storage tokenSlots = _slots[tokenId];
         plan.keys = _unionSlots(tokenId, currentSet);
         uint256[] memory balances = _fetchBalances(plan.keys, coldkey, netuid);
+        plan.present = balances;
         plan.total = _sumBalances(balances);
         plan.shortIndex = type(uint256).max;
 
@@ -1383,7 +1442,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                     }
                     // The settle that follows re-reads every slot from the chain, which would file
                     // this loss as an ordinary balance change. Flagging the slot keeps its
-                    // expectation standing until the alpha is found or acknowledged as gone.
+                    // expectation standing until the alpha is found or its window has run.
                     plan.unaccounted[i] = true;
                 }
             }
@@ -1403,8 +1462,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///      Every other shortfall stands, the chain's own dust sweep included. A missing edge is no
     ///      evidence of one, because the chain drops a key's successor as soon as that key is
     ///      registered again - so an operator who swaps away and re-registers can erase the trail
-    ///      behind them. Standing shortfalls clear through the attesters naming where the alpha
-    ///      went, or through a signed write-down once it is gone for good.
+    ///      behind them. Standing shortfalls clear through someone naming where the alpha went, or
+    ///      through the recovery window running out on it.
     ///
     ///      Deliberately no price and no threshold: judging a past event by today's valuation gets
     ///      it wrong in both directions as the market moves.
