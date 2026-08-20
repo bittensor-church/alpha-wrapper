@@ -741,6 +741,16 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         return _resolveBacking(tokenId).shortIndex == type(uint256).max;
     }
 
+    /// @notice Alpha the vault can currently find for this token, whether or not that is all of it.
+    /// @dev    The diagnostic figure behind `totalStake`, answering where that one refuses. Equal to
+    ///         it while `isBackingIntact` is true, and short of it by whatever the vault has lost
+    ///         track of while it is false. Read it to see what an exit would pay right now or to
+    ///         watch a position that is refusing calls - never to value a holding, which is what
+    ///         `totalStake` is for and why that one would rather revert than answer.
+    function locatedStake(uint256 tokenId) external view returns (uint256) {
+        return _resolveBacking(tokenId).total;
+    }
+
     /// @notice When a recorded loss stops holding deposits and quotes shut, as a unix timestamp.
     ///         Zero when no loss is recorded.
     function depositsOpenFrom(uint256 tokenId) external view returns (uint256) {

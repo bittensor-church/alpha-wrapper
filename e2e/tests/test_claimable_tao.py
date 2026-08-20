@@ -91,13 +91,13 @@ def test_root_sweep_tao_becomes_claimable(env):
     swept_short = not env.backing_intact(token_id)
     if swept_short:
         print("  Position reads short by design; exiting anyway against the located "
-              f"{env.vault_total_stake(token_id)} alpha RAO")
+              f"{env.vault_located_stake(token_id)} alpha RAO")
 
     # The clearing pass empties the vault's position but its shares remain outstanding. How
     # empty depends on the runtime build: an exactly-zero position retires shares through the
     # zero-backing unwrap, while a sub-floor residue exits through the TAO rail's full-drain sale.
     all_shares = env.vault_shares(token_id)
-    if env.vault_total_stake(token_id) == 0:
+    if env.vault_located_stake(token_id) == 0:
         env.vault_send(
             2_500_000, "Sweep: cleanup unwrap failed",
             "unwrap(uint256,uint256,bytes32)", token_id, all_shares, env.wrapper_substrate_coldkey,
@@ -109,10 +109,11 @@ def test_root_sweep_tao_becomes_claimable(env):
         )
     assert env.vault_total_supply(token_id) == 0, "cleanup left outstanding shares"
 
-    # Only new deposits wait on the attesters. Acknowledging the loss starts the window they wait
-    # out; the approval is a real 2-of-2 EIP-712 message, signed and spent against the live chain.
+    # Only quotes and new deposits wait, and they wait on a clock rather than on anyone's signature.
+    # Putting the loss on file needs no quorum and no registry; three hours later the next call of
+    # any kind settles the record onto what the chain still reports.
     if swept_short:
-        env.write_down_backing(token_id, 0)
+        env.declare_shortfall(token_id)
         opens_from = env.deposits_open_from(token_id)
-        assert opens_from > 0, "the acknowledgement did not start the deposit window"
-        print(f"  Attesters acknowledged the loss; deposits reopen at {opens_from}")
+        assert opens_from > 0, "declaring the shortfall did not start the recovery window"
+        print(f"  Loss on file with no quorum involved; the record settles from {opens_from}")

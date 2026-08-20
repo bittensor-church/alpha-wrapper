@@ -255,12 +255,32 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.totalStake(TOKEN1);
         vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
         vault.previewUnwrap(TOKEN1, shares / 4);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.sharePrice(TOKEN1);
 
         _writeOffShortfall(TOKEN1);
         vault.rebalance(NETUID1);
 
         (uint256 quoted,) = vault.previewUnwrap(TOKEN1, shares / 4);
         assertGt(quoted, 0, "the quote resumes on a record that adds up again");
+    }
+
+    /// @dev Refusing to value a position must not make it unreadable. The located figure is the
+    ///      same number the quote would have given, named so that nobody reaches for it by
+    ///      accident: it answers throughout, and agrees with `totalStake` once that one will speak.
+    function test_LocatedStake_AnswersWhileTheQuoteRefuses() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        uint256 whole = vault.locatedStake(TOKEN1);
+        assertEq(whole, vault.totalStake(TOKEN1), "they are the same number on a healthy position");
+
+        _buildSwapTrail(NETUID1, hotkey1, 2);
+        uint256 located = vault.locatedStake(TOKEN1);
+        assertGt(located, 0, "the located figure still answers");
+        assertLt(located, whole, "and is short by what the vault lost track of");
+
+        _writeOffShortfall(TOKEN1);
+        vault.rebalance(NETUID1);
+        assertEq(vault.locatedStake(TOKEN1), vault.totalStake(TOKEN1), "and they agree again after");
     }
 
     /// @dev A loss on file may hold quotes and deposits shut, but it must never stand between a

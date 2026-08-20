@@ -118,18 +118,16 @@ def set_validators(
     return transaction_hash.hex()
 
 
-def write_down_backing(
+def declare_shortfall(
     vault_address: str,
-    registry_address: str,
-    signer_private_keys: List[str],
+    submitter_private_key: str,
     token_id: int,
-    minimum_backing: int,
-    *, deadline_secs: int = 3600, rpc_url: str = config.RPC_URL,
+    *, rpc_url: str = config.RPC_URL,
 ) -> str:
-    """Sign and spend one backing write-down for `token_id`.
+    """Put `token_id`'s unaccounted loss on file, starting its recovery window.
 
-    `minimum_backing` is the floor the signers commit to: the call refuses if the
-    vault locates less than this. They acknowledge the loss; the chain sizes it.
+    Permissionless: no signatures, no quorum, no registry. The call only records
+    when the vault first saw the loss, which the chain cannot work out for itself.
     """
     from eth_account import Account
     from web3 import Web3
@@ -139,76 +137,20 @@ def write_down_backing(
 
     w3 = get_web3_connection(rpc_url)
     vault_address = Web3.to_checksum_address(vault_address)
-    registry_address = Web3.to_checksum_address(registry_address)
-    chain_id = w3.eth.chain_id
-    registry_contract = w3.eth.contract(address=registry_address, abi=load_abi("ValidatorRegistry"))
     vault_contract = w3.eth.contract(address=vault_address, abi=load_abi("AlphaVault"))
-
-    shortfall_hash = vault_contract.functions.shortfallHash(token_id).call()
-    next_nonce = registry_contract.functions.writeDownNonces(vault_address, token_id).call() + 1
-    deadline = int(time.time()) + deadline_secs
-
-    typed_data = {
-        "types": {
-            "EIP712Domain": [
-                {"name": "name", "type": "string"},
-                {"name": "version", "type": "string"},
-                {"name": "chainId", "type": "uint256"},
-                {"name": "verifyingContract", "type": "address"},
-            ],
-            "BackingWriteDown": [
-                {"name": "vault", "type": "address"},
-                {"name": "tokenId", "type": "uint256"},
-                {"name": "shortfallHash", "type": "bytes32"},
-                {"name": "minimumBacking", "type": "uint256"},
-                {"name": "nonce", "type": "uint256"},
-                {"name": "deadline", "type": "uint256"},
-            ],
-        },
-        "primaryType": "BackingWriteDown",
-        "domain": {
-            "name": "AlphaVault ValidatorRegistry",
-            "version": "1",
-            "chainId": chain_id,
-            "verifyingContract": registry_address,
-        },
-        "message": {
-            "vault": vault_address,
-            "tokenId": token_id,
-            "shortfallHash": shortfall_hash,
-            "minimumBacking": minimum_backing,
-            "nonce": next_nonce,
-            "deadline": deadline,
-        },
-    }
-
-    pairs = []
-    for private_key in signer_private_keys:
-        signer = Account.from_key(private_key)
-        signed = Account.sign_typed_data(private_key, full_message=typed_data)
-        pairs.append((signer.address.lower(), bytes(signed.signature)))
-    pairs.sort(key=lambda pair: pair[0])
-    signatures = [signature for _, signature in pairs]
-
-    submitter_private_key = signer_private_keys[0]
     submitter = Account.from_key(submitter_private_key)
 
-    approval_tuple = (
-        vault_address, token_id, shortfall_hash, minimum_backing, next_nonce, deadline,
-    )
-    transaction = vault_contract.functions.writeDownBacking(
-        approval_tuple, signatures
-    ).build_transaction(
+    transaction = vault_contract.functions.declareShortfall(token_id).build_transaction(
         {
             "from": submitter.address,
             "nonce": w3.eth.get_transaction_count(submitter.address),
             "gasPrice": w3.to_wei(10, "gwei"),
-            "chainId": chain_id,
+            "chainId": w3.eth.chain_id,
         }
     )
     signed_transaction = w3.eth.account.sign_transaction(transaction, submitter_private_key)
     transaction_hash = w3.eth.send_raw_transaction(signed_transaction.raw_transaction)
     receipt = w3.eth.wait_for_transaction_receipt(transaction_hash, timeout=60)
     if receipt.status != 1:
-        raise ValidatorUpdateError(f"writeDownBacking failed (tx {transaction_hash.hex()})")
+        raise ValidatorUpdateError(f"declareShortfall failed (tx {transaction_hash.hex()})")
     return transaction_hash.hex()
