@@ -59,51 +59,42 @@ Deposits parked under a dropped hotkey stay recoverable: `wrap` refuses
 out-of-set hotkeys up front, and stake already sitting in a mailbox
 under one stays reclaimable by its owner.
 
-## Acknowledging a loss
+## When a position loses track of its alpha
 
 Sometimes the vault finds less alpha under a validator than it left
-there, and nothing on chain says where it went. It stops taking new
-deposits into that position until someone establishes what happened,
-because pricing it wrong hands value from one set of holders to another.
+there, and nothing on chain says where it went. It stops quoting and
+taking new deposits into that position until someone establishes what
+happened, because pricing it wrong hands value from one set of holders to
+another.
 
-Most of the time this is not yours to solve. If the alpha is findable,
-anyone at all can call the vault's `recoverStray` and point the position
-at the key holding it - no signature, no delay, and nothing further from
-you. Finding it is a scan of the subnet's hotkeys against the vault's own
-coldkey.
+None of this needs your signature, and there is nothing here to co-sign.
+If the alpha is findable, anyone at all can call the vault's
+`recoverStray` and point the position at the key holding it - no
+signature, no delay. Finding it is a scan of the subnet's hotkeys against
+the vault's own coldkey.
 
-You are needed only when that scan comes back empty, because the chain
-sold a slice that fell below its dust line and no key holds it any more.
-Then co-sign a write-down:
+If that scan comes back empty, the position runs a clock instead. The
+first exit to see the loss puts it on file, and anyone can put it there
+directly with `declareShortfall(tokenId)` for a position nothing else is
+touching. Three hours later the next call of any kind settles the record
+onto what the chain still reports, and the position resumes.
 
-    struct BackingWriteDown {
-        address vault;           // the vault this approval is for
-        uint256 tokenId;         // the position it applies to
-        bytes32 shortfallHash;   // the exact loss you examined
-        uint256 minimumBacking;  // least backing you expect to survive
-        uint256 nonce;           // orders write-downs for this position
-        uint256 deadline;        // submission cutoff, unix seconds
-    }
+The clock starts once per loss and cannot be restarted, so nobody can
+hold a position shut past its deadline. A *different* loss appearing
+while it runs is not the one on file: the record stops matching, and the
+new loss earns its own window rather than riding out on the old one.
+Finding the alpha at any point cancels the clock outright.
 
-Signed over the same domain as an attestation, and submitted by anyone to
-the vault's `writeDownBacking`. You acknowledge that a loss happened; you
-do not decide its size, and you do not erase it. The position keeps its
-record of what it is owed, so if you turn out to be wrong, anyone can
-still recover it afterwards. `minimumBacking` lets you refuse if less
-survived than you expected, and `shortfallHash` ties the approval to the
-loss you looked at: which slots could not be accounted for and what each
-was owed. A different or additional loss is not covered by it, whether it
-appears before you spend the approval or after, and needs its own.
-The vault refuses a write-down against a position that can account for
-itself.
-
-Deposits then wait 24 hours before resuming, so anyone who can still find
-the alpha has time to say so. Do the scan before you sign; that window is
-the safety net, not the check.
+This is where you come in, if at all: the window is short because the
+positions that price off this vault cannot wait, so the scan wants
+somebody watching. Running one and calling `recoverStray` is worth far
+more than anything you could sign.
 
 Throughout all of this holders can still leave. Exits pay out of whatever
 the vault can locate, mailbox deposits stay reclaimable, and credited TAO
-stays claimable. Only new deposits wait on you.
+stays claimable. Leaving while a position is short does forfeit a share
+of anything recovered later, which is the cost of taking an honest price
+early.
 
 ## Signer set changes
 
