@@ -298,13 +298,13 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
     }
 
     // A raised chain threshold can force-sell the whole position while shares remain outstanding.
-    // Nothing on chain names that as the cause, so the attesters acknowledge the loss first; then
+    // Nothing on chain names that as the cause, so the loss goes on file and runs its window; then
     // the zero-backing unwrap retires those shares and the sale proceeds stay claimable.
     function test_UnwrapAfterFullSweep_RetiresSharesAndKeepsClaim() public {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
         uint256 proceeds = 7 ether;
         _simulateTaoAwardedOnDissolution(TOKEN1, proceeds);
-        _writeDown(TOKEN1, 0);
+        _writeOffShortfall(TOKEN1);
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         (uint256 previewAlpha, uint256 previewTao) = vault.previewUnwrap(TOKEN1, shares);
@@ -329,8 +329,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         uint256 seed = 1e10;
         _depositAndWrap(alice, NETUID1, seed);
         _simulateTaoAwardedOnDissolution(TOKEN1, 5 ether);
-        _writeDown(TOKEN1, 0);
-        vm.warp(vault.depositsOpenFrom(TOKEN1));
+        _writeOffShortfall(TOKEN1);
         _depositAndWrap(bob, NETUID1, seed);
         assertLe(vault.totalSupply(TOKEN1), 1e45);
 
@@ -344,8 +343,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
     function test_RevertWhen_RecapitalizationWouldBreachClaimIndexBound() public {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
         _simulateTaoAwardedOnDissolution(TOKEN1, 5 ether);
-        _writeDown(TOKEN1, 0);
-        vm.warp(vault.depositsOpenFrom(TOKEN1));
+        _writeOffShortfall(TOKEN1);
 
         bytes32 chosen = vault.getCurrentValidators(NETUID1)[0];
         _simulateAlphaDeposit(bob, NETUID1, DEPOSIT);

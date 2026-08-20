@@ -71,9 +71,16 @@ class Environment:
         ))
 
     def vault_total_stake(self, token_id: int) -> int:
-        """The vault's tracked total alpha (RAO) for a token id."""
+        """The vault's tracked total alpha (RAO) for a token id. Refuses while the position cannot
+        account for itself; use `vault_located_stake` to read it in that state."""
         return int(chain.cast_call(
             self.vault_address, "totalStake(uint256)(uint256)", token_id,
+        ))
+
+    def vault_located_stake(self, token_id: int) -> int:
+        """Alpha (RAO) the vault can currently find for a token id, short or not."""
+        return int(chain.cast_call(
+            self.vault_address, "locatedStake(uint256)(uint256)", token_id,
         ))
 
     def share_price(self, token_id: int) -> int:
@@ -297,20 +304,17 @@ class Environment:
             netuid, hotkey_pubkeys, weights,
         )
 
-    def write_down_backing(self, token_id: int, minimum_backing: int = 0) -> None:
-        """Have the attesters acknowledge that `token_id`'s missing backing is gone, via a real
-        2-of-2 EIP-712 approval. The rails refuse a shortfall no chain fact explains - the chain's
-        dust sweep leaves none - so this is what reopens such a token."""
-        validators.write_down_backing(
-            self.vault_address,
-            self.validator_registry_address,
-            [config.DEPLOYER_PRIVATE_KEY, config.WRAPPER_USER_PRIVATE_KEY],
-            token_id, minimum_backing,
+    def declare_shortfall(self, token_id: int) -> None:
+        """Put `token_id`'s unaccounted loss on file, starting the window after which the record
+        gives up on it. The rails refuse a shortfall no chain fact explains - the chain's dust sweep
+        leaves none - so this is what eventually reopens such a token. Anyone may call it."""
+        validators.declare_shortfall(
+            self.vault_address, config.WRAPPER_USER_PRIVATE_KEY, token_id,
         )
 
     def deposits_open_from(self, token_id: int) -> int:
-        """Unix time at which deposits resume after an acknowledged loss; 0 when none is
-        outstanding. Exits never wait on it."""
+        """Unix time at which a recorded loss stops holding quotes and deposits shut; 0 when none is
+        on file. Exits never wait on it."""
         return int(chain.cast_call(
             self.vault_address, "depositsOpenFrom(uint256)(uint256)", token_id,
         ))

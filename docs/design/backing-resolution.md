@@ -168,7 +168,7 @@ clears itself: no attester, no price, no delay. It is also the common one, which
 is why it is the case worth automating. Everything else waits for a recovery
 step, the chain's own dust sweep included - no on-chain fact separates a sweep
 from a swap whose edge has since been cleared, so the vault keeps the
-expectation and lets the attesters settle what happened.
+expectation and waits for someone to locate the alpha or for the window to run.
 
 The vault follows at most one edge per operation. Swaps of a registered key
 are rate-limited to one per subnet per day, and each clean operation persists
@@ -219,8 +219,9 @@ it should not wait on a signing ceremony: the person who spots the discrepancy
 can act on it themselves.
 
 Locating the key off chain is a scan of the subnet's hotkeys against the clone's
-coldkey. That same scan is what lets the attesters establish that alpha is
-genuinely gone before signing the other door.
+coldkey. That same scan is the only thing standing between a recoverable
+position and the other door closing on it, which is why the window assumes
+somebody is running one.
 
 ### Written down
 
@@ -235,87 +236,120 @@ Alpha that has ceased to exist cannot be named by anyone, so a design whose only
 recovery is naming will lock that token forever. Since a permanent lock is not
 acceptable, one recovery path must not require the alpha to exist.
 
-That path is a distinct threshold-signed approval — not a validator-set
-attestation, sharing no type hash and no nonce with one:
+That path is a clock, not an approval. The loss goes on file, and if nobody has
+located the alpha a **three-hour recovery window** later, the record settles
+onto what the chain still reports and the position resumes.
 
-| Field | Prevents |
-|---|---|
-| chain id, vault address | replay across deployments |
-| tokenId | applying to another position |
-| hash of the shortfall itself: which slots are unaccounted for, and what each is owed | spending the approval on a different or additional loss, before or after |
-| minimum backing that must remain | executing against a state worse than the signers saw |
-| dedicated write-down nonce | replay |
-| deadline | indefinite standing authority |
+### Why not a signature
 
-The shortfall hash is what makes it causal, and it is the property a bare
-registry nonce lacked. It voids the approval automatically the moment anyone
-locates the alpha, since that changes the loss it was signed against.
+An earlier draft made this a threshold-signed acknowledgement, on the reasoning
+that a quorum ratifies what the contract cannot detect. That reasoning does not
+survive contact with what the signers would actually be asserting: *this alpha
+is not coming back*. The window tests exactly that claim, permissionlessly and
+with chain verification, because `recoverStray` is already open to anyone and
+already proves its case against on-chain balances. Anyone who genuinely knows
+where the alpha went has a strictly better move available than signing, and
+anyone who does not is guessing on the same evidence the clock has.
+
+What the signature bought, then, was not information but a veto — the ability to
+withhold the clock indefinitely while recovery was attempted. That veto is the
+same object as unbounded downtime for anything pricing off this vault, since the
+window cannot start until a quorum acts and nothing obliges them to. A bounded
+worst case that can be designed around beats an unbounded one that is
+theoretically gentler, so the veto goes and the bound stays.
+
+Removing it also removes an attack the signed version carried: a malicious
+quorum could swap a validator they control twice, sign the resulting shortfall
+off honestly through every gate, and settle a loss that was never real.
+
+### The loss on file
+
+What is recorded is a digest of the shortfall itself — which slots are
+unaccounted for, and what each is owed — plus the timestamp it was first seen.
 
 It deliberately digests the shortfall rather than the whole record. A digest
-over every slot would move on any ordinary withdrawal, so an acknowledgement
-could never be applied after one; a digest over the shortfall alone is stable
-under activity that loses nothing, and moves the moment a different or
-additional loss appears - exactly when the signers' approval stops describing
-what is in front of it.
+over every slot would move on any ordinary withdrawal, so a recorded loss could
+never survive one; a digest over the shortfall alone is stable under activity
+that loses nothing, and moves the moment a different or additional loss appears
+- exactly when the window that is running stops covering what is in front of it.
 
-The same digest is stored when the approval is spent, and re-checked before the
-acknowledgement is ever applied. Without that, a loss appearing while the window
-ran would be written off alongside the approved one by the first call after it,
-having been neither examined nor signed for, and with no window of its own.
+That digest is re-checked before the write-off is ever taken. Without it, a loss
+appearing while the window ran would be settled alongside the recorded one by
+the first call after the deadline, having had no window of its own.
 
-Verification belongs in `ValidatorRegistry`, which already holds the EIP-712
-machinery and has the bytecode room the vault does not.
-
-Three gates apply at execution:
+Three rules apply:
 
 1. The token must independently be in an unexplained-shortfall state. A healthy
-   position cannot be written down, and no approval can be pre-authorized
-   against a future loss.
-2. The record is **left standing**. An acknowledgement says deposits may
-   resume; it does not say the alpha stopped existing. Erasing each slot's
-   expectation would put a premature acknowledgement beyond recovery, because
-   `recoverStray` needs a slot that still knows what it is owed. The first
-   deposit after the window settles the record onto what is really there.
-3. The located total must be at least `minimumBacking`, or execution refuses.
+   position cannot be put on the clock, and no window can be opened against a
+   future loss.
+2. The record is **left standing** until the window is out. Being on file says
+   the clock is running; it does not say the alpha stopped existing. Erasing
+   each slot's expectation early would put a premature record beyond recovery,
+   because `recoverStray` needs a slot that still knows what it is owed.
+3. A loss already on file **keeps its original timestamp**. Repeat sightings
+   must not push the deadline out, or an exit every couple of hours would hold
+   a position shut indefinitely. A loss that differs is a different loss, and
+   earns its own window.
 
-Anyone may submit an approval, as with set attestations, so no new actor
-appears.
+### Who starts it, and who takes it
 
-Deposits then wait out a **24-hour challenge window**. Anyone who can still find
-the alpha may `recoverStray` during it, which ends the window along with the
-shortfall. The window costs holders nothing, since exits, mailbox reclaims and
-TAO claims never stop, so it falls only on new money. The asymmetry argues for
-being generous with it: too short and a premature acknowledgement dilutes
-existing holders permanently, too long and deposits merely wait.
+Exits put the loss on file in passing: they already compute the plan, they never
+refuse, and they are the one thing a shut position is still guaranteed to see.
+`declareShortfall(tokenId)` covers a position nothing else is touching. It grants
+nothing and decides nothing — it writes down when the vault first saw the loss,
+which is the one fact the chain cannot work out for itself.
 
-An earlier draft rejected a timelock here, on the grounds that a warning is
-useless while exits are frozen. Exits are no longer frozen, so the window now
-has an audience that can act on it.
+The refusing rails cannot do it, because they revert and a revert leaves no
+timestamp behind. That is why `wrap` keeps reverting rather than returning a
+status: it moves the caller's alpha, and a returned status a caller forgets to
+inspect is a silent failure.
+
+Once the deadline passes, the **next call of any kind** takes the write-off —
+deposit, rebalance, or either exit rail. Keying it to deposits alone would leave
+the settle waiting on the one call a shut position is least likely to receive.
 
 ## What this trusts, stated plainly
 
-The gates establish that **the vault cannot find the alpha** — not that it does
-not exist. No on-chain check closes that gap, and the write-down should be
-described in the security model as the attesters ratifying a loss, not as the
-contract detecting one.
+The rules establish that **the vault cannot find the alpha** — not that it does
+not exist, and not that nobody could have. No on-chain check closes that gap.
+Running the window out is an inference from silence, not evidence of loss, and
+the security model should describe it that way.
 
-The gap is exploitable by a malicious quorum: swap a validator they control
-twice, producing a genuine unexplained shortfall; sign a write-down, which every
-gate passes honestly; deposit at the depressed price; then attest the hidden key
-and profit on the cheap shares. This is a capability they do not have today,
-because at present they choose where stake goes but cannot reduce recorded
-backing — delegated stake belongs to the clone's coldkey.
+So the residual is real and worth naming: a loss that was recoverable all along,
+and that nobody finds within three hours, is written off permanently. After the
+settle `tracked` equals what the chain reports, so `recoverStray` reverts
+`BackingIntact` and the alpha stops being claimable by anyone.
 
-Two things bound it, neither of which removes it. Gate 2 denies them any choice
-of amount, so the attack is not tunable. And a write-down destroys nothing: if
-the alpha is later found and attested it re-enters the union and the total
-recovers, making the damage a transfer between share cohorts rather than a burn.
+And it has a beneficiary, which an earlier draft of this section wrongly denied.
+`recoverStray` is closed afterwards, but `_unionSlots` counts any key in the
+recorded set *or* the attested set, so the moment the attesters name the key
+holding the stranded alpha it re-enters `plan.total`. Whoever deposited at the
+deflated price takes a pro-rata slice of it. That is a transfer between share
+cohorts, not a burn, and under the signed design a threshold signature plus a
+minimum-backing floor gated it. Here the only gate is a three-hour timer any
+anonymous caller can start.
 
-A timelock was considered and rejected in an earlier draft, on the grounds that
-its purpose would be to let holders exit ahead of a write-down while exits
-revert in precisely the state being recovered from. Exits no longer revert, so
-the objection is gone and the challenge window above is that delay, with an
-audience that can act on it: anyone who finds the alpha.
+What does bound it: the write-off may settle only the loss its window was
+granted for, so a gap that grows under a running clock has to wait for a clock
+of its own — a trivial shortfall cannot mature into permission to write off a
+large one. And the evidence needed to prevent it entirely is public: the vault's
+positions are one `StakingHotkeys` read against its own coldkey, so the scan is
+cheap for anyone willing to run it.
+
+### The bound is on the window, not on the wait
+
+The three-hour figure bounds one window. It does not bound how long a position
+stays shut, because a *different* loss is not the loss on file and starts its
+own window. An operator holding one of the attested validator's keys can
+manufacture fresh distinct losses on demand — swap away with the edge erased,
+let it settle, swap back — and keep quotes refusing indefinitely for two hotkey
+swaps a cycle.
+
+So the honest statement of what dropping the signature bought is narrower than
+"a bounded worst case": it removes a quorum that could withhold the clock, and
+it removes the attack where that quorum settles a loss that was never real. It
+does not guarantee an integrator that the vault will answer within three hours
+of the first sign of trouble.
 
 ## Every case terminates
 
@@ -323,7 +357,7 @@ audience that can act on it: anyone who finds the alpha.
 |---|---|---|
 | Hotkey swap the vault can follow | planning `active = successor` | no |
 | Hotkey swap it cannot follow, alpha findable | `recoverStray` | anyone, permissionless |
-| Dust sweep, or alpha genuinely gone | write-down approval, then the window | special attestation |
+| Dust sweep, or alpha genuinely gone | the recovery window running out | anyone, permissionless |
 | Stake parked under an unowned key | claiming the hotkey on chain | anyone, permissionless |
 
 Holders can leave in every row, including while a row is still unresolved.
@@ -347,14 +381,13 @@ No path ends in a token that cannot be unstuck.
   the attesters drop one of the pair.
 - Storage is written only from a fully valid plan, and records post-move
   balances actually read back.
-- Views and mutating paths consume one plan and agree without caveat. An exit's
-  quote is the number that exit pays; a deposit's quote refuses on the same
-  terms the deposit does.
+- Views and mutating paths consume one plan and agree without caveat. Every
+  quote refuses on the same terms the calls do, so a number handed out is one
+  the vault stands behind.
 - A withdrawal never lowers an expectation the plan could not account for.
-  Only a bound write-down does that, and only by letting the next deposit
-  settle it.
-- Only a holder withdrawal, or a bound write-down and the deposit that follows
-  it, may lower recorded backing.
+  Only the recovery window running out does that.
+- Only a holder withdrawal, or a settle taken after the window, may lower
+  recorded backing.
 
 ## Carried over from PR #42
 
@@ -373,20 +406,21 @@ test bank.
    on the successor.
 2. Settle after `A -> B`, then `B -> C` with the registry still naming `A`: all
    paths operate on `C` with no manual intervention.
-3. Dust sweep: fails closed at any alpha price, then clears through a
-   write-down. A swap whose edge the chain has since cleared behaves
-   identically, which is the point - the vault cannot tell them apart and does
-   not guess.
-4. Swap followed by a sweep at the successor: fails closed, then clears
-   through a write-down.
+3. Dust sweep: fails closed at any alpha price, then clears once the window is
+   out. A swap whose edge the chain has since cleared behaves identically,
+   which is the point - the vault cannot tell them apart and does not guess.
+4. Swap followed by a sweep at the successor: fails closed, then clears once
+   the window is out.
 5. Rotation drops `A`, nothing settles, then `A -> X -> Y`: the stale rotation
    cannot excuse the shortfall.
 6. The same state with the attesters naming `Y`: clears through locating.
 7. Two slots converge on one successor, both when it is attested and when it is
    not: views and mutating paths both reject.
-8. A write-down bound to one slot state cannot be replayed against another
-   token, another state, another set, or after its deadline.
-9. A write-down against a healthy token is refused.
+8. A window granted for one loss covers that loss alone: a second one appearing
+   while it runs is not settled alongside it, and the deadline cannot be pushed
+   out by re-declaring or by exiting repeatedly.
+9. Declaring against a healthy token is refused, and so is every quote against
+   a token that cannot account for itself.
 10. Zero-valued successors are governed by `exists`; mailbox stake stranded on
     zero is reclaimable on both rails.
 11. Sets that reorder, grow and shrink while `logical` and `active` differ:
@@ -397,10 +431,10 @@ test bank.
 
 ## Sizing
 
-`AlphaVault` on the branch reached 23,019 bytes against the 24,576 limit, with
-the subsystem this replaces included. The planner removes four functions and the
-dust machinery removes two precompile reads and the sentinel that stood in for a
-lazily-loaded price; against that, `Slot` gains a word and the plan struct is
-new. Keeping write-down verification in `ValidatorRegistry` is what makes the
-budget comfortable rather than tight, and the figure should be measured early
-rather than at the end.
+`AlphaVault` measures 23,815 bytes against the 24,576 limit, leaving 761 bytes.
+The planner removes four functions and the dust machinery removes two precompile
+reads and the sentinel that stood in for a lazily-loaded price; against that,
+`Slot` gains a word and the plan struct is new. Settling on a clock rather than
+a signature returns roughly 500 bytes on its own, since it drops a typehash, a
+struct, a nonce mapping and a signature-verification path along with the two
+public functions that fronted them.

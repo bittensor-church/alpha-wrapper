@@ -11,10 +11,6 @@ contract MockValidatorRegistry is IValidatorRegistry {
 
     mapping(uint256 => Slot) private _slots;
 
-    /// @dev Write-downs are exercised against the real registry; this stub only satisfies the
-    ///      interface for the malformed-set tests that reach for this mock.
-    function consumeWriteDown(BackingWriteDown calldata, bytes[] calldata) external { }
-
     /// @dev Seeds corrupt slots (e.g. zero hotkey + non-zero weight, or mismatched lengths) that the
     ///      real registry would reject; tests deploy a fresh vault against this mock when needed.
     function setRaw(uint256 netuid, bytes32[] memory hotkeys, uint16[] memory weights) external {

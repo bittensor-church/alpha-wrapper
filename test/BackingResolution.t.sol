@@ -29,13 +29,24 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
         vault.wrap(NETUID1, hotkey1);
 
-        // Holders are not shut in by a loss they did not cause. Both rails pay out of what the
-        // vault can locate, and the quote says the same number the exit pays.
-        (uint256 quoted,) = vault.previewUnwrap(TOKEN1, shares / 2);
-        assertGt(quoted, 0, "the exit is quoted, not refused");
+        // So does every quote. What the vault can locate understates the holding by whatever it has
+        // lost track of, so a valuation taken from it is right only by accident - worse to hand out
+        // than nothing at all.
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.totalStake(TOKEN1);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.previewUnwrap(TOKEN1, shares / 2);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.sharePrice(TOKEN1);
+
+        // The door still opens, quoted or not: holders are never shut in by a loss they did not
+        // cause, and both rails pay their share of everything the vault can locate.
+        uint256 located = _vaultStakeAcross(_hotkeys(hotkey2, hotkey3), NETUID1);
         vm.prank(alice);
         vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));
-        assertEq(_userStakeAcrossHotkeys(alice, NETUID1), quoted, "and pays exactly what it quoted");
+        assertApproxEqAbs(
+            _userStakeAcrossHotkeys(alice, NETUID1), located / 4, 0.01 ether, "a quarter of the supply, a quarter of it"
+        );
         vm.prank(bob);
         vault.unwrapForTao(TOKEN1, shares / 4, 0);
     }
@@ -194,21 +205,20 @@ contract BackingResolutionTest is AlphaVaultTestBase {
     }
 
     /// @dev A position the chain really did empty. The holder is never shut in - the exit retires
-    ///      the shares against what is located, which is nothing - and deposits resume only once
-    ///      the acknowledgement has stood unchallenged for its window.
-    function test_SweptPosition_ReopensAfterAWriteDown() public {
+    ///      the shares against what is located, which is nothing - and it is that same exit that
+    ///      puts the loss on file, so deposits resume a window later with nobody having to ask.
+    function test_SweptPosition_ReopensAfterTheWindow() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, coldkey, NETUID1, 0);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, coldkey, NETUID1, 0);
 
-        assertEq(vault.totalStake(TOKEN1), 0, "an emptied position reads an honest zero");
+        assertFalse(vault.isBackingIntact(TOKEN1), "an emptied position cannot account for itself");
         vm.prank(alice);
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
         assertEq(vault.totalSupply(TOKEN1), 0, "the shares retire without waiting on anyone");
 
-        _writeDown(TOKEN1, 0);
         vm.warp(vault.depositsOpenFrom(TOKEN1));
         _depositAndWrap(bob, NETUID1, 30 ether);
         assertGt(vault.balanceOf(bob, TOKEN1), 0, "the token recapitalizes after the window");
