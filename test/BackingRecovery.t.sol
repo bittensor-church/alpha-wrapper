@@ -334,6 +334,39 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.writeDownBacking(approval, sigs);
     }
 
+    /// @dev An approval is spent by the position ceasing to show the loss it named, however that
+    ///      happens. Left standing after the alpha came back on its own, the same signatures would
+    ///      sit there already matured and wave through the next identical loss unchallenged.
+    function test_ALossRepairingItself_SpendsTheAcknowledgement() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        uint256 tracked = _getVaultStake(hotkey1, NETUID1);
+
+        bytes32 tip = _buildSwapTrail(NETUID1, hotkey1, 2);
+        _writeDown(TOKEN1, 0);
+
+        // The alpha finds its own way back to the recorded key, so nobody calls recoverStray and
+        // nothing but the ordinary maintenance rail ever observes the repair.
+        _simulateOffVaultSwap(NETUID1, tip, hotkey1);
+        vm.warp(vault.depositsOpenFrom(TOKEN1));
+        vault.rebalance(NETUID1);
+
+        assertTrue(vault.isBackingIntact(TOKEN1), "the position accounts for itself again");
+        assertEq(vault.depositsOpenFrom(TOKEN1), 0, "and the approval it was granted is spent");
+
+        // Same slot, same key, same amount: an approval left stored would still match this digest,
+        // and its window is long gone.
+        assertEq(_getVaultStake(hotkey1, NETUID1), tracked, "the recurrence is identical to the first loss");
+        _buildSwapTrail(NETUID1, hotkey1, 2);
+
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.rebalance(NETUID1);
+
+        _simulateAlphaDepositHotkey(bob, NETUID1, 1 ether, hotkey3);
+        vm.prank(bob);
+        vm.expectPartialRevert(AlphaVault.BackingShortfall.selector);
+        vault.wrap(NETUID1, hotkey3);
+    }
+
     /// @dev And behind that, the registry refuses a nonce it has already seen even when the record
     ///      it names is current.
     function test_WriteDown_RefusesASpentNonce() public {

@@ -72,7 +72,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 total;
         uint256 shortIndex;
         uint256 shortPresent;
-        bool acknowledged;
     }
 
     /// @dev Settled only at the end of a clean operation, so a failed one leaves the evidence in
@@ -275,7 +274,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
         // A hotkey swap carries mailbox stake along with everyone else's, so the deposit is read and
         // flushed from wherever the chosen validator's alpha now sits.
-        bool acknowledged = _resolveAndFollow(tokenId, nid, destColdkey, hotkeys, true).acknowledged;
+        _resolveAndFollow(tokenId, nid, destColdkey, hotkeys, true);
         bytes32[] memory effective = _effectiveSet(tokenId, hotkeys);
         bytes32 depositHotkey = effective[chosenIndex];
         uint256 totalDeposit = IStaking(STAKING_PRECOMPILE).getStake(depositHotkey, _coldkeyOf(userClone), netuid);
@@ -300,9 +299,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         if (totalSupply(tokenId) + shares > SUPPLY_CAP) revert SupplyCapExceeded();
 
         _mint(msg.sender, tokenId, shares, "");
-        // The rebalance above settled the record onto what is really there, so the acknowledgement
-        // has been applied and the token is ordinary again.
-        if (acknowledged) _clearAcknowledgement(tokenId);
 
         emit Deposited(msg.sender, tokenId, totalDeposit, shares);
     }
@@ -595,13 +591,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         _requireNotDissolving(nid);
         (bytes32[] memory logicalSet, uint16[] memory weights) = _resolveValidators(nid);
         bytes32 coldkey = _coldkeyOf(clone);
-        bool acknowledged = _resolveAndFollow(tokenId, nid, coldkey, logicalSet, true).acknowledged;
+        _resolveAndFollow(tokenId, nid, coldkey, logicalSet, true);
         bytes32[] memory effective = _effectiveSet(tokenId, logicalSet);
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
         _consolidateRotatedStake(tokenId, clone, coldkey, logicalSet, effective, alphaPriceE18);
         _rebalance(tokenId, clone, logicalSet, effective, weights, coldkey, alphaPriceE18);
-        // The settle above applied the acknowledgement, so the token is ordinary again.
-        if (acknowledged) _clearAcknowledgement(tokenId);
     }
 
     function _rebalance(
@@ -1304,37 +1298,48 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bool refuseShortfall
     ) private returns (Plan memory plan) {
         plan = _planBacking(tokenId, netuid, coldkey, logicalSet);
+        bool stands = _approvalStands(tokenId, plan);
         // Only the refusing rails consult the acknowledgement, and only they wait out its window.
         // An exit pays out of what is located either way, so nothing about a pending or matured
         // acknowledgement should ever stand between a holder and the door.
         if (refuseShortfall) {
-            plan.acknowledged = _acknowledgementMatured(tokenId, plan);
-            if (plan.shortIndex != type(uint256).max && !plan.acknowledged) {
+            if (stands) {
+                _requireChallengeWindowElapsed(tokenId);
+            } else if (plan.shortIndex != type(uint256).max) {
                 Slot storage short = _slots[tokenId][plan.shortIndex];
                 revert BackingShortfall(netuid, short.active, short.tracked, plan.shortPresent);
             }
         }
+        // Spent either way. A refusing rail goes on to settle the record onto what the chain
+        // reports, which is the whole of what the signers authorised; any other outcome means the
+        // approved loss is no longer the one in front of us. Left stored, it would mature into
+        // standing permission and clear a later recurrence with no fresh signatures and no fresh
+        // window for anyone to challenge it.
+        if (refuseShortfall || !stands) _clearAcknowledgement(tokenId);
         _applyFollows(tokenId, plan.keys);
     }
 
-    /// @dev Whether an acknowledged loss has matured into permission to settle the record onto
-    ///      what is really there. Until the window is out the expectation stands, so anyone who
-    ///      can still find the alpha has time to point the vault at it; and a call that would
-    ///      settle during the window is refused rather than allowed to write the loss off early.
-    ///
-    ///      Every rail that settles asks this, so the acknowledgement is applied by whichever runs
-    ///      first. Keying it to deposits alone would leave `rebalance` refusing a shortfall that
-    ///      has already been acknowledged, with no way to ever clear it.
-    function _acknowledgementMatured(uint256 tokenId, Plan memory plan) private view returns (bool) {
-        uint256 writtenDownAt = _writtenDownAt[tokenId];
-        if (writtenDownAt == 0) return false;
-        // The signers approved one loss. A different or additional one is not theirs to have
-        // approved, so the acknowledgement simply does not apply and the shortfall stands until a
-        // fresh one names it.
-        if (_shortfallDigest(tokenId, plan) != _writtenDownShortfall[tokenId]) return false;
-        uint256 openFrom = writtenDownAt + WRITE_DOWN_CHALLENGE_WINDOW;
+    /// @dev Whether the stored acknowledgement still describes the shortfall in front of it. The
+    ///      signers approved one loss: a different or additional one is not theirs to have
+    ///      approved, and neither is the same one recurring after the position repaired itself.
+    function _approvalStands(uint256 tokenId, Plan memory plan) private view returns (bool) {
+        if (_writtenDownAt[tokenId] == 0) return false;
+        return _shortfallDigest(tokenId, plan) == _writtenDownShortfall[tokenId];
+    }
+
+    /// @dev Until the window is out the expectation stands, so anyone who can still find the alpha
+    ///      has time to point the vault at it. A call that would settle the loss early waits.
+    function _requireChallengeWindowElapsed(uint256 tokenId) private view {
+        uint256 openFrom = _writtenDownAt[tokenId] + WRITE_DOWN_CHALLENGE_WINDOW;
         // forge-lint: disable-next-line(block-timestamp)
         if (block.timestamp < openFrom) revert ChallengeWindowOpen(openFrom);
+    }
+
+    /// @dev Whether an acknowledged loss has matured into permission to settle the record onto what
+    ///      is really there. Quotes ask this so they refuse on the same terms the call would.
+    function _acknowledgementMatured(uint256 tokenId, Plan memory plan) private view returns (bool) {
+        if (!_approvalStands(tokenId, plan)) return false;
+        _requireChallengeWindowElapsed(tokenId);
         return true;
     }
 
