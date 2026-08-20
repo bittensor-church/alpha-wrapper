@@ -185,7 +185,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     error ConsolidationBelowFloor();
     error BackingShortfall(uint16 netuid, bytes32 hotkey, uint256 tracked, uint256 present);
     error BackingIntact();
-    error ShortfallAlreadyDeclared();
     error GatherBelowFloor();
     error HotkeyClaimedTwice(bytes32 hotkey);
     error NothingStrayUnder(bytes32 hotkey);
@@ -1229,9 +1228,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///         touching - otherwise a position no one exits would hold quotes and deposits shut for
     ///         good.
     ///
-    ///         Reverts `BackingIntact` unless the token is genuinely unable to account for itself,
-    ///         and `ShortfallAlreadyDeclared` when this same loss is already recorded, so the window
-    ///         cannot be restarted to hold the token shut past its deadline.
+    ///         Asking for a loss already on file is not an error: the caller's business is that the
+    ///         clock be running, and it is - an exit may well have got there first, and nobody
+    ///         should have to check which. The original deadline stands either way, and
+    ///         `depositsOpenFrom` reports it. Reverts `BackingIntact` only when there is no loss to
+    ///         record at all.
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     function declareShortfall(uint256 tokenId) external nonReentrant {
         if (subnetClone[tokenId] == address(0)) revert NothingToUnwrap();
@@ -1239,24 +1240,23 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
         Plan memory plan = _resolveBacking(tokenId);
         if (plan.shortIndex == type(uint256).max) revert BackingIntact();
-        if (!_recordShortfall(tokenId, plan)) revert ShortfallAlreadyDeclared();
+        _recordShortfall(tokenId, plan);
         // A swap the plan walked belongs in the record whether or not the rest of the position adds
         // up, so the loss on file is only what is genuinely unaccounted for.
         _applyFollows(tokenId, plan.keys);
     }
 
-    /// @dev Starts the recovery window for a loss not on file yet, and reports whether it did. A
-    ///      loss already on file keeps its original timestamp: repeat sightings must not push the
-    ///      deadline out, or an exit every few hours would hold the token shut indefinitely. A loss
-    ///      that differs is a different loss, and earns its own window.
-    function _recordShortfall(uint256 tokenId, Plan memory plan) private returns (bool) {
+    /// @dev Starts the recovery window for a loss not on file yet. A loss already on file keeps its
+    ///      original timestamp: repeat sightings must not push the deadline out, or an exit every
+    ///      few hours would hold the token shut indefinitely. A loss that differs is a different
+    ///      loss, and earns its own window.
+    function _recordShortfall(uint256 tokenId, Plan memory plan) private {
         bytes32 shortfall = _shortfallDigest(tokenId, plan);
-        if (_shortfallSeen[tokenId] == shortfall) return false;
+        if (_shortfallSeen[tokenId] == shortfall) return;
         _shortfallSeen[tokenId] = shortfall;
         // forge-lint: disable-next-line(block-timestamp)
         _shortfallSeenAt[tokenId] = block.timestamp;
         emit ShortfallDeclared(tokenId, shortfall, plan.total);
-        return true;
     }
 
     function _clearShortfall(uint256 tokenId) private {

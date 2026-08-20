@@ -212,16 +212,17 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.declareShortfall(TOKEN1);
     }
 
-    /// @dev The clock may be started once per loss and never restarted, or anyone could hold a token
-    ///      shut past its deadline by re-declaring the same loss every few hours.
-    function test_RevertWhen_DeclaringALossAlreadyOnFile() public {
+    /// @dev The clock starts once per loss and is never restarted, or anyone could hold a token shut
+    ///      past its deadline by re-declaring the same loss every couple of hours. Asking again is
+    ///      allowed and does nothing: an exit may have got there first, and no caller should have to
+    ///      know which.
+    function test_DeclareShortfall_CannotPushTheDeadlineOut() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _buildSwapTrail(NETUID1, hotkey1, 2);
         vault.declareShortfall(TOKEN1);
         uint256 deadline = vault.depositsOpenFrom(TOKEN1);
 
         vm.warp(block.timestamp + 1 hours);
-        vm.expectRevert(AlphaVault.ShortfallAlreadyDeclared.selector);
         vault.declareShortfall(TOKEN1);
         assertEq(vault.depositsOpenFrom(TOKEN1), deadline, "the deadline did not move");
     }
