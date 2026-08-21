@@ -43,6 +43,23 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(seen[1], hotkey4);
     }
 
+    /// @dev A withdrawal consolidates the same way a rebalance does, so it owes the record the same
+    ///      refresh: a slot left behind would go on answering for alpha that has moved off it.
+    function test_Unwrap_ForgetsTheConsolidatedValidator() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(5000, 5000));
+
+        uint256 burnShares = vault.balanceOf(alice, TOKEN1) / 2;
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, burnShares, _toSubstrate(alice));
+
+        assertEq(_getVaultStake(hotkey3, NETUID1), 0, "rotated-out slot consolidated by the withdrawal");
+        bytes32[] memory afterUnwrap = vault.lastSeenHotkeys(TOKEN1);
+        assertEq(afterUnwrap.length, 2, "remembered set refreshed to the 2-validator current set");
+        assertEq(afterUnwrap[0], hotkey1);
+        assertEq(afterUnwrap[1], hotkey2);
+    }
+
     /// @dev Rotated-out sub-floor stake with no other above-floor backing is still consolidated,
     ///      because wrap flushes the fresh deposit BEFORE the consolidation so the roll can start from it. A
     ///      consolidation-first order would put the sub-floor amount on the wire and revert.

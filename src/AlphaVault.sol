@@ -47,9 +47,41 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     mapping(address => bool) public cloneDeployed;
     mapping(uint256 => address) public subnetClone;
 
-    /// @dev Validators the clone's stake was distributed across at the last state-mutating call;
-    ///      refreshed only after a clean consolidation.
-    mapping(uint256 => bytes32[]) private _lastSeenHotkeys;
+    /// @dev One record per validator the position is spread across.
+    ///
+    ///      `logical` is the identity the registry assigns weight to; `active` is the key actually
+    ///      holding the alpha. They start equal and diverge when a hotkey swap moves the stake: the
+    ///      chain advances `active`, and the attesters catch `logical` up in their own time. Every
+    ///      staking call names `active`, so nothing is ever aimed at a key the chain retired, and
+    ///      the vault never has to rediscover from lineage what it already followed itself.
+    ///
+    ///      `tracked` is the alpha the position is expected to account for, re-read from the chain
+    ///      at every settle, so it is the chain's own number rather than an accumulated estimate.
+    ///
+    ///      `shortSince` is when a write rail first saw this slot fail to account for itself; zero
+    ///      while it does. The recovery window runs per slot from here, so one loss's clock never
+    ///      restarts another's, and nothing that merely moves balances can touch a deadline.
+    struct Slot {
+        bytes32 logical;
+        bytes32 active;
+        uint256 tracked;
+        uint64 shortSince;
+    }
+
+    /// @dev One reading of a position: the keys it can see, what each holds, and what it cannot
+    ///      account for. Carried as a struct because the coverage build compiles at minimum
+    ///      optimization, where returning the parts separately runs the stack out.
+    struct Plan {
+        bytes32[] keys;
+        bool[] unaccounted;
+        uint256[] present;
+        uint256 total;
+        uint256 shortIndex;
+    }
+
+    /// @dev Settled only at the end of a clean operation, so a failed one leaves the evidence in
+    ///      place for the next caller to see.
+    mapping(uint256 => Slot[]) private _slots;
 
     /// @notice Cumulative TAO credited per share over a token's lifetime, scaled by
     ///         `TAO_INDEX_PRECISION`. Grows when the clone receives TAO the vault did not pay out.
@@ -71,6 +103,18 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     uint256 private constant VIRTUAL_SHARES = 1e9;
     uint256 private constant VIRTUAL_ASSETS = 1;
     uint16 private constant BPS_BASE = 10_000;
+    /// @dev The chain's share arithmetic credits any position a few RAO short of the amount asked
+    ///      for, its own hotkey-swap migration included, so expectations are compared with this much
+    ///      give rather than for equality.
+    uint256 private constant TRACKED_SLACK_RAO = 1e3;
+
+    /// @dev How long anyone has to point the vault at missing alpha before the record gives up on
+    ///      it. Deposits and quotes wait this out; exits, mailbox reclaims and TAO claims stay open
+    ///      throughout, so the wait costs only new money coming in. It is short because the
+    ///      contracts pricing off this vault cannot wait. Each slot's loss runs its own window, so
+    ///      a second loss never restarts a clock already running, and nothing that merely moves
+    ///      balances between keys can touch a deadline.
+    uint256 private constant RECOVERY_WINDOW = 3 hours;
     /// @dev `getAlphaPrice` rounds down to a multiple of this (e18 scale), so the true price is
     ///      always below the read plus one step.
     uint256 private constant ALPHA_PRICE_QUANTUM_E18 = 1e9;
@@ -91,6 +135,18 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaOut);
     /// @notice A dissolved-subnet unwrap. `taoOut` is native TAO paid in EVM wei.
     event DissolvedSubnetUnwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 taoOut);
+    /// @notice The vault recorded backing under `hotkey` it cannot account for, starting the
+    ///         window in which anyone can still point it at the missing alpha.
+    event ShortfallDeclared(uint256 indexed tokenId, bytes32 indexed hotkey, uint256 owed);
+    /// @notice A recorded loss waited out its window unanswered: the record stops expecting `owed`
+    ///         alpha under `hotkey`, and whatever the chain still reports there re-anchors as
+    ///         ordinary backing.
+    event ShortfallWrittenOff(uint256 indexed tokenId, bytes32 indexed hotkey, uint256 owed);
+    /// @notice Alpha the vault had given up on was found under `hotkey` and is backing shares again.
+    event BackingRecovered(uint256 indexed tokenId, bytes32 indexed hotkey, uint256 found);
+
+    /// @notice A validator swapped its hotkey and the vault followed the position to the new key.
+    event HotkeySwapFollowed(uint256 indexed tokenId, bytes32 indexed oldHotkey, bytes32 indexed newHotkey);
     /// @notice Emitted only for weight-alignment moves; consolidation and gather hops are silent, so
     ///         off-chain volume comes from Deposited and the Unwrapped / UnwrappedForTao /
     ///         DissolvedSubnetUnwrapped / MailboxAlphaSoldForTao exit events, never from internal
@@ -129,7 +185,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     error ChosenHotkeyNotInSet();
     error SlippageExceeded(uint256 amountOut);
     error ConsolidationBelowFloor();
+    error BackingShortfall(uint16 netuid, bytes32 hotkey, uint256 tracked, uint256 present);
+    error BackingIntact();
     error GatherBelowFloor();
+    error HotkeyClaimedTwice(bytes32 hotkey);
+    error NothingStrayUnder(bytes32 hotkey);
+    error NoSuchSlot();
+    error NoOpenDestination();
 
     // -------------------- Constructor -------------------------------------------
     /// @param _uri ERC1155 metadata URI template, fixed for the contract's lifetime.
@@ -202,7 +264,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint16 nid = uint16(netuid);
         _requireNotDissolving(nid);
         (bytes32[] memory hotkeys, uint16[] memory weights) = _resolveValidators(nid);
-        if (!_contains(hotkeys, chosenHotkey)) revert ChosenHotkeyNotInSet();
+        uint256 chosenIndex = _indexOf(hotkeys, chosenHotkey);
+        if (chosenIndex == type(uint256).max) revert ChosenHotkeyNotInSet();
 
         address clone = subnetClone[tokenId];
         if (clone == address(0)) clone = _deploySubnetClone(tokenId);
@@ -210,7 +273,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         address userClone = _ensureMailboxClone(msg.sender, netuid);
         bytes32 destColdkey = _coldkeyOf(clone);
 
-        uint256 totalDeposit = IStaking(STAKING_PRECOMPILE).getStake(chosenHotkey, _coldkeyOf(userClone), netuid);
+        // A hotkey swap carries mailbox stake along with everyone else's, so the deposit is read and
+        // flushed from wherever the chosen validator's alpha now sits.
+        Plan memory plan = _resolveAndFollow(tokenId, nid, destColdkey, hotkeys, true);
+        bytes32[] memory barred = _unaccountedActives(tokenId, plan.unaccounted);
+        bytes32[] memory effective = _effectiveSet(tokenId, hotkeys);
+        bytes32 depositHotkey = effective[chosenIndex];
+        uint256 totalDeposit = IStaking(STAKING_PRECOMPILE).getStake(depositHotkey, _coldkeyOf(userClone), netuid);
         if (totalDeposit == 0) revert ZeroAmount();
 
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
@@ -219,10 +288,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
 
         // Flush before the consolidation so the roll can start from the fresh deposit.
-        DepositMailbox(payable(userClone)).flush(destColdkey, chosenHotkey, netuid, totalDeposit);
-        _consolidateRotatedStake(tokenId, clone, destColdkey, hotkeys, alphaPriceE18);
+        DepositMailbox(payable(userClone)).flush(destColdkey, depositHotkey, netuid, totalDeposit);
+        _consolidateRotatedStake(tokenId, clone, destColdkey, hotkeys, effective, alphaPriceE18, barred);
 
-        uint256 totalAlpha = _rebalance(tokenId, clone, hotkeys, weights, destColdkey, alphaPriceE18);
+        uint256 totalAlpha = _rebalance(tokenId, clone, hotkeys, effective, weights, destColdkey, alphaPriceE18, barred);
 
         uint256 preStake = totalAlpha > totalDeposit ? totalAlpha - totalDeposit : 0;
         uint256 shares = _sharesFor(preStake, totalSupply(tokenId), totalDeposit);
@@ -295,6 +364,14 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         _requireNotDissolving(netuid);
 
         bytes32 vaultColdkey = _coldkeyOf(clone);
+        Plan memory plan;
+        // A dissolved token's backing legitimately became TAO, so its zero is the honest state and
+        // there is no record left to hold it to.
+        bool dissolved = _isIssuedForDissolvedSubnet(tokenId);
+        if (!dissolved) {
+            (bytes32[] memory logicalSet,) = _resolveValidators(netuid);
+            plan = _resolveAndFollow(tokenId, netuid, vaultColdkey, logicalSet, false);
+        }
         (bytes32[] memory hotkeys, uint256[] memory balances, uint256 total) =
             _unionStake(tokenId, netuid, vaultColdkey);
         // The dissolving window is excluded above and completed dissolution zeroes the alpha
@@ -336,6 +413,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
             if (alphaPriceE18 != 0 && _isBelowFloorAtReadPrice(unsold, alphaPriceE18)) unsold = 0;
         }
+
+        // A dissolved token has no record left to hold to, and the plan above never ran for it.
+        if (!dissolved) _reanchorTracked(tokenId, vaultColdkey, netuid, plan.unaccounted);
 
         SubnetClone(payable(clone)).unwrapTao(payable(msg.sender), taoOut);
 
@@ -383,11 +463,14 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         address clone,
         uint16 netuid
     ) private {
-        (bytes32[] memory hotkeys, uint16[] memory weights) = _resolveValidators(netuid);
+        (bytes32[] memory logicalSet, uint16[] memory weights) = _resolveValidators(netuid);
         bytes32 coldkey = _coldkeyOf(clone);
+        Plan memory plan = _resolveAndFollow(tokenId, netuid, coldkey, logicalSet, false);
+        bytes32[] memory barred = _unaccountedActives(tokenId, plan.unaccounted);
+        bytes32[] memory hotkeys = _effectiveSet(tokenId, logicalSet);
         // Nothing on this path trades against the pool, so one price read holds for the whole call.
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
-        _consolidateRotatedStake(tokenId, clone, coldkey, hotkeys, alphaPriceE18);
+        _consolidateRotatedStake(tokenId, clone, coldkey, logicalSet, hotkeys, alphaPriceE18, barred);
 
         // After consolidation the whole backing sits on the current validators, so their
         // balances count everything.
@@ -397,6 +480,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // swept-sale proceeds claimable, so the shares are retired instead of trapped.
         if (totalAlpha == 0) {
             _burn(msg.sender, tokenId, shares);
+            _settleRecord(tokenId, coldkey, netuid, logicalSet, hotkeys, plan);
             emit Unwrapped(msg.sender, tokenId, shares, 0);
             return;
         }
@@ -413,8 +497,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
         _burn(msg.sender, tokenId, shares);
         uint256 alphaOut = _deliverAndAlign(
-            tokenId, clone, hotkeys, weights, balances, coldkey, userSubstrateColdkey, assets, alphaPriceE18
+            tokenId, clone, hotkeys, weights, balances, coldkey, userSubstrateColdkey, assets, alphaPriceE18, barred
         );
+        _settleRecord(tokenId, coldkey, netuid, logicalSet, hotkeys, plan);
 
         emit Unwrapped(msg.sender, tokenId, shares, alphaOut);
     }
@@ -432,7 +517,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32 coldkey,
         bytes32 userColdkey,
         uint256 assets,
-        uint256 alphaPriceE18
+        uint256 alphaPriceE18,
+        bytes32[] memory barred
     ) private returns (uint256 alphaOut) {
         uint16 netuid = _netuid(tokenId);
         uint256 deliveryIndex;
@@ -457,7 +543,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             // credited one RAO short, and asking for more than the slot holds would revert.
             // `balances` still tracks which slots are drained and when the gather has enough.
             for (uint256 i; i < balances.length && balances[deliveryIndex] < assets;) {
-                if (i != deliveryIndex && balances[i] != 0) {
+                if (i != deliveryIndex && balances[i] != 0 && !_contains(barred, hotkeys[i])) {
                     uint256 pile = IStaking(STAKING_PRECOMPILE).getStake(hotkeys[deliveryIndex], coldkey, netuid);
                     SubnetClone(payable(clone)).moveStake(hotkeys[deliveryIndex], hotkeys[i], netuid, pile);
                     balances[i] += balances[deliveryIndex];
@@ -475,7 +561,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         SubnetClone(payable(clone)).flush(userColdkey, hotkeys[deliveryIndex], netuid, alphaOut);
         // Re-read live balances so the weight re-split never moves more than a slot holds.
         uint256[] memory postBalances = _fetchBalances(hotkeys, coldkey, netuid);
-        _alignToWeights(tokenId, clone, hotkeys, weights, postBalances, alphaPriceE18);
+        _alignToWeights(tokenId, clone, hotkeys, weights, postBalances, alphaPriceE18, barred);
     }
 
     function _unwrapFromDissolvedSubnet(uint256 tokenId, uint256 shares, address clone) private {
@@ -507,23 +593,29 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // forge-lint: disable-next-line(unsafe-typecast)
         uint16 nid = uint16(netuid);
         _requireNotDissolving(nid);
-        (bytes32[] memory hotkeys, uint16[] memory weights) = _resolveValidators(nid);
+        (bytes32[] memory logicalSet, uint16[] memory weights) = _resolveValidators(nid);
         bytes32 coldkey = _coldkeyOf(clone);
+        Plan memory plan = _resolveAndFollow(tokenId, nid, coldkey, logicalSet, true);
+        bytes32[] memory barred = _unaccountedActives(tokenId, plan.unaccounted);
+        bytes32[] memory effective = _effectiveSet(tokenId, logicalSet);
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
-        _consolidateRotatedStake(tokenId, clone, coldkey, hotkeys, alphaPriceE18);
-        _rebalance(tokenId, clone, hotkeys, weights, coldkey, alphaPriceE18);
+        _consolidateRotatedStake(tokenId, clone, coldkey, logicalSet, effective, alphaPriceE18, barred);
+        _rebalance(tokenId, clone, logicalSet, effective, weights, coldkey, alphaPriceE18, barred);
     }
 
     function _rebalance(
         uint256 tokenId,
         address clone,
-        bytes32[] memory hotkeys,
+        bytes32[] memory logicalSet,
+        bytes32[] memory effectiveSet,
         uint16[] memory weights,
         bytes32 coldkey,
-        uint256 alphaPriceE18
-    ) private returns (uint256) {
-        uint256[] memory balances = _fetchBalances(hotkeys, coldkey, _netuid(tokenId));
-        return _alignToWeights(tokenId, clone, hotkeys, weights, balances, alphaPriceE18);
+        uint256 alphaPriceE18,
+        bytes32[] memory barred
+    ) private returns (uint256 total) {
+        uint256[] memory balances = _fetchBalances(effectiveSet, coldkey, _netuid(tokenId));
+        total = _alignToWeights(tokenId, clone, effectiveSet, weights, balances, alphaPriceE18, barred);
+        _settleSlots(tokenId, coldkey, logicalSet, effectiveSet);
     }
 
     function _alignToWeights(
@@ -532,12 +624,23 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32[] memory hotkeys,
         uint16[] memory weights,
         uint256[] memory balances,
-        uint256 alphaPriceE18
+        uint256 alphaPriceE18,
+        bytes32[] memory barred
     ) private returns (uint256 total) {
         total = _sumBalances(balances);
 
         // A single validator holds everything by definition; there is nothing to move against.
         if (weights.length == 1 || total == 0) return total;
+
+        // A key that cannot take stake is never chosen as a destination; its share of the split
+        // drifts, which the step comment below already accepts.
+        bool[] memory open = new bool[](hotkeys.length);
+        for (uint256 i; i < hotkeys.length;) {
+            open[i] = _isOpenDestination(hotkeys[i], barred);
+            unchecked {
+                ++i;
+            }
+        }
 
         uint256 lastIndex = weights.length - 1;
         uint256[] memory targets = new uint256[](weights.length);
@@ -558,7 +661,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // change mid-transaction, so one read serves every step.
         uint256 minStakeTao = _minStakeTao();
         for (uint256 round; round < lastIndex;) {
-            if (!_rebalanceStep(tokenId, clone, hotkeys, balances, targets, alphaPriceE18, minStakeTao)) break;
+            if (!_rebalanceStep(tokenId, clone, hotkeys, balances, targets, alphaPriceE18, minStakeTao, open)) break;
             unchecked {
                 ++round;
             }
@@ -572,7 +675,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256[] memory balances,
         uint256[] memory targets,
         uint256 alphaPriceE18,
-        uint256 minStakeTao
+        uint256 minStakeTao,
+        bool[] memory open
     ) private returns (bool) {
         uint256 overIndex;
         uint256 maxOver;
@@ -585,7 +689,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                     maxOver = over;
                     overIndex = i;
                 }
-            } else if (balances[i] < targets[i]) {
+            } else if (open[i] && balances[i] < targets[i]) {
                 uint256 under = targets[i] - balances[i];
                 if (under > maxUnder) {
                     maxUnder = under;
@@ -616,15 +720,80 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     // -------------------- View Functions ----------------------------------------
 
     /// @notice Total alpha backing this token's shares. Returns 0 before the clone exists.
-    /// @dev    While subtensor dissolution cleanup runs for the netuid the backing alpha is in
+    /// @dev    Reverts `BackingShortfall` while the vault cannot account for the position. The
+    ///         figure it would otherwise report counts only what the vault can still locate, so it
+    ///         understates the holding by whatever it has lost track of and steps back up the moment
+    ///         the alpha is found. Anything valuing the token off that figure would price it below
+    ///         what it is worth and be safe to trade against only by accident, so the quote refuses
+    ///         instead. It resumes once the alpha is recovered or the recovery window has run and
+    ///         the figure is the whole truth again. `isBackingIntact` and `recordedSlots` report the
+    ///         state without reverting.
+    ///
+    ///         While subtensor dissolution cleanup runs for the netuid the backing alpha is in
     ///         flux; treat the value as unstable whenever `isSubnetDissolving(netuid)` is true.
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @return Alpha staked under the clone for this token.
     function totalStake(uint256 tokenId) public view returns (uint256) {
+        Plan memory plan = _resolveBacking(tokenId);
+        _requireNoStandingShortfall(tokenId, _netuid(tokenId), plan);
+        return plan.total;
+    }
+
+    /// @notice Whether the record still accounts for the position. A hotkey swap the vault can
+    ///         follow reads true: the next call repairs it unaided.
+    /// @dev    False reports a visible gap, not by itself a refusal: quotes and deposits refuse
+    ///         only while some missing slot's recovery window has yet to run out, and answer again
+    ///         from each deadline on - this still reads false until a settling call re-anchors the
+    ///         record. Gate on `depositsOpenFrom` to refuse on the vault's own terms.
+    function isBackingIntact(uint256 tokenId) external view returns (bool) {
+        return _resolveBacking(tokenId).shortIndex == type(uint256).max;
+    }
+
+    /// @notice Alpha the vault can currently find for this token, whether or not that is all of it.
+    /// @dev    The diagnostic figure behind `totalStake`, answering where that one refuses. Equal to
+    ///         it while `isBackingIntact` is true, and short of it by whatever the vault has lost
+    ///         track of while it is false. Read it to see what an exit would pay right now or to
+    ///         watch a position that is refusing calls - never to value a holding, which is what
+    ///         `totalStake` is for and why that one would rather revert than answer.
+    function locatedStake(uint256 tokenId) external view returns (uint256) {
+        return _resolveBacking(tokenId).total;
+    }
+
+    /// @notice When the losses on file stop holding deposits and quotes shut, as a unix timestamp.
+    /// @dev    The latest deadline across the slots the vault cannot account for. Zero in two
+    ///         cases: nothing is missing, or a visible loss has no clock yet because no write rail
+    ///         has seen it - `declareShortfall` starts it. A timestamp already in the past means
+    ///         every window has run and the position answers again.
+    function depositsOpenFrom(uint256 tokenId) external view returns (uint256 deadline) {
+        Plan memory plan = _resolveBacking(tokenId);
+        Slot[] storage tokenSlots = _slots[tokenId];
+        for (uint256 i; i < plan.unaccounted.length;) {
+            if (plan.unaccounted[i]) {
+                uint256 shortSince = tokenSlots[i].shortSince;
+                if (shortSince == 0) return 0;
+                uint256 slotDeadline = shortSince + RECOVERY_WINDOW;
+                if (slotDeadline > deadline) deadline = slotDeadline;
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @dev The same plan the operations run, without applying it. Reporting rather than reverting,
+    ///      so a monitor can read the state that is refusing calls.
+    function _resolveBacking(uint256 tokenId) private view returns (Plan memory plan) {
+        plan.shortIndex = type(uint256).max;
         address clone = subnetClone[tokenId];
-        if (clone == address(0)) return 0;
-        (,, uint256 total) = _unionStake(tokenId, _netuid(tokenId), _coldkeyOf(clone));
-        return total;
+        if (clone == address(0)) return plan;
+        uint16 netuid = _netuid(tokenId);
+        bytes32 coldkey = _coldkeyOf(clone);
+        if (_isIssuedForDissolvedSubnet(tokenId)) {
+            (,, plan.total) = _unionStake(tokenId, netuid, coldkey);
+            return plan;
+        }
+        (bytes32[] memory current,) = validatorRegistry.getValidators(netuid);
+        plan = _planBacking(tokenId, netuid, coldkey, current);
     }
 
     /// @notice Price of one share in 1e18 precision, expressed in alpha.
@@ -632,7 +801,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///         `SubnetDissolved` once dissolution has completed or
     ///         the tokenId does not correspond to the currently-registered subnet, and
     ///         `NoSharesOutstanding` when no shares have been minted against this tokenId
-    ///         (a share price with zero supply has no meaningful value).
+    ///         (a share price with zero supply has no meaningful value). Reverts
+    ///         `BackingShortfall` on the same terms as `totalStake`, which it divides.
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @return Price of one share scaled by 1e18.
     function sharePrice(uint256 tokenId) external view returns (uint256) {
@@ -657,6 +827,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @notice Preview the unwrap of `shares` for a position.
     /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while the subnet is being dissolved
     ///         and `SubnetDissolved` for a dissolved position whose clone holds no TAO refund.
+    ///         Reverts `BackingShortfall` on the same terms as `totalStake`, which it divides -
+    ///         note the exit itself does not, so a holder may take a withdrawal this refuses to
+    ///         quote. That is deliberate: the door stays open on a loss they did not cause, but the
+    ///         figure behind the quote counts only what the vault can locate and is not one to size
+    ///         a withdrawal against. `locatedStake` reports that figure for anyone who wants it.
     ///         Live-path delivery is exact to within a few RAO of chain-side share rounding: unwrap
     ///         delivers this amount or reverts, so a sub-floor total is not deliverable here and
     ///         must be exited via unwrapForTao. That voluntary alpha-for-TAO sell is a market order
@@ -685,10 +860,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
 
         // Reverts NoValidatorFound when the registry has no set for this subnet.
-        (bytes32[] memory current,) = _resolveValidators(netuid);
+        _resolveValidators(netuid);
 
-        (,, uint256 totalAlpha) = _unionStake(tokenId, netuid, _coldkeyOf(clone), current);
-        return (_assetsFor(totalAlpha, supply, shares), 0);
+        return (_assetsFor(totalStake(tokenId), supply, shares), 0);
     }
 
     /// @notice TAO withdrawable by `account` for `tokenId` right now: exactly what `claimTao`
@@ -832,14 +1006,19 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         return !_contains(currentSet, hotkey);
     }
 
-    function _contains(bytes32[] memory set, bytes32 hotkey) private pure returns (bool) {
+    /// @dev Position of `hotkey` in `set`, or `type(uint256).max`.
+    function _indexOf(bytes32[] memory set, bytes32 hotkey) private pure returns (uint256) {
         for (uint256 i; i < set.length;) {
-            if (set[i] == hotkey) return true;
+            if (set[i] == hotkey) return i;
             unchecked {
                 ++i;
             }
         }
-        return false;
+        return type(uint256).max;
+    }
+
+    function _contains(bytes32[] memory set, bytes32 hotkey) private pure returns (bool) {
+        return _keysHold(set, 0, set.length, hotkey);
     }
 
     /// @dev Tao value of `alphaAmount` at `alphaPriceE18`, rounded down - the same arithmetic the
@@ -953,11 +1132,16 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 tokenId,
         address clone,
         bytes32 coldkey,
+        bytes32[] memory logicalSet,
         bytes32[] memory currentSet,
-        uint256 alphaPriceE18
+        uint256 alphaPriceE18,
+        bytes32[] memory barred
     ) private {
-        bytes32[] memory lastSeen = _lastSeenHotkeys[tokenId];
-        if (_anyRotatedOut(lastSeen, currentSet)) {
+        // Whether a slot was rotated out is a question about the validator the registry named, not
+        // about where a hotkey swap has since carried its alpha. A slot whose `logical` is still
+        // attested stays put, wherever `active` now points.
+        bytes32[] memory lastSeen = _rotatedOutActiveKeys(tokenId, logicalSet);
+        if (lastSeen.length != 0) {
             uint16 netuid = _netuid(tokenId);
             (
                 bytes32 rollerHotkey,
@@ -978,7 +1162,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                 bytes32 lastSeenHotkey = lastSeen[i];
                 if (
                     lastSeenHotkey != richestHotkey && _isRotatedOut(lastSeenHotkey, currentSet)
-                        && lastSeenBalances[i] > 0
+                        && lastSeenBalances[i] > 0 && !_contains(barred, lastSeenHotkey)
                 ) {
                     // Move the live pile: a same-subnet move can credit the roller one RAO short, so a
                     // carried arithmetic sum would over-ask the next hop. Reading the balance off the
@@ -993,22 +1177,485 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             }
             if (_isRotatedOut(rollerHotkey, currentSet)) {
                 uint256 pile = IStaking(STAKING_PRECOMPILE).getStake(rollerHotkey, coldkey, netuid);
-                SubnetClone(payable(clone)).moveStake(rollerHotkey, currentSet[0], netuid, pile);
+                SubnetClone(payable(clone))
+                    .moveStake(rollerHotkey, currentSet[_openLandingIndex(currentSet, barred)], netuid, pile);
             }
         }
-        // The refresh may only follow a clean roll: a rejected hop reverts the whole call, otherwise
-        // stake left on a rotated-out hotkey would drop out of the remembered set and be stranded.
-        _lastSeenHotkeys[tokenId] = currentSet;
     }
 
-    function _anyRotatedOut(bytes32[] memory lastSeen, bytes32[] memory currentSet) private pure returns (bool) {
-        for (uint256 i; i < lastSeen.length;) {
-            if (_isRotatedOut(lastSeen[i], currentSet)) return true;
+    /// @dev The active keys of slots the attesters no longer name. Their alpha has to be rolled onto
+    ///      the effective set before the record can forget them, or it would be stranded.
+    function _rotatedOutActiveKeys(uint256 tokenId, bytes32[] memory logicalSet)
+        private
+        view
+        returns (bytes32[] memory rotated)
+    {
+        Slot[] storage tokenSlots = _slots[tokenId];
+        rotated = new bytes32[](tokenSlots.length);
+        uint256 size;
+        for (uint256 i; i < tokenSlots.length;) {
+            if (!_contains(logicalSet, tokenSlots[i].logical)) {
+                rotated[size] = tokenSlots[i].active;
+                unchecked {
+                    ++size;
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        // Only the length word of an array this function allocated is written.
+        assembly ("memory-safe") {
+            mstore(rotated, size)
+        }
+    }
+
+    /// @dev The keys of the slots the plan could not account for: no mover may land stake on them.
+    ///      Filling one back up would read as its loss repairing itself - buried without its window
+    ///      ever running - and hands the balance to whoever controls a key the record already
+    ///      distrusts.
+    function _unaccountedActives(uint256 tokenId, bool[] memory unaccounted)
+        private
+        view
+        returns (bytes32[] memory barred)
+    {
+        Slot[] storage tokenSlots = _slots[tokenId];
+        barred = new bytes32[](unaccounted.length);
+        uint256 size;
+        for (uint256 i; i < unaccounted.length;) {
+            if (unaccounted[i]) {
+                barred[size] = tokenSlots[i].active;
+                unchecked {
+                    ++size;
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        // Only the length word of an array this function allocated is written.
+        assembly ("memory-safe") {
+            mstore(barred, size)
+        }
+    }
+
+    /// @dev Whether new stake may land on `hotkey`: not a barred key, and one the chain still has
+    ///      an owner for - a stake call naming an ownerless key rejects at full gas.
+    function _isOpenDestination(bytes32 hotkey, bytes32[] memory barred) private view returns (bool) {
+        if (_contains(barred, hotkey)) return false;
+        (bool exists,) = IStaking(STAKING_PRECOMPILE).getHotkeyOwner(hotkey);
+        return exists;
+    }
+
+    /// @dev First key in the attested set that can take stake. Reverts when none can: parking a
+    ///      pile on a rotated-out key instead would let the next full settle drop the slot that
+    ///      knows about it, stranding the alpha.
+    function _openLandingIndex(bytes32[] memory currentSet, bytes32[] memory barred) private view returns (uint256) {
+        for (uint256 i; i < currentSet.length;) {
+            if (_isOpenDestination(currentSet[i], barred)) return i;
+            unchecked {
+                ++i;
+            }
+        }
+        revert NoOpenDestination();
+    }
+
+    // -------------------- Backing resolution -------------------------------------
+
+    /// @notice Point the vault at alpha of its own that it had lost track of.
+    /// @dev    Anyone may call this, and that is safe by construction rather than by permission:
+    ///         only the subnet clone can stake under its own coldkey, so a balance found there is
+    ///         already holders' backing. Moving a slot onto it can only raise the located total, so
+    ///         there is nothing here for a caller to take.
+    ///
+    ///         This answers a swap whose trail the chain no longer shows, and it is the only answer
+    ///         while the loss is on file: the record keeps what each slot is owed for as long as its
+    ///         window runs, so the alpha stays reachable by whoever finds it first. Once the window
+    ///         is out and a settle has re-anchored the expectation, there is nothing left to
+    ///         recover against and this refuses `BackingIntact`.
+    /// @param  tokenId   ERC1155 tokenId identifying the (netuid, registrationBlock) position.
+    /// @param  slotIndex The recorded slot that is short.
+    /// @param  hotkey    The key actually holding what that slot is owed.
+    function recoverStray(uint256 tokenId, uint256 slotIndex, bytes32 hotkey) external nonReentrant {
+        if (hotkey == bytes32(0)) revert ZeroHotkey();
+        address clone = subnetClone[tokenId];
+        if (clone == address(0)) revert NothingToUnwrap();
+        uint16 netuid = _netuid(tokenId);
+        _requireNotDissolving(netuid);
+
+        Slot[] storage tokenSlots = _slots[tokenId];
+        if (slotIndex >= tokenSlots.length) revert NoSuchSlot();
+        // An attested key's balance is already counted by every plan, so pointing a slot at one
+        // aliases a single balance to two expectations - a loss read as repaired without the alpha
+        // ever being found.
+        (bytes32[] memory attested,) = _resolveValidators(netuid);
+        if (_slotsHold(tokenSlots, hotkey) || _contains(attested, hotkey)) revert HotkeyClaimedTwice(hotkey);
+        Slot storage slot = tokenSlots[slotIndex];
+
+        bytes32 coldkey = _coldkeyOf(clone);
+        uint256 tracked = slot.tracked;
+        if (IStaking(STAKING_PRECOMPILE).getStake(slot.active, coldkey, netuid) + TRACKED_SLACK_RAO >= tracked) {
+            revert BackingIntact();
+        }
+        uint256 found = IStaking(STAKING_PRECOMPILE).getStake(hotkey, coldkey, netuid);
+        if (found + TRACKED_SLACK_RAO < tracked) revert NothingStrayUnder(hotkey);
+
+        slot.active = hotkey;
+        // Finding the alpha shows the vault was wrong to have given up on it.
+        slot.shortSince = 0;
+        emit BackingRecovered(tokenId, hotkey, found);
+    }
+
+    /// @notice Record backing the vault cannot account for, starting the window in which anyone can
+    ///         still point it at the missing alpha.
+    /// @dev    Anyone may call this. It grants nothing and decides nothing: it writes down when the
+    ///         vault first saw a loss, which is the one thing the chain cannot work out for itself.
+    ///         Exits record it in passing for free, so this is here for a token nothing else is
+    ///         touching - otherwise a position no one exits would hold quotes and deposits shut for
+    ///         good.
+    ///
+    ///         Asking for a loss already on file is not an error: the caller's business is that the
+    ///         clock be running, and it is - an exit may well have got there first, and nobody
+    ///         should have to check which. The original deadline stands either way, and
+    ///         `depositsOpenFrom` reports it. Reverts `BackingIntact` only when there is no loss to
+    ///         record at all.
+    /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
+    function declareShortfall(uint256 tokenId) external nonReentrant {
+        if (subnetClone[tokenId] == address(0)) revert NothingToUnwrap();
+        uint16 netuid = _netuid(tokenId);
+        _requireNotDissolving(netuid);
+        _resolveValidators(netuid);
+
+        Plan memory plan = _resolveBacking(tokenId);
+        if (plan.shortIndex == type(uint256).max) revert BackingIntact();
+        _applyFollows(tokenId, plan.keys);
+        _syncShortfallClocks(tokenId, plan);
+    }
+
+    /// @dev Reverts on the first standing shortfall - a slot the plan cannot account for whose
+    ///      recovery window has not run out, where a window not yet started cannot have. The rails
+    ///      that could mint take this, and every quote takes it too, so a quote never promises
+    ///      what the call would refuse.
+    function _requireNoStandingShortfall(uint256 tokenId, uint16 netuid, Plan memory plan) private view {
+        Slot[] storage tokenSlots = _slots[tokenId];
+        for (uint256 i; i < plan.unaccounted.length;) {
+            if (plan.unaccounted[i]) {
+                uint64 shortSince = tokenSlots[i].shortSince;
+                // forge-lint: disable-next-line(block-timestamp)
+                if (shortSince == 0 || block.timestamp < shortSince + RECOVERY_WINDOW) {
+                    revert BackingShortfall(netuid, tokenSlots[i].active, tokenSlots[i].tracked, plan.present[i]);
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @dev Aligns each slot's recovery clock with what the plan just saw: a loss is stamped the
+    ///      first time a write rail sees it and keeps that stamp until the slot accounts for
+    ///      itself again. Repeat sightings and ordinary balance movement change nothing, so no
+    ///      amount of traffic can push a deadline out. A repair no write rail ever saw leaves the
+    ///      books unchanged too, so the stamp it left behind still covers exactly the loss the
+    ///      record knows about - one expectation, written off at most once.
+    function _syncShortfallClocks(uint256 tokenId, Plan memory plan) private {
+        Slot[] storage tokenSlots = _slots[tokenId];
+        for (uint256 i; i < plan.unaccounted.length;) {
+            Slot storage slot = tokenSlots[i];
+            if (plan.unaccounted[i]) {
+                if (slot.shortSince == 0) {
+                    // forge-lint: disable-next-line(block-timestamp)
+                    slot.shortSince = uint64(block.timestamp);
+                    emit ShortfallDeclared(tokenId, slot.active, slot.tracked);
+                }
+            } else if (slot.shortSince != 0) {
+                slot.shortSince = 0;
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @dev Runs before anything is priced: follows the hotkey swaps the plan found and books
+    ///      anything it could not account for. Returns what the vault can locate.
+    ///
+    ///      The rails that could mint refuse, and so does every quote. Pricing against an
+    ///      understated position is the one direction the gap can be exploited from, so they wait.
+    ///      An exit paid out of the located total can only ever shortchange the caller who asked for
+    ///      it, so it proceeds - holders are never shut in by a loss they did not cause.
+    ///
+    ///      The booking has to be sticky. This call is followed by a settle that re-reads the
+    ///      record from the chain, which would otherwise erase the very shortfall that closed
+    ///      deposits, and reopen them at the lowered price.
+    function _resolveAndFollow(
+        uint256 tokenId,
+        uint16 netuid,
+        bytes32 coldkey,
+        bytes32[] memory logicalSet,
+        bool refuseShortfall
+    ) private returns (Plan memory plan) {
+        plan = _planBacking(tokenId, netuid, coldkey, logicalSet);
+        // A rail that would mint waits out every standing window - it reverts, and a revert cannot
+        // leave a stamp behind. Exits pass regardless: they pay out of what is located, and their
+        // clock sync below is the vault's only chance to notice a loss unprompted.
+        if (refuseShortfall) _requireNoStandingShortfall(tokenId, netuid, plan);
+        _applyFollows(tokenId, plan.keys);
+        _syncShortfallClocks(tokenId, plan);
+    }
+
+    /// @dev Persists the hotkey swaps the plan followed. Storage is touched only once the whole plan
+    ///      known to be acceptable, so a refused call leaves the evidence exactly as it found it.
+    function _applyFollows(uint256 tokenId, bytes32[] memory keys) private {
+        Slot[] storage tokenSlots = _slots[tokenId];
+        for (uint256 i; i < tokenSlots.length;) {
+            if (tokenSlots[i].active != keys[i]) {
+                emit HotkeySwapFollowed(tokenId, tokenSlots[i].active, keys[i]);
+                tokenSlots[i].active = keys[i];
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @dev Reads the position and decides, without writing anything, whether the record still
+    ///      accounts for it. `keys` is the union - recorded active keys first, so slot `i` and
+    ///      entry `i` line up - with any hotkey swap this pass would follow already applied, which is
+    ///      what the caller persists. `missing` is what nothing accounts for.
+    ///
+    ///      One planner serves the operations and the quotes alike, so what counts as accounted
+    ///      for is settled in a single place rather than by two scans kept in step by hand.
+    function _planBacking(uint256 tokenId, uint16 netuid, bytes32 coldkey, bytes32[] memory currentSet)
+        private
+        view
+        returns (Plan memory plan)
+    {
+        Slot[] storage tokenSlots = _slots[tokenId];
+        plan.keys = _unionSlots(tokenId, currentSet);
+        uint256[] memory balances = _fetchBalances(plan.keys, coldkey, netuid);
+        plan.present = balances;
+        plan.total = _sumBalances(balances);
+        plan.shortIndex = type(uint256).max;
+
+        uint256 count = tokenSlots.length;
+        plan.unaccounted = new bool[](count);
+        for (uint256 i; i < count;) {
+            uint256 tracked = tokenSlots[i].tracked;
+            if (balances[i] + TRACKED_SLACK_RAO < tracked) {
+                (bool accounted, uint256 found) =
+                    _accountForSlot(tokenSlots, i, netuid, coldkey, plan.keys, count, tracked);
+                plan.total += found;
+                if (!accounted) {
+                    if (plan.shortIndex == type(uint256).max) plan.shortIndex = i;
+                    // The settle that follows re-reads every slot from the chain, which would file
+                    // this loss as an ordinary balance change. Flagging the slot keeps its
+                    // expectation standing until the alpha is found or its window has run.
+                    plan.unaccounted[i] = true;
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @dev What became of one slot's missing alpha, decided on what the chain recorded rather than
+    ///      on what the position is worth today.
+    ///
+    ///      One case resolves itself: the recorded key has a successor edge, no other slot leans on
+    ///      that successor, and the successor holds what the record expects. That is the ordinary
+    ///      validator hotkey swap, and it clears itself.
+    ///
+    ///      Every other shortfall stands, the chain's own dust sweep included. A missing edge is no
+    ///      evidence of one, because the chain drops a key's successor as soon as that key is
+    ///      registered again - so an operator who swaps away and re-registers can erase the trail
+    ///      behind them. Standing shortfalls clear through someone naming where the alpha went, or
+    ///      through the recovery window running out on it.
+    ///
+    ///      Deliberately no price and no threshold: judging a past event by today's valuation gets
+    ///      it wrong in both directions as the market moves.
+    function _accountForSlot(
+        Slot[] storage tokenSlots,
+        uint256 index,
+        uint16 netuid,
+        bytes32 coldkey,
+        bytes32[] memory keys,
+        uint256 count,
+        uint256 tracked
+    ) private view returns (bool accounted, uint256 found) {
+        bytes32 active = tokenSlots[index].active;
+        (bool exists, bytes32 next) = IStaking(STAKING_PRECOMPILE).getHotkeySuccessor(active, netuid);
+        if (!exists || next == active) return (false, 0);
+        // An edge says the alpha moved. Two slots cannot lean on one balance, so a successor another
+        // slot already holds or has already claimed this pass reads as unaccounted for.
+        if (_slotsHold(tokenSlots, next) || _keysHold(keys, 0, count, next)) return (false, 0);
+        uint256 stake = IStaking(STAKING_PRECOMPILE).getStake(next, coldkey, netuid);
+        if (stake + TRACKED_SLACK_RAO < tracked) return (false, 0);
+        // A successor the attesters already name sits in the union and is counted there; claiming
+        // it still has to be exclusive, which rewriting the key below records.
+        found = _keysHold(keys, count, keys.length, next) ? 0 : stake;
+        keys[index] = next;
+        return (true, found);
+    }
+
+    function _slotsHold(Slot[] storage tokenSlots, bytes32 hotkey) private view returns (bool) {
+        for (uint256 i; i < tokenSlots.length;) {
+            if (tokenSlots[i].active == hotkey) return true;
             unchecked {
                 ++i;
             }
         }
         return false;
+    }
+
+    function _keysHold(bytes32[] memory keys, uint256 from, uint256 to, bytes32 hotkey) private pure returns (bool) {
+        for (uint256 i = from; i < to;) {
+            if (keys[i] == hotkey) return true;
+            unchecked {
+                ++i;
+            }
+        }
+        return false;
+    }
+
+    /// @dev Where each attested validator's stake actually belongs: its own key, unless the record
+    ///      shows a hotkey swap has carried that validator's alpha somewhere else. Read straight from
+    ///      the record, so no lineage lookup and no hop limit come into it.
+    function _effectiveSet(uint256 tokenId, bytes32[] memory logicalSet)
+        private
+        view
+        returns (bytes32[] memory effective)
+    {
+        Slot[] storage tokenSlots = _slots[tokenId];
+        uint256 slotCount = tokenSlots.length;
+        effective = new bytes32[](logicalSet.length);
+        for (uint256 i; i < logicalSet.length;) {
+            bytes32 logical = logicalSet[i];
+            effective[i] = logical;
+            // The record is written in set order, so it stays aligned until the attesters reorder.
+            if (i < slotCount && tokenSlots[i].logical == logical) {
+                effective[i] = tokenSlots[i].active;
+            } else {
+                for (uint256 j; j < slotCount;) {
+                    if (tokenSlots[j].logical == logical) {
+                        effective[i] = tokenSlots[j].active;
+                        break;
+                    }
+                    unchecked {
+                        ++j;
+                    }
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        // A followed hotkey swap can land on a key another slot already answers for, and two slots
+        // leaning on one balance would count it twice. Only a slot a swap has moved can collide -
+        // the registry rejects a set naming one validator twice - so an untouched set pays a single
+        // comparison per entry. The attesters clear a real collision by dropping one of the pair.
+        for (uint256 i; i < logicalSet.length;) {
+            if (effective[i] != logicalSet[i] && _appearsTwice(effective, i)) {
+                revert HotkeyClaimedTwice(effective[i]);
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function _appearsTwice(bytes32[] memory set, uint256 index) private pure returns (bool) {
+        bytes32 key = set[index];
+        return _keysHold(set, 0, index, key) || _keysHold(set, index + 1, set.length, key);
+    }
+
+    /// @dev Refreshes what the record expects to find, leaving every slot's identity alone. Left
+    ///      stale, the holder's own exit reads as the next call's shortfall, and an ordinary
+    ///      swap after it as one the vault must refuse to follow. The TAO rail sells straight
+    ///      off rotated-out validators instead of consolidating first, so unlike a settle this
+    ///      drops no slot: dropping one that still holds alpha would strand it.
+    function _reanchorTracked(uint256 tokenId, bytes32 coldkey, uint16 netuid, bool[] memory unaccounted) private {
+        Slot[] storage tokenSlots = _slots[tokenId];
+        for (uint256 i; i < tokenSlots.length;) {
+            // A slot the plan could not account for keeps its expectation and its clock: lowering
+            // either here would be the write-off, which only a full settle takes.
+            if (!unaccounted[i]) {
+                Slot storage slot = tokenSlots[i];
+                uint256 stake = IStaking(STAKING_PRECOMPILE).getStake(slot.active, coldkey, netuid);
+                if (slot.tracked != stake) slot.tracked = stake;
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @dev A stamp can only survive the clock sync on a slot still short, so retiring one at a
+    ///      full settle means its window ran out unanswered: the rewrite that follows re-anchors
+    ///      the expectation, and that is the write-off.
+    function _retireStamp(uint256 tokenId, Slot storage slot) private {
+        if (slot.shortSince == 0) return;
+        slot.shortSince = 0;
+        emit ShortfallWrittenOff(tokenId, slot.active, slot.tracked);
+    }
+
+    /// @dev A whole position settles to the attested set, dropping validators it has consolidated
+    ///      away from. One with a standing shortfall only re-anchors: rewriting the record would
+    ///      renumber the slots the mask refers to, and dropping one would take its standing
+    ///      expectation with it - which is the write-off, and not an exit's to make until the
+    ///      recovery window has run. Once every window has, the losses settle like any other
+    ///      balance change and the record is whole again.
+    function _settleRecord(
+        uint256 tokenId,
+        bytes32 coldkey,
+        uint16 netuid,
+        bytes32[] memory logicalSet,
+        bytes32[] memory effectiveSet,
+        Plan memory plan
+    ) private {
+        if (plan.shortIndex == type(uint256).max) {
+            _settleSlots(tokenId, coldkey, logicalSet, effectiveSet);
+        } else {
+            _reanchorTracked(tokenId, coldkey, netuid, plan.unaccounted);
+        }
+    }
+
+    /// @dev Rewrites the record to the set the operation left the backing on, pairing each attested
+    ///      validator with the key its alpha sits under and the amount the chain reports there.
+    ///      Reading `tracked` back rather than carrying an arithmetic total matters: the chain's
+    ///      share maths credits a move a few RAO short, and an expectation above the ledger would
+    ///      read as the next call's shortfall.
+    function _settleSlots(uint256 tokenId, bytes32 coldkey, bytes32[] memory logicalSet, bytes32[] memory effectiveSet)
+        private
+    {
+        Slot[] storage tokenSlots = _slots[tokenId];
+        uint16 netuid = _netuid(tokenId);
+        for (uint256 i; i < tokenSlots.length;) {
+            _retireStamp(tokenId, tokenSlots[i]);
+            unchecked {
+                ++i;
+            }
+        }
+        while (tokenSlots.length > logicalSet.length) {
+            tokenSlots.pop();
+        }
+        for (uint256 i; i < logicalSet.length;) {
+            uint256 tracked = IStaking(STAKING_PRECOMPILE).getStake(effectiveSet[i], coldkey, netuid);
+            if (i < tokenSlots.length) {
+                Slot storage slot = tokenSlots[i];
+                slot.logical = logicalSet[i];
+                slot.active = effectiveSet[i];
+                slot.tracked = tracked;
+            } else {
+                tokenSlots.push(
+                    Slot({ logical: logicalSet[i], active: effectiveSet[i], tracked: tracked, shortSince: 0 })
+                );
+            }
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     /// @dev Picks the richest hotkey across the remembered and current sets as the roll's start. Its
@@ -1064,19 +1711,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
     }
 
-    function _unionStake(uint256 tokenId, uint16 netuid, bytes32 coldkey)
-        private
-        view
-        returns (bytes32[] memory, uint256[] memory, uint256)
-    {
-        (bytes32[] memory current,) = validatorRegistry.getValidators(netuid);
-        return _unionStake(tokenId, netuid, coldkey, current);
-    }
-
-    /// @dev Every slot the position may hold alpha on: the remembered set, then any current
-    ///      validator not already in it.
+    /// @dev Every key the position may hold alpha on: the recorded active keys, then any current
+    ///      validator not already among them. Recorded keys come first so a plan can address slot
+    ///      `i` and union entry `i` interchangeably.
     function _unionSlots(uint256 tokenId, bytes32[] memory current) private view returns (bytes32[] memory slots) {
-        bytes32[] memory lastSeen = _lastSeenHotkeys[tokenId];
+        bytes32[] memory lastSeen = _activeHotkeys(tokenId);
         slots = new bytes32[](lastSeen.length + current.length);
         uint256 size = lastSeen.length;
         for (uint256 i; i < size;) {
@@ -1110,18 +1749,37 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///      has no chance to consolidate first, so it must count stake wherever it sits: between a
     ///      registry commit and the next vault call the whole position is on validators the set no
     ///      longer names, and reading only the current set would report no backing at all.
-    function _unionStake(uint256 tokenId, uint16 netuid, bytes32 coldkey, bytes32[] memory current)
+    function _unionStake(uint256 tokenId, uint16 netuid, bytes32 coldkey)
         private
         view
         returns (bytes32[] memory hotkeys, uint256[] memory balances, uint256 total)
     {
+        (bytes32[] memory current,) = validatorRegistry.getValidators(netuid);
         hotkeys = _unionSlots(tokenId, current);
         balances = _fetchBalances(hotkeys, coldkey, netuid);
         total = _sumBalances(balances);
     }
 
+    /// @notice The keys the position's backing currently sits under.
     function lastSeenHotkeys(uint256 tokenId) external view returns (bytes32[] memory) {
-        return _lastSeenHotkeys[tokenId];
+        return _activeHotkeys(tokenId);
+    }
+
+    /// @notice The full record: which validator each slot answers to, where its alpha is, and how
+    ///         much of it the vault expects to find there.
+    function recordedSlots(uint256 tokenId) external view returns (Slot[] memory) {
+        return _slots[tokenId];
+    }
+
+    function _activeHotkeys(uint256 tokenId) private view returns (bytes32[] memory keys) {
+        Slot[] storage tokenSlots = _slots[tokenId];
+        keys = new bytes32[](tokenSlots.length);
+        for (uint256 i; i < keys.length;) {
+            keys[i] = tokenSlots[i].active;
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     function _ensureMailboxClone(address user, uint256 netuid) private returns (address userClone) {
