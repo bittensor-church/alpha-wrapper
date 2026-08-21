@@ -7,9 +7,11 @@ at that moment, let them withdraw it, and give none of it to later
 depositors.
 
 The threshold raise clears sub-threshold nominations on EVERY subnet and
-force-sells the vault's whole (deliberately tiny) position. The test restores
-the threshold it found and then retires the swept position's shares, so
-sibling suites sharing the session localnet see the subnet in a normal state.
+force-sells the vault's whole (deliberately tiny) position. Nothing on chain
+records that as the cause, so the attesters acknowledge the loss before the
+position can be retired. The test restores the threshold it found and then
+retires the swept position's shares, so sibling suites sharing the session
+localnet see the subnet in a normal state.
 """
 import pytest
 
@@ -82,11 +84,20 @@ def test_root_sweep_tao_becomes_claimable(env):
         except Exception as restore_error:  # noqa: BLE001
             print(f"  WARNING: dust threshold not restored to {previous_factor}: {restore_error}")
 
+    # A sweep leaves nothing on chain naming where the alpha went, and a hotkey swap whose edge the
+    # chain has since cleared looks identical, so the vault will not guess and holds the
+    # expectation. What it must not do is shut the holder in over it: the exit below runs with the
+    # shortfall standing and no attester involved.
+    swept_short = not env.backing_intact(token_id)
+    if swept_short:
+        print("  Position reads short by design; exiting anyway against the located "
+              f"{env.vault_located_stake(token_id)} alpha RAO")
+
     # The clearing pass empties the vault's position but its shares remain outstanding. How
     # empty depends on the runtime build: an exactly-zero position retires shares through the
     # zero-backing unwrap, while a sub-floor residue exits through the TAO rail's full-drain sale.
     all_shares = env.vault_shares(token_id)
-    if env.vault_total_stake(token_id) == 0:
+    if env.vault_located_stake(token_id) == 0:
         env.vault_send(
             2_500_000, "Sweep: cleanup unwrap failed",
             "unwrap(uint256,uint256,bytes32)", token_id, all_shares, env.wrapper_substrate_coldkey,
@@ -97,3 +108,12 @@ def test_root_sweep_tao_becomes_claimable(env):
             "unwrapForTao(uint256,uint256,uint256)", token_id, all_shares, 0,
         )
     assert env.vault_total_supply(token_id) == 0, "cleanup left outstanding shares"
+
+    # Only quotes and new deposits wait, and they wait on a clock rather than on anyone's signature.
+    # Putting the loss on file needs no quorum and no registry; three hours later quotes and
+    # deposits answer again and the next deposit or rebalance settles the record.
+    if swept_short:
+        env.declare_shortfall(token_id)
+        opens_from = env.deposits_open_from(token_id)
+        assert opens_from > 0, "declaring the shortfall did not start the recovery window"
+        print(f"  Loss on file with no quorum involved; the record settles from {opens_from}")

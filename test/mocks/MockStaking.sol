@@ -93,6 +93,9 @@ contract MockStaking {
         if (transferStakeReverts) {
             _fail("MockStaking: transferStake reverted");
         }
+        if (hotkeyDeleted[hotkey]) {
+            _fail("MockStaking: hotkey has no owner");
+        }
         if (_belowMinTransfer(amount, origin_netuid)) {
             _fail("MockStaking: AmountTooLow");
         }
@@ -120,6 +123,9 @@ contract MockStaking {
         if (moveStakeReverts) {
             _fail("MockStaking: moveStake reverted");
         }
+        if (hotkeyDeleted[origin_hotkey] || hotkeyDeleted[destination_hotkey]) {
+            _fail("MockStaking: hotkey has no owner");
+        }
         if (_belowMinTransfer(amount, origin_netuid)) {
             _fail("MockStaking: AmountTooLow");
         }
@@ -129,6 +135,34 @@ contract MockStaking {
 
     function getStake(bytes32 hotkey, bytes32 coldkey, uint256 netuid) external view returns (uint256) {
         return stakes[hotkey][coldkey][netuid];
+    }
+
+    /// @dev A full swap leaves the old key unowned, after which the chain rejects every stake
+    ///      operation naming it - as move origin, as move destination, or as unstake source.
+    mapping(bytes32 => bool) public hotkeyDeleted;
+
+    function setHotkeyDeleted(bytes32 hotkey, bool deleted) external {
+        hotkeyDeleted[hotkey] = deleted;
+    }
+
+    /// @dev Keys exist unless a test deletes them; the mock cannot know which keys a test means to
+    ///      have registered, and the vault reads only the existence half.
+    function getHotkeyOwner(bytes32 hotkey) external view returns (bool, bytes32) {
+        if (hotkeyDeleted[hotkey]) return (false, bytes32(0));
+        return (true, keccak256(abi.encodePacked("owner:", hotkey)));
+    }
+
+    mapping(bytes32 => mapping(uint256 => bytes32)) private _successor;
+    mapping(bytes32 => mapping(uint256 => bool)) private _successorSet;
+
+    function setHotkeySuccessor(bytes32 from, uint256 netuid, bytes32 to) external {
+        _successor[from][netuid] = to;
+        _successorSet[from][netuid] = true;
+    }
+
+    /// @dev The mock never folds an absent entry to self; the caller does, matching the chain.
+    function getHotkeySuccessor(bytes32 hotkey, uint16 netuid) external view returns (bool, bytes32) {
+        return (_successorSet[hotkey][netuid], _successor[hotkey][netuid]);
     }
 
     uint256 public taoPerAlpha;
@@ -173,6 +207,9 @@ contract MockStaking {
     function removeStake(bytes32 hotkey, uint256 alphaAmount, uint256 netuid) external payable {
         if (removeStakeReverts || removeStakeRevertsFor[hotkey]) {
             _fail("MockStaking: removeStake reverted");
+        }
+        if (hotkeyDeleted[hotkey]) {
+            _fail("MockStaking: hotkey has no owner");
         }
         uint256 staked = stakes[hotkey][_senderColdkey()][netuid];
         // Unit seam: proceeds are credited 1:1 (rao as wei) for test readability; the real chain

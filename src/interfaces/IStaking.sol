@@ -25,6 +25,14 @@ interface IStaking {
 
     function getStake(bytes32 hotkey, bytes32 coldkey, uint256 netuid) external view returns (uint256);
 
+    /// @notice Owner coldkey of `hotkey`. A hotkey without one does not exist to the chain, and
+    ///         every stake operation naming it - as source or destination - rejects.
+    function getHotkeyOwner(bytes32 hotkey) external view returns (bool exists, bytes32 owner);
+
+    /// @notice The hotkey `hotkey` on `netuid` was swapped for, if any. The chain keys this getter
+    ///         with a narrower netuid type than the rest of the interface.
+    function getHotkeySuccessor(bytes32 hotkey, uint16 netuid) external view returns (bool exists, bytes32 successor);
+
     function removeStake(bytes32 hotkey, uint256 amount, uint256 netuid) external payable;
 
     /// @notice Tao-denominated dust threshold: after a partial unstake, the chain force-clears any
