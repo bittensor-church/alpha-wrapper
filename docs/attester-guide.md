@@ -14,7 +14,6 @@ One attestation sets the complete validator list for one subnet:
         bytes32[] hotkeys;   // validators the vault stakes this subnet's alpha under
         uint256[] weights;   // each validator's share of the stake, in basis points
         uint256   nonce;     // orders this subnet's updates
-        uint256   deadline;  // submission cutoff, unix seconds
     }
 
 The registry enforces at submission time:
@@ -23,7 +22,38 @@ The registry enforces at submission time:
 - Every weight non-zero; weights sum to exactly 10000.
 - netuid fits in 16 bits.
 - nonce equals `nonces(netuid) + 1`. Nonces count per subnet.
-- The deadline is still in the future.
+
+## How long a signature lasts
+
+A signature stays usable until an attestation lands for that subnet.
+Once one does, `nonces(netuid)` advances and every signature still
+outstanding for the old nonce stops working - sign again at the new
+nonce to replace it.
+
+Signatures carry no clock of their own, so one signed today and
+submitted a month later still applies, as long as nothing landed for
+that subnet in between. What ages is the list inside it: it stays the
+list you picked when you signed.
+
+Signing again at the same nonce adds a competitor rather than a
+replacement. Whichever payload reaches the chain first commits, and the
+others revert against the nonce it advanced - so landing yours is what
+settles which list takes effect. Once one has landed, the next nonce
+opens and a signature there supersedes it.
+
+A signature you have handed out is also beyond recall: anyone holding it
+can submit it. Treat each one as final, and retire a list you have moved
+away from by landing its replacement.
+
+## Agreeing with the other signers
+
+The threshold counts signatures over one identical payload, so every
+signer must produce the same bytes. Every field supports that: netuid
+and nonce come from the registry, and hotkeys and weights come from
+applying your shared selection policy at an agreed evaluation point -
+a block height each of you can name independently, such as an epoch
+boundary. Signers who evaluate the same height under the same policy
+arrive at identical payloads without coordinating.
 
 The EIP-712 domain:
 

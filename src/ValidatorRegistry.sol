@@ -16,9 +16,8 @@ uint256 constant MAX_VALIDATORS = 64;
 /// @notice Per-subnet validator hotkeys + BPS weights, updated by threshold-of-N
 ///         off-chain attesters via EIP-712 signed payloads.
 contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
-    bytes32 public constant ATTESTATION_TYPEHASH = keccak256(
-        "WeightAttestation(uint256 netuid,bytes32[] hotkeys,uint256[] weights,uint256 nonce,uint256 deadline)"
-    );
+    bytes32 public constant ATTESTATION_TYPEHASH =
+        keccak256("WeightAttestation(uint256 netuid,bytes32[] hotkeys,uint256[] weights,uint256 nonce)");
 
     uint16 private constant BPS_BASE = 10_000;
     /// @dev Bounds `_setSigners` churn so a careless or compromised admin can't install a set
@@ -30,7 +29,6 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         bytes32[] hotkeys;
         uint256[] weights;
         uint256 nonce;
-        uint256 deadline;
     }
 
     struct ValidatorSet {
@@ -57,7 +55,6 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     error NetuidOutOfRange();
     error WeightsMustSum10000();
     error StaleNonce();
-    error ExpiredAttestation();
     error NotEnoughSignatures();
     error UnknownSigner(address signer);
     error SignersNotSorted();
@@ -78,7 +75,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     function updateValidators(WeightAttestation calldata attestation, bytes[] calldata signatures) external {
         uint256 validatorCount = attestation.hotkeys.length;
         _validatePayload(attestation, validatorCount);
-        _validateFreshness(attestation);
+        _validateNonce(attestation);
         _verifySignatures(attestation, signatures);
         _commit(attestation, validatorCount);
     }
@@ -90,7 +87,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         for (uint256 i; i < attestationCount;) {
             uint256 validatorCount = attestations[i].hotkeys.length;
             _validatePayload(attestations[i], validatorCount);
-            _validateFreshness(attestations[i]);
+            _validateNonce(attestations[i]);
             _verifySignatures(attestations[i], signatures[i]);
             _commit(attestations[i], validatorCount);
             unchecked {
@@ -170,10 +167,12 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         if (sum != BPS_BASE) revert WeightsMustSum10000();
     }
 
-    function _validateFreshness(WeightAttestation calldata attestation) private view {
+    /// @dev A signed attestation stays valid only until any attestation lands on the same subnet,
+    ///      so the nonce alone bounds its life. It can never rewind the stored set either: while the
+    ///      nonce is unadvanced the stored set is the one that preceded every attestation contending
+    ///      for it, so whichever lands is at least as recent as what it replaces.
+    function _validateNonce(WeightAttestation calldata attestation) private view {
         if (attestation.nonce != nonces[attestation.netuid] + 1) revert StaleNonce();
-        // forge-lint: disable-next-line(block-timestamp)
-        if (block.timestamp > attestation.deadline) revert ExpiredAttestation();
     }
 
     function _verifySignatures(WeightAttestation calldata attestation, bytes[] calldata signatures) private view {
@@ -217,8 +216,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
                     attestation.netuid,
                     keccak256(abi.encodePacked(attestation.hotkeys)),
                     keccak256(abi.encodePacked(attestation.weights)),
-                    attestation.nonce,
-                    attestation.deadline
+                    attestation.nonce
                 )
             )
         );

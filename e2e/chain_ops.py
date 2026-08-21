@@ -109,7 +109,6 @@ def main() -> None:
     p.add_argument("--netuid", required=True, type=int)
     p.add_argument("--hotkeys", required=True, help="Comma-separated bytes32 hex hotkeys")
     p.add_argument("--weights", required=True, help="Comma-separated BPS weights summing to 10000")
-    p.add_argument("--deadline-secs", type=int, default=3600)
 
     args = parser.parse_args()
 
@@ -170,7 +169,7 @@ def main() -> None:
                 args.registry, args.signer_pks, args.netuid,
                 args.hotkeys.split(","),
                 [int(weight) for weight in args.weights.split(",")],
-                deadline_secs=args.deadline_secs, rpc_url=args.rpc_url,
+                rpc_url=args.rpc_url,
             )
         except validators.ValidatorUpdateError as error:
             print(f"FAIL: {error}", file=sys.stderr)
