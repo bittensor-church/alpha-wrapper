@@ -27,7 +27,7 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: v1.7.0
+          version: v1.7.1
 
       - name: Cache forge artifacts
         uses: actions/cache@v6
@@ -42,7 +42,10 @@ jobs:
         run: forge fmt --check
 
       - name: Run Forge build
+        # pipefail so an over-EIP-170 contract fails the step here; without it `tee` returns 0
+        # and the oversize only surfaces later as a failed deployment.
         run: |
+          set -o pipefail
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           forge build --sizes | tee -a "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"

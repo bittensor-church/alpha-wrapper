@@ -1,9 +1,12 @@
-"""EIP-712 validator-set attestations for the ValidatorRegistry.
+"""EIP-712 attestations for the ValidatorRegistry.
 
-Builds a WeightAttestation, signs it with every listed signer key, sorts the
-signatures by recovered signer address ascending (contract requirement), and
-submits updateValidators(att, sigs[]). The first signer key also pays for the
-transaction.
+One kind is signed here: a WeightAttestation naming the validator set for a
+subnet. It carries every listed signer key, sorted by recovered signer address
+ascending (a contract requirement), and is submitted by the first key, which also
+pays for the transaction.
+
+Reopening a token whose alpha vanished needs no signature at all - see
+declare_shortfall below, which anyone may call and which only starts a clock.
 """
 import pathlib
 import sys
@@ -102,7 +105,6 @@ def set_validators(
         {
             "from": submitter.address,
             "nonce": transaction_nonce,
-            "gas": 500_000,
             "gasPrice": w3.to_wei(10, "gwei"),
             "chainId": chain_id,
         }
@@ -112,4 +114,42 @@ def set_validators(
     receipt = w3.eth.wait_for_transaction_receipt(transaction_hash, timeout=60)
     if receipt.status != 1:
         raise ValidatorUpdateError(f"updateValidators failed (tx {transaction_hash.hex()})")
+    return transaction_hash.hex()
+
+
+def declare_shortfall(
+    vault_address: str,
+    submitter_private_key: str,
+    token_id: int,
+    *, rpc_url: str = config.RPC_URL,
+) -> str:
+    """Put `token_id`'s unaccounted loss on file, starting its recovery window.
+
+    Permissionless: no signatures, no quorum, no registry. The call only records
+    when the vault first saw the loss, which the chain cannot work out for itself.
+    """
+    from eth_account import Account
+    from web3 import Web3
+
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+    from common import get_web3_connection, load_abi
+
+    w3 = get_web3_connection(rpc_url)
+    vault_address = Web3.to_checksum_address(vault_address)
+    vault_contract = w3.eth.contract(address=vault_address, abi=load_abi("AlphaVault"))
+    submitter = Account.from_key(submitter_private_key)
+
+    transaction = vault_contract.functions.declareShortfall(token_id).build_transaction(
+        {
+            "from": submitter.address,
+            "nonce": w3.eth.get_transaction_count(submitter.address),
+            "gasPrice": w3.to_wei(10, "gwei"),
+            "chainId": w3.eth.chain_id,
+        }
+    )
+    signed_transaction = w3.eth.account.sign_transaction(transaction, submitter_private_key)
+    transaction_hash = w3.eth.send_raw_transaction(signed_transaction.raw_transaction)
+    receipt = w3.eth.wait_for_transaction_receipt(transaction_hash, timeout=60)
+    if receipt.status != 1:
+        raise ValidatorUpdateError(f"declareShortfall failed (tx {transaction_hash.hex()})")
     return transaction_hash.hex()

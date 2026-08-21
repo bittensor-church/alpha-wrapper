@@ -52,7 +52,7 @@ and tracked separately (see [edge-cases.md](edge-cases.md)).
 
 ## Where the stake sits
 
-The registry lists up to three validator hotkeys per subnet, with weights
+The registry lists between one and 64 validator hotkeys per subnet, with weights
 in basis points. Deposits and alpha exits rebalance the clone's stake
 toward those weights as a side effect, and anyone may call
 `rebalance(netuid)` to realign immediately, for example right after the

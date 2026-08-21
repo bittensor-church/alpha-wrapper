@@ -5,25 +5,27 @@ import { IValidatorRegistry } from "src/interfaces/IValidatorRegistry.sol";
 
 contract MockValidatorRegistry is IValidatorRegistry {
     struct Slot {
-        bytes32[3] hotkeys;
-        uint16[3] weights;
+        bytes32[] hotkeys;
+        uint16[] weights;
     }
 
     mapping(uint256 => Slot) private _slots;
 
-    /// @dev Seeds corrupt slots (e.g. zero hotkey + non-zero weight) that the real
-    ///      registry would reject; tests deploy a fresh vault against this mock when needed.
-    function setRaw(uint256 netuid, bytes32[3] memory hotkeys, uint16[3] memory weights) external {
-        _slots[netuid] = Slot(hotkeys, weights);
+    /// @dev Seeds corrupt slots (e.g. zero hotkey + non-zero weight, or mismatched lengths) that the
+    ///      real registry would reject; tests deploy a fresh vault against this mock when needed.
+    function setRaw(uint256 netuid, bytes32[] memory hotkeys, uint16[] memory weights) external {
+        Slot storage slot = _slots[netuid];
+        slot.hotkeys = hotkeys;
+        slot.weights = weights;
     }
 
     function getValidators(uint256 netuid)
         external
         view
         override
-        returns (bytes32[3] memory hotkeys, uint16[3] memory weights)
+        returns (bytes32[] memory hotkeys, uint16[] memory weights)
     {
-        Slot storage s = _slots[netuid];
-        return (s.hotkeys, s.weights);
+        Slot storage slot = _slots[netuid];
+        return (slot.hotkeys, slot.weights);
     }
 }

@@ -7,6 +7,10 @@ function is either open to everyone or acts only on the caller's own
 balance and mailbox. Its code and registry address are final at
 deployment.
 
+Recovering alpha the vault has lost sight of is permissionless too: anyone
+may point a position at a key holding its stake, because only the vault's
+own account can put stake there, so recognising it can only add backing.
+
 The only privileged parties live in `ValidatorRegistry`:
 
 - The signers, threshold-of-N, choose validator sets and weights per
@@ -64,6 +68,31 @@ over several sales.
 - The netuid-scoped dissolution blackout can temporarily freeze an old
   position while a successor subnet on the same netuid dissolves
   ([edge-cases.md](edge-cases.md)).
+- If the chain takes a position's stake and leaves no record of where it
+  went, quotes and new deposits stay closed until someone finds the alpha
+  or the recovery window runs out. Holders are not shut in: exits pay out
+  of whatever the vault can locate, mailbox deposits stay reclaimable, and
+  credited TAO stays claimable throughout. Leaving while a position is
+  short does forfeit a share of anything recovered later, which is the
+  cost of taking an honest price early.
+- A loss that was recoverable all along, and that nobody finds inside the
+  three-hour window, is written off permanently: the record settles onto
+  what the chain reports, and the alpha stops being claimable. Anyone can
+  prevent that by pointing the vault at the key holding it, which requires
+  somebody to be watching. The window is deliberately short, because a
+  position stuck open blocks everything that prices off it - so the cost
+  of that is paid here, in monitoring.
+- If the alpha later resurfaces and the attesters name the key holding it,
+  it re-enters the total and whoever deposited at the written-down price
+  takes a pro-rata share of it. The write-off is a transfer between share
+  cohorts, not a burn, and the only thing gating it is a timer anyone can
+  start. What the timer cannot be used to enlarge is the amount: a
+  write-off settles only the loss its own window was granted for.
+- The three hours bound one window, not how long a position stays shut. A
+  *different* loss starts its own, so an operator holding an attested
+  validator's key can keep quotes refusing indefinitely by manufacturing
+  fresh losses. Holders can still exit throughout; contracts that price
+  off this vault cannot rely on a three-hour ceiling.
 - Amounts below the chain's minimum stake size can leave the stake split
   drifted from target weights; share value is unaffected.
 - A partial `unwrapForTao` can fill short and refund the unsold part as

@@ -6,6 +6,12 @@ import { EIP712 } from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import { ECDSA } from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import { IValidatorRegistry } from "./interfaces/IValidatorRegistry.sol";
 
+/// @dev The vault reads one stake balance per validator on every state-mutating call, and a
+///      rotation settles every slot, so per-call work scales with this cap. 64 keeps the widest
+///      measured path under a tenth of the block gas limit, so a position stays exitable at any
+///      width the registry can commit.
+uint256 constant MAX_VALIDATORS = 64;
+
 /// @title ValidatorRegistry
 /// @notice Per-subnet validator hotkeys + BPS weights, updated by threshold-of-N
 ///         off-chain attesters via EIP-712 signed payloads.
@@ -15,7 +21,6 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     );
 
     uint16 private constant BPS_BASE = 10_000;
-    uint8 private constant MAX_VALIDATORS = 3;
     /// @dev Bounds `_setSigners` churn so a careless or compromised admin can't install a set
     ///      so large that subsequent rotation exceeds the block gas limit.
     uint8 private constant MAX_SIGNERS = 16;
@@ -29,8 +34,8 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     }
 
     struct ValidatorSet {
-        bytes32[3] hotkeys;
-        uint16[3] weights;
+        bytes32[] hotkeys;
+        uint16[] weights;
     }
 
     mapping(address => bool) public isSigner;
@@ -74,7 +79,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         uint256 validatorCount = attestation.hotkeys.length;
         _validatePayload(attestation, validatorCount);
         _validateFreshness(attestation);
-        _verifySignatures(attestation, signatures);
+        _verifySignatures(_hashAttestation(attestation), signatures);
         _commit(attestation, validatorCount);
     }
 
@@ -86,7 +91,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
             uint256 validatorCount = attestations[i].hotkeys.length;
             _validatePayload(attestations[i], validatorCount);
             _validateFreshness(attestations[i]);
-            _verifySignatures(attestations[i], signatures[i]);
+            _verifySignatures(_hashAttestation(attestations[i]), signatures[i]);
             _commit(attestations[i], validatorCount);
             unchecked {
                 ++i;
@@ -99,7 +104,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         external
         view
         override
-        returns (bytes32[3] memory hotkeys, uint16[3] memory weights)
+        returns (bytes32[] memory hotkeys, uint16[] memory weights)
     {
         ValidatorSet storage validatorSet = _validators[netuid];
         return (validatorSet.hotkeys, validatorSet.weights);
@@ -171,11 +176,10 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         if (block.timestamp > attestation.deadline) revert ExpiredAttestation();
     }
 
-    function _verifySignatures(WeightAttestation calldata attestation, bytes[] calldata signatures) private view {
+    function _verifySignatures(bytes32 digest, bytes[] calldata signatures) private view {
         uint256 signatureCount = signatures.length;
         if (signatureCount < threshold) revert NotEnoughSignatures();
 
-        bytes32 digest = _hashAttestation(attestation);
         address previousSigner;
         for (uint256 i; i < signatureCount;) {
             address recovered = ECDSA.recover(digest, signatures[i]);
@@ -191,15 +195,12 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     function _commit(WeightAttestation calldata attestation, uint256 validatorCount) private {
         nonces[attestation.netuid] = attestation.nonce;
         ValidatorSet storage validatorSet = _validators[attestation.netuid];
-        for (uint256 i; i < MAX_VALIDATORS;) {
-            bytes32 newHotkey;
-            uint16 newWeight;
-            if (i < validatorCount) {
-                newHotkey = attestation.hotkeys[i];
-                newWeight = uint16(attestation.weights[i]);
-            }
-            if (validatorSet.hotkeys[i] != newHotkey) validatorSet.hotkeys[i] = newHotkey;
-            if (validatorSet.weights[i] != newWeight) validatorSet.weights[i] = newWeight;
+        delete validatorSet.hotkeys;
+        delete validatorSet.weights;
+        for (uint256 i; i < validatorCount;) {
+            validatorSet.hotkeys.push(attestation.hotkeys[i]);
+            // The sum == BPS_BASE check bounds every weight well inside uint16.
+            validatorSet.weights.push(uint16(attestation.weights[i]));
             unchecked {
                 ++i;
             }

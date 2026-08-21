@@ -71,9 +71,16 @@ class Environment:
         ))
 
     def vault_total_stake(self, token_id: int) -> int:
-        """The vault's tracked total alpha (RAO) for a token id."""
+        """The vault's tracked total alpha (RAO) for a token id. Refuses while the position cannot
+        account for itself; use `vault_located_stake` to read it in that state."""
         return int(chain.cast_call(
             self.vault_address, "totalStake(uint256)(uint256)", token_id,
+        ))
+
+    def vault_located_stake(self, token_id: int) -> int:
+        """Alpha (RAO) the vault can currently find for a token id, short or not."""
+        return int(chain.cast_call(
+            self.vault_address, "locatedStake(uint256)(uint256)", token_id,
         ))
 
     def share_price(self, token_id: int) -> int:
@@ -112,10 +119,17 @@ class Environment:
         """The minimum the vault reads on every floor check. A runtime constant."""
         return int(chain.cast_call(config.STAKING_PRECOMPILE, "getDefaultMinStake()(uint256)"))
 
+    def backing_intact(self, token_id: int) -> bool:
+        """Whether the vault can account for the alpha it expects under every
+        validator it records."""
+        return chain.cast_call(
+            self.vault_address, "isBackingIntact(uint256)(bool)", token_id,
+        ).strip() == "true"
+
     def hotkey_in_last_seen(self, token_id: int, hotkey_pubkey: str) -> bool:
         """Whether the vault's remembered validator set still references `hotkey_pubkey`."""
         remembered = chain.run(
-            ["cast", "call", self.vault_address, "lastSeenHotkeys(uint256)(bytes32[3])",
+            ["cast", "call", self.vault_address, "lastSeenHotkeys(uint256)(bytes32[])",
              str(token_id), "--rpc-url", config.RPC_URL],
         ).stdout
         return hotkey_pubkey.removeprefix("0x").lower() in remembered.lower()
@@ -289,6 +303,21 @@ class Environment:
             [config.DEPLOYER_PRIVATE_KEY, config.WRAPPER_USER_PRIVATE_KEY],
             netuid, hotkey_pubkeys, weights,
         )
+
+    def declare_shortfall(self, token_id: int) -> None:
+        """Put `token_id`'s unaccounted loss on file, starting the window after which the record
+        gives up on it. The rails refuse a shortfall no chain fact explains - the chain's dust sweep
+        leaves none - so this is what eventually reopens such a token. Anyone may call it."""
+        validators.declare_shortfall(
+            self.vault_address, config.WRAPPER_USER_PRIVATE_KEY, token_id,
+        )
+
+    def deposits_open_from(self, token_id: int) -> int:
+        """Unix time at which a recorded loss stops holding quotes and deposits shut; 0 when none is
+        on file. Exits never wait on it."""
+        return int(chain.cast_call(
+            self.vault_address, "depositsOpenFrom(uint256)(uint256)", token_id,
+        ))
 
     def crash_price_until_below(
         self, netuid: int, hotkey_pubkey: str, hotkey_ss58: str,

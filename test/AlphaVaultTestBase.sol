@@ -17,9 +17,17 @@ import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 import { SUBNET_PRECOMPILE } from "src/interfaces/ISubnet.sol";
 
 abstract contract AlphaVaultTestBase is AttestationHelper {
+    /// @dev Storage slot of `AlphaVault._slots`, from `forge inspect AlphaVault storage-layout`.
+    ///      Only `_reanchorRecord` reads it, and it asserts the write landed.
+    uint256 private constant VAULT_SLOTS_STORAGE_SLOT = 8;
+
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
+    event HotkeySwapFollowed(uint256 indexed tokenId, bytes32 indexed oldHotkey, bytes32 indexed newHotkey);
+    event BackingRecovered(uint256 indexed tokenId, bytes32 indexed hotkey, uint256 found);
+    event ShortfallDeclared(uint256 indexed tokenId, bytes32 indexed hotkey, uint256 owed);
+    event ShortfallWrittenOff(uint256 indexed tokenId, bytes32 indexed hotkey, uint256 owed);
 
     AlphaVault public vault;
     DepositMailbox public mailboxLogic;
@@ -33,6 +41,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     bytes32 public hotkey2 = keccak256("hotkey2");
     bytes32 public hotkey3 = keccak256("hotkey3");
     bytes32 public hotkey4 = keccak256("hotkey4");
+    bytes32 public hotkey5 = keccak256("hotkey5");
 
     uint256 internal constant SIGNER_PK_1 = 0xA11CE;
     uint256 internal constant SIGNER_PK_2 = 0xB0B;
@@ -145,6 +154,35 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         arr[2] = c;
     }
 
+    /// @dev The salted hotkeys are disjoint from the named `hotkey1..4` fixtures, so a wide set and
+    ///      the fixture set never collide.
+    function _setValidatorCount(uint256 netuid, uint256 count) internal returns (bytes32[] memory hks) {
+        hks = _hotkeysFrom("validator", count);
+        _setValidators(netuid, hks, _evenWeights(count));
+    }
+
+    function _stakeAcross(bytes32[] memory hks, bytes32 coldkey, uint256 netuid) internal view returns (uint256 total) {
+        for (uint256 i; i < hks.length; ++i) {
+            total += _getStakeForColdkey(hks[i], coldkey, netuid);
+        }
+    }
+
+    function _vaultStakeAcross(bytes32[] memory hks, uint256 netuid) internal view returns (uint256) {
+        return _stakeAcross(hks, _subnetColdkey(netuid), netuid);
+    }
+
+    /// @dev Asserts the vault's stake on `hks` follows the even split, with the rounding remainder
+    ///      on the last slot - the same way the vault assigns targets.
+    function _assertEvenSpread(bytes32[] memory hks, uint256 netuid, uint256 total) internal view {
+        uint16[] memory wts = _evenWeights(hks.length);
+        uint256 assigned;
+        for (uint256 i; i + 1 < hks.length; ++i) {
+            assertEq(_getVaultStake(hks[i], netuid), _weighted(total, wts[i]), "slot off its weight");
+            assigned += _weighted(total, wts[i]);
+        }
+        assertEq(_getVaultStake(hks[hks.length - 1], netuid), total - assigned, "last slot absorbs the remainder");
+    }
+
     function _countRebalancedLogs(Vm.Log[] memory logs) internal pure returns (uint256 count) {
         bytes32 sig = keccak256("Rebalanced(uint256,bytes32,bytes32,uint256)");
         for (uint256 i; i < logs.length;) {
@@ -205,6 +243,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     function _setVaultStake(bytes32 hotkey, uint256 netuid, uint256 amount) internal {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey, _subnetColdkey(netuid), netuid, amount);
+        _reanchorRecord(netuid);
     }
 
     function _setVaultStakes(uint256 netuid, uint256 a, uint256 b, uint256 c) internal returns (uint256 total) {
@@ -212,7 +251,30 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneColdkey, netuid, a);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneColdkey, netuid, b);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneColdkey, netuid, c);
+        _reanchorRecord(netuid);
         total = a + b + c;
+    }
+
+    /// @dev Point the vault's record at what its validators now hold. Sculpting balances through
+    ///      the mock is a test convenience with no on-chain counterpart: the vault's alpha moves
+    ///      only when the vault itself moves it, and every such call re-reads the record before it
+    ///      returns. Skipping this leaves an emptying no chain fact explains, which every rail
+    ///      refuses by design - the tests that want that state write to the mock directly.
+    function _reanchorRecord(uint256 netuid) internal {
+        uint256 tokenId = vault.currentTokenId(netuid);
+        AlphaVault.Slot[] memory slots = vault.recordedSlots(tokenId);
+        uint256 base = uint256(keccak256(abi.encode(keccak256(abi.encode(tokenId, VAULT_SLOTS_STORAGE_SLOT)))));
+        for (uint256 i; i < slots.length; ++i) {
+            // Read a neighbouring field back where the layout says it sits, before writing. Checking
+            // the written value instead would pass whenever it already held what we meant to write,
+            // and a moved layout would scribble into unrelated vault storage unnoticed.
+            assertEq(
+                vm.load(address(vault), bytes32(base + i * 4 + 1)),
+                slots[i].active,
+                "AlphaVault storage layout moved: VAULT_SLOTS_STORAGE_SLOT is stale"
+            );
+            vm.store(address(vault), bytes32(base + i * 4 + 2), bytes32(_getVaultStake(slots[i].active, netuid)));
+        }
     }
 
     // Smallest share count whose pro-rata assets equal `targetAssets` under the share-price cushion.
@@ -256,6 +318,40 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     function _registerSubnet(uint256 netuid, bytes32 hotkey) internal {
         _setValidators(netuid, _hotkeys(hotkey), _weights(10_000));
         _setRegBlock(netuid, 300);
+    }
+
+    /// @dev Records the loss and lets its recovery window run out, leaving the token at the point
+    ///      where the next call of any kind writes it off.
+    function _writeOffShortfall(uint256 tokenId) internal {
+        vault.declareShortfall(tokenId);
+        vm.warp(vault.depositsOpenFrom(tokenId));
+    }
+
+    /// @dev Moves the clone's backing between hotkeys with no vault call and no lineage, standing
+    ///      in for a swap this subnet recorded nothing for.
+    function _simulateOffVaultSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
+        bytes32 coldkey = _subnetColdkey(netuid);
+        uint256 amount = _getStakeForColdkey(fromHotkey, coldkey, netuid);
+        MockStaking(STAKING_PRECOMPILE).setStake(fromHotkey, coldkey, netuid, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(toHotkey, coldkey, netuid, amount);
+    }
+
+    /// @dev A swap as the chain records it: the stake moves and the lineage points at it.
+    function _simulateFollowedSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
+        _simulateOffVaultSwap(netuid, fromHotkey, toHotkey);
+        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(fromHotkey, netuid, toHotkey);
+    }
+
+    /// @dev Chains `hops` swaps, leaving the backing at the far tip and the vault able to walk
+    ///      only the first edge.
+    function _buildSwapTrail(uint256 netuid, bytes32 fromHotkey, uint256 hops) internal returns (bytes32 tip) {
+        bytes32 previous = fromHotkey;
+        for (uint256 i; i < hops; ++i) {
+            tip = keccak256(abi.encode("trail-hop", fromHotkey, i));
+            MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(previous, netuid, tip);
+            previous = tip;
+        }
+        _simulateOffVaultSwap(netuid, fromHotkey, tip);
     }
 
     function _simulateTaoAwardedOnDissolution(uint256 tokenId, uint256 taoAmount) internal {
