@@ -1,7 +1,7 @@
 # Backing resolution
 
 A design for the subsystem that decides whether a token's recorded backing is
-still where the vault left it, to be built fresh on current `main`.
+still where the vault left it.
 
 ## The problem
 
@@ -30,19 +30,19 @@ that it cannot always be answered.
 
 One fact is recorded, and it involves no price:
 
-**A hotkey swap leaves a lineage edge.** `swap_hotkey` writes
-`HotkeySuccessor(netuid, old) -> new`. The per-subnet path records it
-unconditionally; the global path records it for every subnet where the old key
+**A hotkey swap leaves a lineage edge.** The chain records old-to-new per
+subnet when a hotkey is swapped. The subnet-scoped swap records it
+unconditionally; the global swap records it for every subnet where the old key
 was a member.
 
 **The edge is readable, not permanent.** The chain clears a key's outgoing
-successor whenever that key becomes live again - `clear_stale_hotkey_successor`
-runs on both UID replacement and append - and again whenever the key is written
-as a swap destination. Subtensor documents tip walks as advisory for this
+edge whenever that key becomes live again - on registration, whether it
+replaces a UID or is appended - and again whenever the key is written as a
+swap destination. The chain itself documents tip walks as advisory for this
 reason.
 
-**The dust sweep records nothing.** It calls
-`decrease_stake_for_hotkey_and_coldkey_on_subnet` and touches no lineage.
+**The dust sweep records nothing.** It removes the stake directly and
+touches no lineage.
 
 So an edge is evidence and its absence is not:
 
@@ -61,10 +61,9 @@ edge where there is one and holds the expectation where there is not.
 
 ## Why value is the wrong signal
 
-An earlier design asked instead whether the recorded expectation was small
-enough, priced at the current alpha price, for the sweep to be a plausible
-cause. That reconstructs a past event from two live, moving numbers, and it is
-wrong in both directions: a price rise turns a real sweep into a shortfall, a
+Asking instead whether the recorded expectation is small enough, priced at the
+current alpha price, for the sweep to be a plausible cause reconstructs a past
+event from two live, moving numbers, and is wrong in both directions: a price rise turns a real sweep into a shortfall, a
 price fall turns a real move into a write-off. It also cannot be repaired by
 choosing better thresholds, because the inputs keep moving after the event.
 
@@ -116,12 +115,11 @@ answers at most once, so two desired keys can never resolve onto one `active`.
 
 ## One planner
 
-The current implementation carries two hand-written scans — one mutating, one
-`view` — that must reach identical verdicts. Three defects on the existing
-branch came from them disagreeing. A comment asking future readers to keep them
-in step is not a mechanism.
+Two hand-written scans — one mutating, one `view` — that must reach identical
+verdicts will eventually disagree, and a comment asking future readers to keep
+them in step is not a mechanism.
 
-Instead: one `view` planner produces a decision; the mutating path applies it.
+So: one `view` planner produces the decision; the mutating path applies it.
 
 ```solidity
 enum Status { Clean, Repairable, NeedsLocating, NeedsWriteDown, Collision }
@@ -257,9 +255,9 @@ onto what the chain still reports and the position resumes.
 
 ### Why not a signature
 
-An earlier draft made this a threshold-signed acknowledgement, on the reasoning
-that a quorum ratifies what the contract cannot detect. That reasoning does not
-survive contact with what the signers would actually be asserting: *this alpha
+A threshold-signed acknowledgement — a quorum ratifying what the contract
+cannot detect — does not survive contact with what the signers would actually
+be asserting: *this alpha
 is not coming back*. The window tests exactly that claim, permissionlessly and
 with chain verification, because `recoverStray` is already open to anyone and
 already proves its case against on-chain balances. Anyone who genuinely knows
@@ -340,8 +338,7 @@ and that nobody finds within three hours, is written off permanently. After the
 settle `tracked` equals what the chain reports, so `recoverStray` reverts
 `BackingIntact` and the alpha stops being claimable by anyone.
 
-And it has a beneficiary, which an earlier draft of this section wrongly denied.
-`recoverStray` is closed afterwards, but `_unionSlots` counts any key in the
+And it has a beneficiary. `recoverStray` is closed afterwards, but `_unionSlots` counts any key in the
 recorded set *or* the attested set, so the moment the attesters name the key
 holding the stranded alpha it re-enters `plan.total`. Whoever deposited at the
 deflated price takes a pro-rata slice of it. That is a transfer between share
@@ -448,7 +445,7 @@ No path ends in a token that cannot be unstuck.
 
 ## Sizing
 
-`AlphaVault` measures 24,557 bytes against the 24,576 limit. The recovery
+`AlphaVault` sits within a few dozen bytes of the 24,576 limit. The recovery
 machinery itself is small - one timestamp per slot and a per-slot scan; most of
 the margin goes to the movers vetting their destinations before every stake
 call.
