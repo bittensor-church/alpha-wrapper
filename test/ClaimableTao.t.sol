@@ -6,7 +6,6 @@ pragma solidity ^0.8.20;
 // who was holding shares at that moment and lets exactly those holders withdraw it later.
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
-import { AlphaVault } from "src/AlphaVault.sol";
 import { ClaimBelowNativePrecision, SupplyCapExceeded, ZeroAddress, ZeroAmount } from "src/VaultErrors.sol";
 import { ClaimDuringTransferReceiver } from "./helpers/TaoRailReceivers.sol";
 

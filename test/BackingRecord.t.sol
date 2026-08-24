@@ -2,7 +2,6 @@
 pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
-import { AlphaVault } from "src/AlphaVault.sol";
 import { VaultReads } from "src/libraries/VaultReads.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";

@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import { CloneBase } from "./CloneBase.sol";
 import { IStaking, STAKING_PRECOMPILE } from "./interfaces/IStaking.sol";
-import { IAddressMapping, ADDRESS_MAPPING_PRECOMPILE } from "./interfaces/IAddressMapping.sol";
+import { VaultReads } from "./libraries/VaultReads.sol";
 
 /// @title DepositMailbox
 /// @notice Per-user deposit mailbox. Receives alpha stake, flushes to the subnet clone.
@@ -19,7 +19,7 @@ contract DepositMailbox is CloneBase {
     /// @return foundKey The key the deposit was found under.
     /// @return amount   Alpha sitting there.
     function resolveDeposit(bytes32 hotkey, uint16 netuid) external view returns (bytes32 foundKey, uint256 amount) {
-        bytes32 coldkey = IAddressMapping(ADDRESS_MAPPING_PRECOMPILE).addressMapping(address(this));
+        bytes32 coldkey = VaultReads.coldkeyOf(address(this));
         foundKey = hotkey;
         amount = IStaking(STAKING_PRECOMPILE).getStake(hotkey, coldkey, netuid);
         if (amount == 0) {

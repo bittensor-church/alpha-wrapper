@@ -120,12 +120,15 @@ library VaultReads {
         uint64 shortSince;
     }
 
-    /// @dev One reading of a position: the keys it can see, what it cannot account for, and the
-    ///      located total. Carried as a struct because the coverage build compiles at minimum
+    /// @dev One reading of a position: the union keys with follows applied and their balances,
+    ///      what it cannot account for, the keys no mover may land stake on, and the located
+    ///      total. Carried as a struct because the coverage build compiles at minimum
     ///      optimization, where returning the parts separately runs the stack out.
     struct Plan {
         bytes32[] keys;
+        uint256[] balances;
         bool[] unaccounted;
+        bytes32[] barred;
         uint256 total;
         uint256 shortIndex;
     }
@@ -152,24 +155,42 @@ library VaultReads {
         view
         returns (Plan memory plan)
     {
-        plan.keys = VaultMath.unionSlots(activesOf(slots), currentSet);
-        uint256[] memory balances = fetchBalances(plan.keys, coldkey, netuid);
-        plan.total = VaultMath.sumBalances(balances);
+        (plan.keys, plan.balances, plan.total) = unionStake(activesOf(slots), currentSet, coldkey, netuid);
         plan.shortIndex = type(uint256).max;
 
         uint256 count = slots.length;
         plan.unaccounted = new bool[](count);
+        uint256 barredCount;
         for (uint256 i; i < count;) {
             uint256 tracked = slots[i].tracked;
-            if (balances[i] + TRACKED_SLACK_RAO < tracked) {
-                (bool accounted, uint256 found) = _accountForSlot(slots, i, netuid, coldkey, plan.keys, count, tracked);
-                plan.total += found;
-                if (!accounted) {
+            if (!coversTracked(plan.balances[i], tracked)) {
+                if (!_accountForSlot(slots, i, netuid, coldkey, plan, tracked)) {
                     if (plan.shortIndex == type(uint256).max) plan.shortIndex = i;
                     // The settle that follows re-reads every slot from the chain, which would file
                     // this loss as an ordinary balance change. Flagging the slot keeps its
                     // expectation standing until the alpha is found or its window has run.
                     plan.unaccounted[i] = true;
+                    if (isWindowStanding(slots[i].shortSince)) {
+                        unchecked {
+                            ++barredCount;
+                        }
+                    }
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        // The keys no mover may land stake on: filled back up, a standing loss would read as
+        // repaired - buried without its window ever running - in the hands of whoever controls a
+        // key the record already distrusts. Once the window has run, the key is ordinary again.
+        plan.barred = new bytes32[](barredCount);
+        uint256 size;
+        for (uint256 i; i < count && size < barredCount;) {
+            if (plan.unaccounted[i] && isWindowStanding(slots[i].shortSince)) {
+                plan.barred[size] = slots[i].active;
+                unchecked {
+                    ++size;
                 }
             }
             unchecked {
@@ -198,25 +219,33 @@ library VaultReads {
         uint256 index,
         uint16 netuid,
         bytes32 coldkey,
-        bytes32[] memory keys,
-        uint256 count,
+        Plan memory plan,
         uint256 tracked
-    ) private view returns (bool accounted, uint256 found) {
+    ) private view returns (bool) {
+        uint256 count = slots.length;
         bytes32 active = slots[index].active;
         (bool exists, bytes32 next) = IStaking(STAKING_PRECOMPILE).getHotkeySuccessor(active, netuid);
-        if (!exists || next == active) return (false, 0);
+        if (!exists || next == active) return false;
         // An edge says the alpha moved. Two slots cannot lean on one balance, so a successor
         // another slot already holds or has already claimed this pass reads as unaccounted for.
-        if (VaultMath.contains(activesOf(slots), next) || VaultMath.keysHold(keys, 0, count, next)) {
-            return (false, 0);
+        if (VaultMath.contains(activesOf(slots), next) || VaultMath.keysHold(plan.keys, 0, count, next)) {
+            return false;
         }
         uint256 stake = IStaking(STAKING_PRECOMPILE).getStake(next, coldkey, netuid);
-        if (stake + TRACKED_SLACK_RAO < tracked) return (false, 0);
-        // A successor the attesters already name sits in the union and is counted there; claiming
-        // it still has to be exclusive, which rewriting the key below records.
-        found = VaultMath.keysHold(keys, count, keys.length, next) ? 0 : stake;
-        keys[index] = next;
-        return (true, found);
+        if (!coversTracked(stake, tracked)) return false;
+        // The follow leaves the plan exactly as the next call would read it back: the successor
+        // takes the slot's place in the union with its own balance, the retired key drops out, and
+        // an attested successor swaps positions with its own entry so nothing is counted twice.
+        uint256 tail = VaultMath.indexOf(plan.keys, next);
+        plan.total = plan.total + stake - plan.balances[index];
+        if (tail == type(uint256).max) {
+            plan.keys[index] = next;
+            plan.balances[index] = stake;
+        } else {
+            (plan.keys[index], plan.keys[tail]) = (plan.keys[tail], plan.keys[index]);
+            (plan.balances[index], plan.balances[tail]) = (plan.balances[tail], plan.balances[index]);
+        }
+        return true;
     }
 
     function activesOf(Slot[] memory slots) internal pure returns (bytes32[] memory keys) {
@@ -229,17 +258,28 @@ library VaultReads {
         }
     }
 
-    /// @dev The first slot the plan cannot account for whose recovery window has not run out - a
-    ///      window not yet started cannot have. `type(uint256).max` when none stands. The rails
-    ///      that could mint refuse on this, and every quote refuses on the same call, so a quote
-    ///      never promises what the call would refuse.
+    /// @dev Whether a loss stamped at `shortSince` still holds the refusing rails shut. A window
+    ///      not yet started counts - a deadline cannot pass before it exists. This is the one
+    ///      definition of standing; everything that bars, refuses, or reports a deadline derives
+    ///      from it.
+    function isWindowStanding(uint64 shortSince) internal view returns (bool) {
+        // forge-lint: disable-next-line(block-timestamp)
+        return shortSince == 0 || block.timestamp < shortSince + RECOVERY_WINDOW;
+    }
+
+    /// @dev Whether `stake` accounts for a slot owed `tracked`, with the slack the chain's own
+    ///      crediting requires.
+    function coversTracked(uint256 stake, uint256 tracked) internal pure returns (bool) {
+        return stake + TRACKED_SLACK_RAO >= tracked;
+    }
+
+    /// @dev The first slot the plan cannot account for whose recovery window has not run out.
+    ///      `type(uint256).max` when none stands. The rails that could mint refuse on this, and
+    ///      every quote refuses on the same call, so a quote never promises what the call would
+    ///      refuse.
     function firstStandingShortfall(Slot[] memory slots, Plan memory plan) internal view returns (uint256) {
         for (uint256 i; i < plan.unaccounted.length;) {
-            if (plan.unaccounted[i]) {
-                uint64 shortSince = slots[i].shortSince;
-                // forge-lint: disable-next-line(block-timestamp)
-                if (shortSince == 0 || block.timestamp < shortSince + RECOVERY_WINDOW) return i;
-            }
+            if (plan.unaccounted[i] && isWindowStanding(slots[i].shortSince)) return i;
             unchecked {
                 ++i;
             }

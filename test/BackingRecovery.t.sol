@@ -3,7 +3,6 @@ pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { stdError } from "forge-std/Test.sol";
-import { AlphaVault } from "src/AlphaVault.sol";
 import { VaultReads } from "src/libraries/VaultReads.sol";
 import {
     BackingIntact,
@@ -160,7 +159,9 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vm.prank(bob);
         vault.declareShortfall(TOKEN1);
 
-        assertEq(lens.depositsOpenFrom(TOKEN1), block.timestamp + 3 hours, "the window runs from here");
+        assertEq(
+            lens.depositsOpenFrom(TOKEN1), block.timestamp + VaultReads.RECOVERY_WINDOW, "the window runs from here"
+        );
         assertFalse(lens.isBackingIntact(TOKEN1), "and the loss still stands until it is out");
     }
 
@@ -274,7 +275,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.declareShortfall(TOKEN1);
         uint256 deadline = lens.depositsOpenFrom(TOKEN1);
 
-        uint256 at = bound(offset, deadline - 3 hours, deadline + 3 hours);
+        uint256 at = bound(offset, deadline - VaultReads.RECOVERY_WINDOW, deadline + VaultReads.RECOVERY_WINDOW);
         vm.warp(at);
 
         if (at < deadline) {
@@ -385,7 +386,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertEq(lens.depositsOpenFrom(TOKEN1), type(uint256).max, "a loss with no clock reports no opening");
 
         // Even long past the first deadline, the second loss has had no window of its own.
-        vm.warp(block.timestamp + 3 hours);
+        vm.warp(block.timestamp + VaultReads.RECOVERY_WINDOW);
         _simulateAlphaDepositHotkey(bob, NETUID1, 1 ether, hotkey3);
         vm.prank(bob);
         vm.expectPartialRevert(BackingShortfall.selector);
@@ -534,7 +535,11 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         _buildSwapTrail(NETUID1, hotkey2, 2);
         vault.declareShortfall(TOKEN1);
 
-        assertEq(vault.recordedSlots(TOKEN1)[0].shortSince + 3 hours, firstDeadline, "the first clock did not move");
+        assertEq(
+            vault.recordedSlots(TOKEN1)[0].shortSince + VaultReads.RECOVERY_WINDOW,
+            firstDeadline,
+            "the first clock did not move"
+        );
         assertEq(lens.depositsOpenFrom(TOKEN1), firstDeadline + 1 hours, "and the second got its own");
 
         vm.warp(firstDeadline);
@@ -679,7 +684,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
     /// @dev The reported reopening is always the latest clock among the slots still missing.
     function testFuzz_DepositsOpenFrom_ReportsTheLatestClock(uint256 gap) public {
-        gap = bound(gap, 1, 3 hours - 1);
+        gap = bound(gap, 1, VaultReads.RECOVERY_WINDOW - 1);
         _depositAndWrap(alice, NETUID1, 30 ether);
         _buildSwapTrail(NETUID1, hotkey1, 2);
         vault.declareShortfall(TOKEN1);
@@ -689,7 +694,9 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         _buildSwapTrail(NETUID1, hotkey2, 2);
         vault.declareShortfall(TOKEN1);
 
-        assertEq(lens.depositsOpenFrom(TOKEN1), block.timestamp + 3 hours, "the latest clock governs");
+        assertEq(
+            lens.depositsOpenFrom(TOKEN1), block.timestamp + VaultReads.RECOVERY_WINDOW, "the latest clock governs"
+        );
         assertGt(lens.depositsOpenFrom(TOKEN1), firstDeadline, "and it postdates the first");
 
         vm.warp(lens.depositsOpenFrom(TOKEN1));

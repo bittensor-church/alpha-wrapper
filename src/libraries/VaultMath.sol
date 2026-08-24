@@ -62,13 +62,13 @@ library VaultMath {
     }
 
     function contains(bytes32[] memory set, bytes32 hotkey) internal pure returns (bool) {
-        for (uint256 i; i < set.length;) {
-            if (set[i] == hotkey) return true;
-            unchecked {
-                ++i;
-            }
-        }
-        return false;
+        return keysHold(set, 0, set.length, hotkey);
+    }
+
+    /// @dev Whether `set[index]` appears anywhere else in `set`.
+    function appearsTwice(bytes32[] memory set, uint256 index) internal pure returns (bool) {
+        bytes32 key = set[index];
+        return keysHold(set, 0, index, key) || keysHold(set, index + 1, set.length, key);
     }
 
     /// @dev Every slot the position may hold alpha on: the remembered set, then any current
@@ -100,11 +100,7 @@ library VaultMath {
                 ++i;
             }
         }
-        // Only the length word of an array this function allocated is written, so no memory outside
-        // it is touched.
-        assembly ("memory-safe") {
-            mstore(slots, size)
-        }
+        truncate(slots, size);
     }
 
     function netuidOf(uint256 tokenId) internal pure returns (uint16) {
