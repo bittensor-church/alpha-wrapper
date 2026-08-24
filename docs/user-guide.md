@@ -6,8 +6,13 @@ already staked on the subnet you want to wrap. Read
 
 Two addresses matter. You send every transaction to the vault. You read
 every quote - backing, share price, deposit and exit previews, claimable
-TAO, and the validator set - from the lens deployed alongside it. Whoever
-gave you the vault address has the lens address too.
+TAO, and the validator set - from the lens deployed alongside it.
+
+Check that the two belong together before you trust a quote: `vault()` on
+the lens returns the vault it reads, and it must equal the address you
+send transactions to. Anyone can deploy a lens against any vault, and a
+lens left over from an earlier vault keeps answering with that vault's
+numbers. The check costs one call and only has to be done once per pair.
 
 ## Wrapping
 

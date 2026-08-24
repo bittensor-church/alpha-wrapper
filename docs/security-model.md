@@ -40,6 +40,11 @@ over several sales.
 - The performance of the attested validators: emissions accrue, or do
   not, according to where the registry points the stake.
 - The registry quorum and its admin key, within the boundary above.
+- Whoever told them which lens to read. Quotes come from a separate
+  read-only contract that names its vault through `vault()` but is not
+  named by the vault in return, so a lens paired with a different vault
+  answers with that vault's numbers. The lens can move no stake and mint
+  no shares, so a wrong one misinforms rather than steals.
 
 ## Design safeguards
 

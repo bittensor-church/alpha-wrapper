@@ -4,10 +4,13 @@ Bittensor alpha-token wrapper (ERC-1155 vault + staking precompile integration).
 
 ## Contents
 - `src/AlphaVault.sol` - ERC-1155 vault that wraps staked alpha
+- `src/AlphaVaultLens.sol` - read-only companion answering every quote about a position
 - `src/DepositMailbox.sol` - minimal-proxy mailbox for per-user deposits
 - `src/SubnetClone.sol` - minimal-proxy stake holder for a single subnet
 - `src/CloneBase.sol` - shared base of both clones: vault-only access, one-shot initialization
 - `src/ValidatorRegistry.sol` - registry of target validator weights per subnet, attested by a threshold of signers whose membership the admin manages
+- `src/libraries/` - share math and chain reads shared by the vault and the lens (VaultMath, VaultReads)
+- `src/VaultErrors.sol` - the failure vocabulary both contracts revert with
 - `src/interfaces/` - Bittensor precompile interfaces (IStaking, IAlpha, ISubnet, IAddressMapping) + IValidatorRegistry
 - `test/` - Foundry tests + mocks for the precompiles
 
