@@ -6,6 +6,7 @@ pragma solidity ^0.8.20;
 // who was holding shares at that moment and lets exactly those holders withdraw it later.
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
+import { AlphaVault } from "src/AlphaVault.sol";
 import { ClaimBelowNativePrecision, SupplyCapExceeded, ZeroAddress, ZeroAmount } from "src/VaultErrors.sol";
 import { ClaimDuringTransferReceiver } from "./helpers/TaoRailReceivers.sol";
 
@@ -297,12 +298,14 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         assertLe(paid, donated);
     }
 
-    // A raised chain threshold can force-sell the whole position while shares remain outstanding;
+    // A raised chain threshold can force-sell the whole position while shares remain outstanding.
+    // Nothing on chain names that as the cause, so the loss goes on file and runs its window; then
     // the zero-backing unwrap retires those shares and the sale proceeds stay claimable.
     function test_UnwrapAfterFullSweep_RetiresSharesAndKeepsClaim() public {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
         uint256 proceeds = 7 ether;
         _simulateTaoAwardedOnDissolution(TOKEN1, proceeds);
+        _writeOffShortfall(TOKEN1);
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         (uint256 previewAlpha, uint256 previewTao) = lens.previewUnwrap(TOKEN1, shares);
@@ -327,6 +330,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         uint256 seed = 1e10;
         _depositAndWrap(alice, NETUID1, seed);
         _simulateTaoAwardedOnDissolution(TOKEN1, 5 ether);
+        _writeOffShortfall(TOKEN1);
         _depositAndWrap(bob, NETUID1, seed);
         assertLe(vault.totalSupply(TOKEN1), 1e45);
 
@@ -340,6 +344,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
     function test_RevertWhen_RecapitalizationWouldBreachClaimIndexBound() public {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
         _simulateTaoAwardedOnDissolution(TOKEN1, 5 ether);
+        _writeOffShortfall(TOKEN1);
 
         bytes32 chosen = lens.getCurrentValidators(NETUID1)[0];
         _simulateAlphaDeposit(bob, NETUID1, DEPOSIT);

@@ -78,6 +78,33 @@ class Environment:
             self.lens_address, "totalStake(uint256)(uint256)", token_id,
         ))
 
+    def vault_located_stake(self, token_id: int) -> int:
+        """Alpha (RAO) the vault can currently find for a token id, short or not."""
+        return int(chain.cast_call(
+            self.lens_address, "locatedStake(uint256)(uint256)", token_id,
+        ))
+
+    def backing_intact(self, token_id: int) -> bool:
+        """Whether the vault can account for the alpha it expects under every
+        validator it records."""
+        return chain.cast_call(
+            self.lens_address, "isBackingIntact(uint256)(bool)", token_id,
+        ).strip() == "true"
+
+    def declare_shortfall(self, token_id: int) -> None:
+        """Put `token_id`'s unaccounted loss on file, starting the window after which the record
+        gives up on it. Anyone may call it."""
+        validators.declare_shortfall(
+            self.vault_address, config.WRAPPER_USER_PRIVATE_KEY, token_id,
+        )
+
+    def deposits_open_from(self, token_id: int) -> int:
+        """Unix time at which a recorded loss stops holding valuations and deposits shut; 0 when
+        none is on file. Exits never wait on it."""
+        return int(chain.cast_call(
+            self.lens_address, "depositsOpenFrom(uint256)(uint256)", token_id,
+        ))
+
     def share_price(self, token_id: int) -> int:
         return int(chain.cast_call(
             self.lens_address, "sharePrice(uint256)(uint256)", token_id,

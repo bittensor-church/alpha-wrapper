@@ -79,6 +79,25 @@ stays staked comes back to the caller as shares, except
 on a burn of the entire supply, which drops a leftover below the chain's
 minimum.
 
+The sweep can reach the vault's own stake too, when a threshold rise
+leaves one of its validator slices below the new line. The chain sells
+that slice and the TAO lands on the vault's subnet account, where it
+becomes claimable as described below. What the vault cannot do is tell
+that apart from a validator quietly moving the alpha somewhere else: the
+chain records nothing either way, and it stops showing a swap's trail
+once the old name is registered again. Guessing wrong would price the
+position below what it really holds, so the vault stops valuing it and
+taking new deposits until the question settles. If the alpha is findable,
+anyone can point the vault at the key holding it and everything reopens
+at once. If nobody does, the loss waits out a three-hour recovery window
+- anyone may start the clock - and the next deposit or rebalance writes
+it off.
+
+You are never shut in while that runs. Exits pay out of whatever the
+vault can locate, a deposit still sitting in a mailbox stays reclaimable,
+and TAO already credited to you stays claimable. Leaving while a position
+is short does forfeit your share of anything recovered afterwards.
+
 ## Stray TAO
 
 Native TAO can arrive on a clone outside any exit: the chain force-sold

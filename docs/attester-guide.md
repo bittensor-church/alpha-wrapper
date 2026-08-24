@@ -89,6 +89,43 @@ Deposits parked under a dropped hotkey stay recoverable: `wrap` refuses
 out-of-set hotkeys up front, and stake already sitting in a mailbox
 under one stays reclaimable by its owner.
 
+## When a position loses track of its alpha
+
+Sometimes the vault finds less alpha under a validator than it left
+there, and nothing on chain says where it went. It stops quoting and
+taking new deposits into that position until someone establishes what
+happened, because pricing it wrong hands value from one set of holders to
+another.
+
+None of this needs your signature, and there is nothing here to co-sign.
+If the alpha is findable, anyone at all can call the vault's
+`recoverStray` and point the position at the key holding it - no
+signature, no delay. Finding it is a scan of the subnet's hotkeys against
+the vault's own coldkey.
+
+If that scan comes back empty, the position runs a clock instead. The
+first exit to see the loss puts it on file, and anyone can put it there
+directly with `declareShortfall(tokenId)` for a position nothing else is
+touching. Three hours later quotes and deposits answer again, and the
+next deposit or `rebalance` settles the record onto what the chain still
+reports.
+
+Each loss runs its own clock, set once and never restarted, so nobody
+can hold a position shut past its deadline and a second loss never rides
+out on the first one's window. Finding the alpha at any point cancels
+its clock outright - and stays possible right up until the settle lands.
+
+This is where you come in, if at all: the window is short because the
+positions that price off this vault cannot wait, so the scan wants
+somebody watching. Running one and calling `recoverStray` is worth far
+more than anything you could sign.
+
+Throughout all of this holders can still leave. Exits pay out of whatever
+the vault can locate, mailbox deposits stay reclaimable, and credited TAO
+stays claimable. Leaving while a position is short does forfeit a share
+of anything recovered later, which is the cost of taking an honest price
+early.
+
 ## Signer set changes
 
 The registry admin replaces the signer set with

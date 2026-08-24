@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
+import { AlphaVault } from "src/AlphaVault.sol";
 import { ConsolidationBelowFloor } from "src/VaultErrors.sol";
 import { CHAIN_MIN_STAKE, MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
@@ -37,10 +38,27 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey2, NETUID1), 0, "first rotated-out slot consolidated");
         assertEq(_getVaultStake(hotkey3, NETUID1), 0, "second rotated-out slot consolidated");
         assertEq(lens.totalStake(TOKEN1), totalBefore, "total conserved across the chained roll");
-        bytes32[] memory seen = vault.lastSeenHotkeys(TOKEN1);
+        bytes32[] memory seen = _lastSeen(TOKEN1);
         assertEq(seen.length, 2, "remembered set refreshed to the 2-validator current set");
         assertEq(seen[0], hotkey1);
         assertEq(seen[1], hotkey4);
+    }
+
+    /// @dev A withdrawal consolidates the same way a rebalance does, so it owes the record the same
+    ///      refresh: a slot left behind would go on answering for alpha that has moved off it.
+    function test_Unwrap_ForgetsTheConsolidatedValidator() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(5000, 5000));
+
+        uint256 burnShares = vault.balanceOf(alice, TOKEN1) / 2;
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, burnShares, _toSubstrate(alice));
+
+        assertEq(_getVaultStake(hotkey3, NETUID1), 0, "rotated-out slot consolidated by the withdrawal");
+        bytes32[] memory afterUnwrap = _lastSeen(TOKEN1);
+        assertEq(afterUnwrap.length, 2, "remembered set refreshed to the 2-validator current set");
+        assertEq(afterUnwrap[0], hotkey1);
+        assertEq(afterUnwrap[1], hotkey2);
     }
 
     /// @dev Rotated-out sub-floor stake with no other above-floor backing is still consolidated,
@@ -58,7 +76,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(vault.balanceOf(bob, tokenId), previewedShares, "mint parity with the union-priced preview");
         assertEq(_getVaultStake(hotkey4, 99), 0, "rotated-out dust consolidated by the roll");
         assertEq(lens.totalStake(tokenId), bobDeposit + dust, "rotated-out stake folded into the current-set backing");
-        bytes32[] memory seen = vault.lastSeenHotkeys(tokenId);
+        bytes32[] memory seen = _lastSeen(tokenId);
         assertEq(seen[0], hotkey1, "remembered set refreshed to the current set");
     }
 
@@ -123,7 +141,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey1, 99), 0, "drained validator emptied");
         assertEq(_getVaultStake(hotkey2, 99), 0, "dust folded off the second dropped validator");
         assertEq(lens.totalStake(tokenId), _getVaultStake(hotkey4, 99), "backing all sits on the current set");
-        assertEq(vault.lastSeenHotkeys(tokenId).length, 1, "nothing left to remember");
+        assertEq(_lastSeen(tokenId).length, 1, "nothing left to remember");
     }
 
     function test_Unwrap_SucceedsWhenPriceReadsZero() public {
@@ -234,7 +252,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
 
         assertEq(lens.totalStake(TOKEN1), totalBefore, "backing unchanged after the reverted roll");
         assertGt(_getVaultStake(hotkey3, NETUID1), 0, "rotated-out stake not dropped");
-        bytes32[] memory seen = vault.lastSeenHotkeys(TOKEN1);
+        bytes32[] memory seen = _lastSeen(TOKEN1);
         assertEq(seen[2], hotkey3, "remembered set still references the pre-rotation set");
     }
 

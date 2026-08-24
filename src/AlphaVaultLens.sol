@@ -5,7 +5,13 @@ import { AlphaVault } from "./AlphaVault.sol";
 import { IValidatorRegistry } from "./interfaces/IValidatorRegistry.sol";
 import { VaultMath } from "./libraries/VaultMath.sol";
 import { VaultReads } from "./libraries/VaultReads.sol";
-import { NetuidOutOfRange, NoSharesOutstanding, SubnetDissolved, ZeroAddress } from "./VaultErrors.sol";
+import {
+    BackingShortfall,
+    NetuidOutOfRange,
+    NoSharesOutstanding,
+    SubnetDissolved,
+    ZeroAddress
+} from "./VaultErrors.sol";
 
 /// @title AlphaVaultLens
 /// @notice Every quote an `AlphaVault` integrator needs: backing, share price, deposit and exit
@@ -33,18 +39,89 @@ contract AlphaVaultLens {
     }
 
     /// @notice Total alpha backing this token's shares. Returns 0 before the clone exists.
-    /// @dev    While subtensor dissolution cleanup runs for the netuid the backing alpha is in
+    /// @dev    Reverts `BackingShortfall` while the vault cannot account for the position and the
+    ///         slot's recovery window is still running. The figure it would otherwise report
+    ///         counts only what the vault can locate, so it understates the holding and steps back
+    ///         up the moment the alpha is found; anything valuing the token off it would be right
+    ///         only by accident. `locatedStake` reports that figure regardless, and
+    ///         `isBackingIntact` and `depositsOpenFrom` report the state without reverting.
+    ///
+    ///         While subtensor dissolution cleanup runs for the netuid the backing alpha is in
     ///         flux; treat the value as unstable whenever `isSubnetDissolving(netuid)` is true.
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @return Alpha staked under the clone for this token.
     function totalStake(uint256 tokenId) public view returns (uint256) {
+        (VaultReads.Slot[] memory slots, VaultReads.Plan memory plan) = _resolveBacking(tokenId);
+        uint256 first = VaultReads.firstStandingShortfall(slots, plan);
+        if (first != type(uint256).max) {
+            revert BackingShortfall(VaultMath.netuidOf(tokenId), slots[first].active, slots[first].tracked);
+        }
+        return plan.total;
+    }
+
+    /// @notice Alpha the vault can currently find for this token, whether or not that is all of it.
+    /// @dev    The figure behind `totalStake`, answering where that one refuses. Read it to see
+    ///         what an exit would pay right now or to watch a position that is refusing calls -
+    ///         never to value a holding, which is what `totalStake` is for and why that one would
+    ///         rather revert than answer.
+    function locatedStake(uint256 tokenId) external view returns (uint256) {
+        (, VaultReads.Plan memory plan) = _resolveBacking(tokenId);
+        return plan.total;
+    }
+
+    /// @notice Whether the record still accounts for the position. A hotkey swap the vault can
+    ///         follow reads true: the next call repairs it unaided.
+    /// @dev    False reports a visible gap, not by itself a refusal: quotes and deposits refuse
+    ///         only while some missing slot's recovery window has yet to run out, and answer again
+    ///         from each deadline on - this still reads false until a settling call re-anchors the
+    ///         record. Gate on `depositsOpenFrom` to refuse on the vault's own terms.
+    function isBackingIntact(uint256 tokenId) external view returns (bool) {
+        (, VaultReads.Plan memory plan) = _resolveBacking(tokenId);
+        return plan.shortIndex == type(uint256).max;
+    }
+
+    /// @notice When the losses on file stop holding deposits and quotes shut, as a unix timestamp.
+    /// @dev    The latest deadline across the slots the vault cannot account for; zero when
+    ///         nothing is missing. A visible loss with no clock yet reads `type(uint256).max` -
+    ///         no deadline exists until a write rail or `declareShortfall` starts one, and a zero
+    ///         there would read as "open now" while every deposit refuses. A timestamp already in
+    ///         the past means every window has run and the position answers again.
+    function depositsOpenFrom(uint256 tokenId) external view returns (uint256 deadline) {
+        (VaultReads.Slot[] memory slots, VaultReads.Plan memory plan) = _resolveBacking(tokenId);
+        for (uint256 i; i < plan.unaccounted.length;) {
+            if (plan.unaccounted[i]) {
+                uint256 shortSince = slots[i].shortSince;
+                if (shortSince == 0) return type(uint256).max;
+                uint256 slotDeadline = shortSince + VaultReads.RECOVERY_WINDOW;
+                if (slotDeadline > deadline) deadline = slotDeadline;
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @dev The same plan the vault's operations run, read through the same libraries and never
+    ///      applied. A dissolved token's backing legitimately became TAO, so its zero is honest
+    ///      and no record holds it to anything.
+    function _resolveBacking(uint256 tokenId)
+        private
+        view
+        returns (VaultReads.Slot[] memory slots, VaultReads.Plan memory plan)
+    {
+        plan.shortIndex = type(uint256).max;
         address clone = vault.subnetClone(tokenId);
-        if (clone == address(0)) return 0;
+        if (clone == address(0)) return (slots, plan);
         uint16 netuid = VaultMath.netuidOf(tokenId);
-        (,, uint256 total) = VaultReads.backingStake(
-            validatorRegistry, vault.lastSeenHotkeys(tokenId), VaultReads.coldkeyOf(clone), netuid
-        );
-        return total;
+        if (VaultReads.isIssuedForDissolvedSubnet(tokenId)) {
+            (,, plan.total) = VaultReads.backingStake(
+                validatorRegistry, vault.lastSeenHotkeys(tokenId), VaultReads.coldkeyOf(clone), netuid
+            );
+            return (slots, plan);
+        }
+        slots = vault.recordedSlots(tokenId);
+        (bytes32[] memory current,) = validatorRegistry.getValidators(netuid);
+        plan = VaultReads.planBacking(slots, current, VaultReads.coldkeyOf(clone), netuid);
     }
 
     /// @notice Price of one share in 1e18 precision, expressed in alpha.
@@ -105,11 +182,9 @@ contract AlphaVaultLens {
         }
 
         // Reverts NoValidatorFound when the registry has no set for this subnet.
-        (bytes32[] memory current,) = VaultReads.resolveValidators(validatorRegistry, netuid);
+        VaultReads.resolveValidators(validatorRegistry, netuid);
 
-        (,, uint256 totalAlpha) =
-            VaultReads.unionStake(vault.lastSeenHotkeys(tokenId), current, VaultReads.coldkeyOf(clone), netuid);
-        return (VaultMath.assetsFor(totalAlpha, supply, shares), 0);
+        return (VaultMath.assetsFor(totalStake(tokenId), supply, shares), 0);
     }
 
     /// @notice TAO withdrawable by `account` for `tokenId` right now: exactly what `claimTao`

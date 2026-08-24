@@ -25,3 +25,8 @@ error ChosenHotkeyNotInSet();
 error SlippageExceeded(uint256 amountOut);
 error ConsolidationBelowFloor();
 error GatherBelowFloor();
+error BackingShortfall(uint16 netuid, bytes32 hotkey, uint256 tracked);
+error BackingIntact();
+error HotkeyClaimedTwice();
+error NothingStrayUnder();
+error NoOpenDestination();

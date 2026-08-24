@@ -33,6 +33,34 @@ library VaultMath {
         }
     }
 
+    /// @dev Position of `hotkey` in `set`, or `type(uint256).max`.
+    function indexOf(bytes32[] memory set, bytes32 hotkey) internal pure returns (uint256) {
+        for (uint256 i; i < set.length;) {
+            if (set[i] == hotkey) return i;
+            unchecked {
+                ++i;
+            }
+        }
+        return type(uint256).max;
+    }
+
+    function keysHold(bytes32[] memory keys, uint256 from, uint256 to, bytes32 hotkey) internal pure returns (bool) {
+        for (uint256 i = from; i < to;) {
+            if (keys[i] == hotkey) return true;
+            unchecked {
+                ++i;
+            }
+        }
+        return false;
+    }
+
+    /// @dev Shrinks an array its caller allocated by rewriting only its length word.
+    function truncate(bytes32[] memory keys, uint256 size) internal pure {
+        assembly ("memory-safe") {
+            mstore(keys, size)
+        }
+    }
+
     function contains(bytes32[] memory set, bytes32 hotkey) internal pure returns (bool) {
         for (uint256 i; i < set.length;) {
             if (set[i] == hotkey) return true;
