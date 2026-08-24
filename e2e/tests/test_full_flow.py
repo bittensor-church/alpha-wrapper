@@ -219,6 +219,7 @@ def test_full_flow(env):
             "get_vault_state", "--netuid", str(netuid),
             address_args=[
                 "--vault-address", env.vault_address,
+                "--lens-address", env.lens_address,
                 "--registry-address", env.validator_registry_address,
             ],
         )
