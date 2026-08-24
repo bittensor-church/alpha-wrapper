@@ -42,7 +42,7 @@ def test_root_sweep_tao_becomes_claimable(env):
 
     def claimable_tao() -> int:
         return int(chain.cast_call(
-            env.vault_address, "claimableTaoOf(address,uint256)(uint256)",
+            env.lens_address, "claimableTaoOf(address,uint256)(uint256)",
             config.WRAPPER_USER_ADDRESS, token_id,
         ))
 

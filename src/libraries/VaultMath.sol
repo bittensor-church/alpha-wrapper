@@ -89,6 +89,13 @@ library VaultMath {
         return uint64(tokenId >> 16);
     }
 
+    /// @dev The part of a clone's `balance` not yet promised through the claim index:
+    ///      assignable to the index while the subnet is live, and the redemption backing once it
+    ///      is dissolved.
+    function unreservedTao(uint256 balance, uint256 reserved) internal pure returns (uint256) {
+        return balance > reserved ? balance - reserved : 0;
+    }
+
     /// @dev TAO an account holding `balance` has earned in total at the given index level.
     function earnedAt(uint256 balance, uint256 index) internal pure returns (uint256) {
         return Math.mulDiv(balance, index, TAO_INDEX_PRECISION);

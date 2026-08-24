@@ -6,9 +6,11 @@ import { console } from "forge-std/console.sol";
 import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
+import { AlphaVaultLens } from "src/AlphaVaultLens.sol";
 
 /// @title DeployAlpha
-/// @notice Deploys only the alpha-wrapper contracts (DepositMailbox + SubnetClone + AlphaVault).
+/// @notice Deploys only the alpha-wrapper contracts (DepositMailbox + SubnetClone + AlphaVault
+///         + AlphaVaultLens).
 ///         Used standalone; the tao20 repo has its own deploy script that wires these up
 ///         with the rest of the index protocol.
 /// @dev    The validator registry is an immutable constructor dependency, supplied via the
@@ -28,6 +30,11 @@ contract DeployAlpha is Script {
 
         AlphaVault vault = new AlphaVault(vaultUri, address(mailboxLogic), address(subnetLogic), validatorRegistry);
         console.log("AlphaVault:            %s", address(vault));
+
+        // Every quote the vault used to answer lives here. It holds no state, so redeploying it
+        // against the same vault is always safe.
+        AlphaVaultLens lens = new AlphaVaultLens(vault);
+        console.log("AlphaVaultLens:        %s", address(lens));
 
         vm.stopBroadcast();
     }

@@ -30,6 +30,7 @@ class Environment:
     hotkey_pubkeys: List[str]
     hotkey_ss58s: List[str]
     vault_address: str
+    lens_address: str
     mailbox_implementation_address: str
     subnet_clone_implementation_address: str
     validator_registry_address: str
@@ -73,12 +74,12 @@ class Environment:
     def vault_total_stake(self, token_id: int) -> int:
         """The vault's tracked total alpha (RAO) for a token id."""
         return int(chain.cast_call(
-            self.vault_address, "totalStake(uint256)(uint256)", token_id,
+            self.lens_address, "totalStake(uint256)(uint256)", token_id,
         ))
 
     def share_price(self, token_id: int) -> int:
         return int(chain.cast_call(
-            self.vault_address, "sharePrice(uint256)(uint256)", token_id,
+            self.lens_address, "sharePrice(uint256)(uint256)", token_id,
         ))
 
     def mailbox_address(self, netuid: int, user: Optional[str] = None) -> str:
@@ -103,7 +104,7 @@ class Environment:
     def preview_unwrap(self, token_id: int, shares: int) -> Tuple[int, int]:
         """(alpha RAO, native-TAO wei) legs an unwrap of `shares` would pay out."""
         lines = chain.cast_call_lines(
-            self.vault_address, "previewUnwrap(uint256,uint256)(uint256,uint256)",
+            self.lens_address, "previewUnwrap(uint256,uint256)(uint256,uint256)",
             token_id, shares,
         )
         return int(lines[0]), int(lines[1])

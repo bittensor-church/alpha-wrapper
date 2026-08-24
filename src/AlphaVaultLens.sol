@@ -90,7 +90,7 @@ contract AlphaVaultLens {
         VaultReads.requireNotDissolving(netuid);
 
         if (VaultReads.isIssuedForDissolvedSubnet(tokenId)) {
-            uint256 backing = VaultReads.unreservedCloneTao(clone, vault.taoLiability(tokenId));
+            uint256 backing = VaultMath.unreservedTao(clone.balance, vault.taoLiability(tokenId));
             if (backing == 0) revert SubnetDissolved();
             return (0, (backing * shares) / supply);
         }
@@ -133,7 +133,9 @@ contract AlphaVaultLens {
 
     /// @dev The increases the vault's next synchronization would record.
     function _previewSyncTao(uint256 tokenId) private view returns (uint256, uint256) {
-        uint256 newTao = VaultReads.indexableTao(tokenId, vault.subnetClone(tokenId), vault.taoLiability(tokenId));
+        address clone = vault.subnetClone(tokenId);
+        if (clone == address(0)) return (0, 0);
+        uint256 newTao = VaultReads.indexableTao(tokenId, clone.balance, vault.taoLiability(tokenId));
         if (newTao == 0) return (0, 0);
         uint256 supply = vault.totalSupply(tokenId);
         if (supply == 0) return (0, 0);

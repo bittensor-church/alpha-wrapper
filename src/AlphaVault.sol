@@ -472,7 +472,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     }
 
     function _unwrapFromDissolvedSubnet(uint256 tokenId, uint256 shares, address clone) private {
-        uint256 backing = VaultReads.unreservedCloneTao(clone, taoLiability[tokenId]);
+        uint256 backing = VaultMath.unreservedTao(clone.balance, taoLiability[tokenId]);
         if (backing == 0) revert NothingToUnwrap();
 
         uint256 supplyBefore = totalSupply(tokenId);
@@ -926,7 +926,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
     /// @dev Folds TAO the clone received since the last synchronization into the per-share index.
     function _syncTao(uint256 tokenId) private {
-        uint256 newTao = VaultReads.indexableTao(tokenId, subnetClone[tokenId], taoLiability[tokenId]);
+        address clone = subnetClone[tokenId];
+        if (clone == address(0)) return;
+        // An empty clone is the common case on every balance change, so it exits before the
+        // liability lookup.
+        uint256 balance = clone.balance;
+        if (balance == 0) return;
+        uint256 newTao = VaultReads.indexableTao(tokenId, balance, taoLiability[tokenId]);
         if (newTao == 0) return;
         // With no holders there is no one to attribute the arrival to, so it stays unreserved
         // until shares exist again.

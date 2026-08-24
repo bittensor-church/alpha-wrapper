@@ -75,21 +75,13 @@ library VaultReads {
         if (ISubnet(SUBNET_PRECOMPILE).isSubnetDissolving(netuid)) revert SubnetInDissolutionBlackoutPeriod();
     }
 
-    /// @dev The clone balance not yet promised through the claim index: assignable to the index
-    ///      while the subnet is live, and the redemption backing once it is dissolved.
-    function unreservedCloneTao(address clone, uint256 reserved) internal view returns (uint256) {
-        uint256 balance = clone.balance;
-        // The early exit spares the caller's liability read on the common empty-clone path.
-        if (balance == 0) return 0;
-        return balance > reserved ? balance - reserved : 0;
-    }
-
     /// @dev The unreserved clone TAO a synchronization may fold into the claim index right now.
     ///      Zero while the subnet is dissolving or dissolved: from then on new clone balance is the
     ///      dissolution refund, which the dissolved unwrap path distributes pro rata instead.
-    function indexableTao(uint256 tokenId, address clone, uint256 reserved) internal view returns (uint256) {
-        if (clone == address(0)) return 0;
-        uint256 newTao = unreservedCloneTao(clone, reserved);
+    ///      Callers pass the clone balance they already read, so an empty clone costs them no
+    ///      liability lookup at all.
+    function indexableTao(uint256 tokenId, uint256 balance, uint256 reserved) internal view returns (uint256) {
+        uint256 newTao = VaultMath.unreservedTao(balance, reserved);
         if (newTao == 0) return 0;
         if (ISubnet(SUBNET_PRECOMPILE).isSubnetDissolving(VaultMath.netuidOf(tokenId))) return 0;
         if (isIssuedForDissolvedSubnet(tokenId)) return 0;

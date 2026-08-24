@@ -31,6 +31,7 @@ INITIAL_VALIDATOR_WEIGHTS = [5000, 3000, 2000]
 
 class DeployedContracts(NamedTuple):
     vault_address: str
+    lens_address: str
     mailbox_implementation_address: str
     subnet_clone_implementation_address: str
     validator_registry_address: str
@@ -294,6 +295,12 @@ def _deploy_contracts(netuids: List[int], hotkey_pubkeys: List[str]):
     )
     print(f"  AlphaVault: {vault_address}")
 
+    lens_address = chain.forge_create(
+        "src/AlphaVaultLens.sol:AlphaVaultLens", private_key=config.DEPLOYER_PRIVATE_KEY,
+        constructor_args=[vault_address],
+    )
+    print(f"  AlphaVaultLens: {lens_address}")
+
     token_ids: List[int] = []
     for netuid in netuids:
         token_id = chain.cast_call(vault_address, "currentTokenId(uint256)(uint256)", netuid)
@@ -330,6 +337,7 @@ def _deploy_contracts(netuids: List[int], hotkey_pubkeys: List[str]):
 
     contracts = DeployedContracts(
         vault_address=vault_address,
+        lens_address=lens_address,
         mailbox_implementation_address=mailbox_implementation_address,
         subnet_clone_implementation_address=subnet_clone_implementation_address,
         validator_registry_address=validator_registry_address,
@@ -366,6 +374,7 @@ def build_environment() -> Environment:
         netuids=netuids, token_ids=token_ids,
         hotkey_names=hotkey_names, hotkey_pubkeys=hotkey_pubkeys, hotkey_ss58s=hotkey_ss58s,
         vault_address=contracts.vault_address,
+        lens_address=contracts.lens_address,
         mailbox_implementation_address=contracts.mailbox_implementation_address,
         subnet_clone_implementation_address=contracts.subnet_clone_implementation_address,
         validator_registry_address=contracts.validator_registry_address,

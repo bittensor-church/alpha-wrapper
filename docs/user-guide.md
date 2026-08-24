@@ -4,10 +4,15 @@ You need an EVM account on the Bittensor chain with TAO for gas, and alpha
 already staked on the subnet you want to wrap. Read
 [overview.md](overview.md) first if the vault is new to you.
 
+Two addresses matter. You send every transaction to the vault. You read
+every quote - backing, share price, deposit and exit previews, claimable
+TAO, and the validator set - from the lens deployed alongside it. Whoever
+gave you the vault address has the lens address too.
+
 ## Wrapping
 
-1. Check the validator set: `getCurrentValidators(netuid)` returns the
-   subnet's hotkeys, one to 64. The vault only accepts deposits sitting under one of
+1. Check the validator set: `getCurrentValidators(netuid)` on the lens
+   returns the subnet's hotkeys, one to 64. The vault only accepts deposits sitting under one of
    them; if your stake is delegated elsewhere, first move it under one
    of these with the chain's move_stake call.
 2. Get your deposit address: `getDepositAddress(you, netuid)`. This is an

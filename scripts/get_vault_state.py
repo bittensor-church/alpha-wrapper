@@ -33,6 +33,7 @@ def _validator_columns(registry: Contract | None, netuid: int) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--vault-address", required=True, help="AlphaVault contract address")
+    parser.add_argument("--lens-address", required=True, help="AlphaVaultLens contract address")
     parser.add_argument("--registry-address", help="Optional ValidatorRegistry address (enables validator columns)")
     parser.add_argument("--rpc-url", required=True, help="HTTP RPC URL of the Subtensor EVM endpoint")
     target = parser.add_mutually_exclusive_group(required=True)
@@ -45,6 +46,10 @@ def main() -> None:
         address=w3.to_checksum_address(args.vault_address),
         abi=load_abi("AlphaVault"),
     )
+    lens = w3.eth.contract(
+        address=w3.to_checksum_address(args.lens_address),
+        abi=load_abi("AlphaVaultLens"),
+    )
     registry = None
     if args.registry_address:
         registry = w3.eth.contract(
@@ -56,16 +61,16 @@ def main() -> None:
     netuid = token_id & 0xFFFF
 
     try:
-        share_price = vault.functions.sharePrice(token_id).call()
+        share_price = lens.functions.sharePrice(token_id).call()
         share_price_error = ""
     except ContractLogicError as e:
         share_price = ""
-        share_price_error = extract_error_name(e, vault.abi)
+        share_price_error = extract_error_name(e, lens.abi)
 
     row = {
         "token_id": token_id,
         "total_supply": vault.functions.totalSupply(token_id).call(),
-        "total_stake": vault.functions.totalStake(token_id).call(),
+        "total_stake": lens.functions.totalStake(token_id).call(),
         "share_price": share_price,
         "share_price_error": share_price_error,
         "subnet_clone": vault.functions.subnetClone(token_id).call(),
