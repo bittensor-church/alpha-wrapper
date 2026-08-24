@@ -12,13 +12,19 @@ import { NetuidOutOfRange, NoSharesOutstanding, SubnetDissolved, ZeroAddress } f
 ///         previews, claimable TAO and the configured validator set.
 /// @dev    Holds no state and has no privileges: it reads the vault's public getters and the same
 ///         chain state the vault itself reads, through the libraries the vault uses, so a quote and
-///         the call it quotes cannot drift. Deployed alongside a vault and replaceable at any time.
+///         the call it quotes cannot drift. Being separate is what keeps the quotes changeable: the
+///         vault is immutable and has no admin, so anything living inside it is frozen for good,
+///         while a lens can be redeployed against the same vault whenever a quote needs to improve.
 contract AlphaVaultLens {
     AlphaVault public immutable vault;
+    /// @notice The registry the vault takes its validator sets from, resolved once at construction
+    ///         because the vault holds it immutably.
+    IValidatorRegistry public immutable validatorRegistry;
 
     constructor(AlphaVault _vault) {
         if (address(_vault) == address(0)) revert ZeroAddress();
         vault = _vault;
+        validatorRegistry = _vault.validatorRegistry();
     }
 
     /// @notice Total alpha backing this token's shares. Returns 0 before the clone exists.
@@ -30,11 +36,9 @@ contract AlphaVaultLens {
         address clone = vault.subnetClone(tokenId);
         if (clone == address(0)) return 0;
         uint16 netuid = VaultMath.netuidOf(tokenId);
-        // Unchecked on purpose: a position whose validator set was withdrawn still holds the alpha
-        // its remembered slots name, and reporting zero backing for it would be wrong.
-        (bytes32[] memory current,) = vault.validatorRegistry().getValidators(netuid);
-        (,, uint256 total) =
-            VaultReads.unionStake(vault.lastSeenHotkeys(tokenId), current, VaultReads.coldkeyOf(clone), netuid);
+        (,, uint256 total) = VaultReads.backingStake(
+            validatorRegistry, vault.lastSeenHotkeys(tokenId), VaultReads.coldkeyOf(clone), netuid
+        );
         return total;
     }
 
@@ -92,11 +96,11 @@ contract AlphaVaultLens {
         if (VaultReads.isIssuedForDissolvedSubnet(tokenId)) {
             uint256 backing = VaultMath.unreservedTao(clone.balance, vault.taoLiability(tokenId));
             if (backing == 0) revert SubnetDissolved();
-            return (0, (backing * shares) / supply);
+            return (0, VaultMath.proRata(backing, shares, supply));
         }
 
         // Reverts NoValidatorFound when the registry has no set for this subnet.
-        (bytes32[] memory current,) = VaultReads.resolveValidators(vault.validatorRegistry(), netuid);
+        (bytes32[] memory current,) = VaultReads.resolveValidators(validatorRegistry, netuid);
 
         (,, uint256 totalAlpha) =
             VaultReads.unionStake(vault.lastSeenHotkeys(tokenId), current, VaultReads.coldkeyOf(clone), netuid);
@@ -107,19 +111,19 @@ contract AlphaVaultLens {
     ///         would pay, including entitlement the storage has not settled yet, quoted at the
     ///         granularity a native transfer can deliver.
     function claimableTaoOf(address account, uint256 tokenId) external view returns (uint256) {
-        (uint256 indexIncrease, uint256 liabilityIncrease) = _previewSyncTao(tokenId);
+        uint256 liability = vault.taoLiability(tokenId);
+        (uint256 indexIncrease, uint256 liabilityIncrease) = _previewSyncTao(tokenId, liability);
         uint256 index = vault.cumulativeTaoPerShare(tokenId) + indexIncrease;
-        uint256 backing = vault.taoLiability(tokenId) + liabilityIncrease;
+        uint256 backing = liability + liabilityIncrease;
         uint256 entitlement = vault.claimableTao(tokenId, account) + _pendingAt(account, tokenId, index);
-        uint256 amount = entitlement > backing ? backing : entitlement;
-        return amount - amount % VaultMath.TAO_NATIVE_QUANTUM;
+        return VaultMath.toNativeQuantum(entitlement > backing ? backing : entitlement);
     }
 
     /// @notice Exactly the subnet's configured validators; reverts when none are configured.
     function getCurrentValidators(uint256 netuid) external view returns (bytes32[] memory) {
         if (netuid > type(uint16).max) revert NetuidOutOfRange();
         // forge-lint: disable-next-line(unsafe-typecast)
-        (bytes32[] memory hotkeys,) = VaultReads.resolveValidators(vault.validatorRegistry(), uint16(netuid));
+        (bytes32[] memory hotkeys,) = VaultReads.resolveValidators(validatorRegistry, uint16(netuid));
         return hotkeys;
     }
 
@@ -132,14 +136,12 @@ contract AlphaVaultLens {
     }
 
     /// @dev The increases the vault's next synchronization would record.
-    function _previewSyncTao(uint256 tokenId) private view returns (uint256, uint256) {
+    function _previewSyncTao(uint256 tokenId, uint256 liability) private view returns (uint256, uint256) {
         address clone = vault.subnetClone(tokenId);
         if (clone == address(0)) return (0, 0);
-        uint256 newTao = VaultReads.indexableTao(tokenId, clone.balance, vault.taoLiability(tokenId));
+        uint256 newTao = VaultReads.indexableTao(tokenId, clone.balance, liability);
         if (newTao == 0) return (0, 0);
-        uint256 supply = vault.totalSupply(tokenId);
-        if (supply == 0) return (0, 0);
-        return VaultMath.syncAmounts(newTao, supply);
+        return VaultMath.syncAmounts(newTao, vault.totalSupply(tokenId));
     }
 
     /// @dev Earned-but-unrecorded TAO for the account at the given index level.

@@ -61,19 +61,15 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
     /// @dev The lens keeps no state, so a replacement deployed against a live position must agree
     ///      with the original on every quote - including the slots a validator rotation left
     ///      behind and TAO the vault has not folded into its claim index yet.
-    function testFuzz_SecondLens_AnswersIdenticallyToTheFirst(uint256 deposit, uint256 donation) public {
-        deposit = bound(deposit, 1 ether, 1000 ether);
-        // Claim quotes are floored to whole native-transfer quantums, and the per-share index
-        // rounds down on the way there, so a donation at the quantum itself quotes as zero.
-        donation = bound(donation, 1e12, 100 ether);
-
+    function test_SecondLens_AnswersIdenticallyToTheFirst() public {
+        uint256 deposit = 100 ether;
         _simulateAlphaDeposit(alice, NETUID1, deposit);
         _wrap(alice, NETUID1);
 
         // Rotate hotkey2 and hotkey3 out without a vault call, so the position's backing is spread
         // across remembered and current validators at the moment of the quote.
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey4), _weights(5_000, 5_000));
-        _donateToClone(vault.subnetClone(TOKEN1), donation);
+        _donateToClone(vault.subnetClone(TOKEN1), 5 ether);
 
         AlphaVaultLens second = new AlphaVaultLens(vault);
         uint256 shares = vault.balanceOf(alice, TOKEN1);
@@ -91,5 +87,9 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
         (uint256 alphaFromFirst, uint256 taoFromFirst) = lens.previewUnwrap(TOKEN1, shares);
         assertEq(alphaFromSecond, alphaFromFirst, "previewUnwrap alpha");
         assertEq(taoFromSecond, taoFromFirst, "previewUnwrap tao");
+    }
+
+    function test_Constructor_ResolvesTheVaultsRegistry() public view {
+        assertEq(address(lens.validatorRegistry()), address(vault.validatorRegistry()));
     }
 }

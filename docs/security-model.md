@@ -43,8 +43,11 @@ over several sales.
 - Whoever told them which lens to read. Quotes come from a separate
   read-only contract that names its vault through `vault()` but is not
   named by the vault in return, so a lens paired with a different vault
-  answers with that vault's numbers. The lens can move no stake and mint
-  no shares, so a wrong one misinforms rather than steals.
+  answers with that vault's numbers. The lens itself can move no stake and
+  mint no shares. A person reading a number off the wrong one is only
+  misinformed, but a contract that sizes a slippage bound from a quote can
+  be walked into a bad fill, so integrators check the pairing at the
+  address they were given rather than assume it.
 
 ## Design safeguards
 

@@ -96,12 +96,26 @@ library VaultMath {
         return balance > reserved ? balance - reserved : 0;
     }
 
+    /// @dev A holder's share of a fixed pot, with none of the virtual offsets the live path
+    ///      needs: a dissolved position's TAO refund cannot be inflated, so it divides plainly.
+    function proRata(uint256 total, uint256 shares, uint256 supply) internal pure returns (uint256) {
+        return (total * shares) / supply;
+    }
+
+    /// @dev Rounded down to what a native transfer can actually deliver. The remainder stays
+    ///      reserved for the account instead of drifting back into the index.
+    function toNativeQuantum(uint256 amount) internal pure returns (uint256) {
+        return amount - amount % TAO_NATIVE_QUANTUM;
+    }
+
     /// @dev TAO an account holding `balance` has earned in total at the given index level.
     function earnedAt(uint256 balance, uint256 index) internal pure returns (uint256) {
         return Math.mulDiv(balance, index, TAO_INDEX_PRECISION);
     }
 
     /// @dev The index and liability increases that folding `newTao` in at `supply` records.
+    ///      Nothing is recorded at zero supply: with no holders there is no one to attribute the
+    ///      arrival to, so it stays unreserved until shares exist again.
     ///      The liability is rounded up so every index increase moves it: a floored-to-zero
     ///      allocation would leave the same arrival re-countable on every later synchronization.
     ///      The product never exceeds newTao times the scale, so the ceiling cannot over-reserve.
@@ -110,6 +124,7 @@ library VaultMath {
         pure
         returns (uint256 indexIncrease, uint256 liabilityIncrease)
     {
+        if (supply == 0) return (0, 0);
         indexIncrease = Math.mulDiv(newTao, TAO_INDEX_PRECISION, supply);
         liabilityIncrease = Math.mulDiv(indexIncrease, supply, TAO_INDEX_PRECISION, Math.Rounding.Ceil);
     }

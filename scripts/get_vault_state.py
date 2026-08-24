@@ -50,6 +50,10 @@ def main() -> None:
         address=w3.to_checksum_address(args.lens_address),
         abi=load_abi("AlphaVaultLens"),
     )
+    # A row assembled from a mismatched pair would mix one vault's supply with another's backing.
+    lens_vault = lens.functions.vault().call()
+    if lens_vault != w3.to_checksum_address(args.vault_address):
+        sys.exit(f"lens {args.lens_address} reads vault {lens_vault}, not {args.vault_address}")
     registry = None
     if args.registry_address:
         registry = w3.eth.contract(

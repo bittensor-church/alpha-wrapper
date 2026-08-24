@@ -285,11 +285,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         VaultReads.requireNotDissolving(netuid);
 
         bytes32 vaultColdkey = VaultReads.coldkeyOf(clone);
-        // The unchecked registry read mirrors the exit's contract: a position whose validator set
-        // was withdrawn still holds alpha on its remembered slots, and this rail must still sell it.
-        (bytes32[] memory current,) = validatorRegistry.getValidators(netuid);
         (bytes32[] memory hotkeys, uint256[] memory balances, uint256 total) =
-            VaultReads.unionStake(_lastSeenHotkeys[tokenId], current, vaultColdkey, netuid);
+            VaultReads.backingStake(validatorRegistry, _lastSeenHotkeys[tokenId], vaultColdkey, netuid);
         // The dissolving window is excluded above and completed dissolution zeroes the alpha
         // balance, so a non-zero total implies a live subnet and a zero total cannot be
         // exited via this rail regardless of cause.
@@ -359,9 +356,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 liability = taoLiability[tokenId];
         uint256 amount = entitlement > liability ? liability : entitlement;
         if (amount == 0) revert ZeroAmount();
-        // A native transfer delivers only whole quantums; deduct exactly what is delivered so the
-        // sub-quantum remainder stays reserved for the caller instead of drifting back to the index.
-        amount -= amount % VaultMath.TAO_NATIVE_QUANTUM;
+        amount = VaultMath.toNativeQuantum(amount);
         if (amount == 0) revert ClaimBelowNativePrecision();
         claimableTao[tokenId][msg.sender] = entitlement - amount;
         taoLiability[tokenId] = liability - amount;
@@ -476,7 +471,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         if (backing == 0) revert NothingToUnwrap();
 
         uint256 supplyBefore = totalSupply(tokenId);
-        uint256 userTao = (backing * shares) / supplyBefore;
+        uint256 userTao = VaultMath.proRata(backing, shares, supplyBefore);
         _burn(msg.sender, tokenId, shares);
         if (userTao > 0) SubnetClone(payable(clone)).unwrapTao(payable(msg.sender), userTao);
         emit DissolvedSubnetUnwrapped(msg.sender, tokenId, shares, userTao);
@@ -934,11 +929,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         if (balance == 0) return;
         uint256 newTao = VaultReads.indexableTao(tokenId, balance, taoLiability[tokenId]);
         if (newTao == 0) return;
-        // With no holders there is no one to attribute the arrival to, so it stays unreserved
-        // until shares exist again.
-        uint256 supply = totalSupply(tokenId);
-        if (supply == 0) return;
-        (uint256 indexIncrease, uint256 liabilityIncrease) = VaultMath.syncAmounts(newTao, supply);
+        (uint256 indexIncrease, uint256 liabilityIncrease) = VaultMath.syncAmounts(newTao, totalSupply(tokenId));
         if (indexIncrease == 0) return;
         cumulativeTaoPerShare[tokenId] += indexIncrease;
         taoLiability[tokenId] += liabilityIncrease;

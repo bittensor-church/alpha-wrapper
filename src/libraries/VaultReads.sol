@@ -47,6 +47,19 @@ library VaultReads {
         }
     }
 
+    /// @dev The whole stake behind a position. The registry read is deliberately unchecked: a
+    ///      position whose validator set was withdrawn still holds the alpha its remembered slots
+    ///      name, and reporting no backing for it would be wrong. Callers that must instead refuse
+    ///      an unconfigured subnet resolve the set themselves and pass it to `unionStake`.
+    function backingStake(IValidatorRegistry registry, bytes32[] memory lastSeen, bytes32 coldkey, uint16 netuid)
+        internal
+        view
+        returns (bytes32[] memory hotkeys, uint256[] memory balances, uint256 total)
+    {
+        (bytes32[] memory current,) = registry.getValidators(netuid);
+        return unionStake(lastSeen, current, coldkey, netuid);
+    }
+
     /// @dev Per-hotkey stake across the remembered and current validator sets, with its total. A view
     ///      has no chance to consolidate first, so it must count stake wherever it sits: between a
     ///      registry commit and the next vault call the whole position is on validators the set no
@@ -67,23 +80,27 @@ library VaultReads {
         return currentRegistrationBlock == 0 || currentRegistrationBlock != VaultMath.registrationBlockOf(tokenId);
     }
 
-    /// @dev Subtensor dissolves a subnet asynchronously over many blocks; alpha balances and
-    ///      TAO refunds are in flux for the whole window, so every share-priced path is frozen
-    ///      until dissolution completes. The check is per netuid, so an already-dissolved
-    ///      position is also frozen while a newer subnet on the same netuid dissolves.
-    function requireNotDissolving(uint16 netuid) internal view {
-        if (ISubnet(SUBNET_PRECOMPILE).isSubnetDissolving(netuid)) revert SubnetInDissolutionBlackoutPeriod();
+    /// @dev Subtensor dissolves a subnet asynchronously over many blocks, and alpha balances and
+    ///      TAO refunds are in flux for the whole window.
+    function isDissolving(uint16 netuid) internal view returns (bool) {
+        return ISubnet(SUBNET_PRECOMPILE).isSubnetDissolving(netuid);
     }
 
-    /// @dev The unreserved clone TAO a synchronization may fold into the claim index right now.
-    ///      Zero while the subnet is dissolving or dissolved: from then on new clone balance is the
-    ///      dissolution refund, which the dissolved unwrap path distributes pro rata instead.
-    ///      Callers pass the clone balance they already read, so an empty clone costs them no
-    ///      liability lookup at all.
+    /// @dev Every share-priced path is frozen until dissolution completes. The check is per netuid,
+    ///      so an already-dissolved position is also frozen while a newer subnet on the same netuid
+    ///      dissolves.
+    function requireNotDissolving(uint16 netuid) internal view {
+        if (isDissolving(netuid)) revert SubnetInDissolutionBlackoutPeriod();
+    }
+
+    /// @dev The part of a clone's `balance` a synchronization may fold into the claim index right
+    ///      now, given the liability already `reserved` against it. Zero while the subnet is
+    ///      dissolving or dissolved: from then on new clone balance is the dissolution refund,
+    ///      which the dissolved unwrap path distributes pro rata instead.
     function indexableTao(uint256 tokenId, uint256 balance, uint256 reserved) internal view returns (uint256) {
         uint256 newTao = VaultMath.unreservedTao(balance, reserved);
         if (newTao == 0) return 0;
-        if (ISubnet(SUBNET_PRECOMPILE).isSubnetDissolving(VaultMath.netuidOf(tokenId))) return 0;
+        if (isDissolving(VaultMath.netuidOf(tokenId))) return 0;
         if (isIssuedForDissolvedSubnet(tokenId)) return 0;
         return newTao;
     }
