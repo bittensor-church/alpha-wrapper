@@ -59,6 +59,11 @@ contract AlphaVaultLens {
         return plan.total;
     }
 
+    /// @notice The keys the position's backing currently sits under.
+    function lastSeenHotkeys(uint256 tokenId) external view returns (bytes32[] memory) {
+        return VaultReads.activesOf(vault.recordedSlots(tokenId));
+    }
+
     /// @notice Alpha the vault can currently find for this token, whether or not that is all of it.
     /// @dev    The figure behind `totalStake`, answering where that one refuses. Read it to see
     ///         what an exit would pay right now or to watch a position that is refusing calls -

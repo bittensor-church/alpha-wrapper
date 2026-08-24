@@ -56,6 +56,7 @@ contract BackingRecordTest is AlphaVaultTestBase {
         VaultReads.Slot[] memory slots = vault.recordedSlots(tokenId);
         assertEq(slots[0].logical, hotkey1, "the registry has not moved");
         assertEq(slots[0].active, hotkey5, "the alpha is tracked at the live key");
+        assertEq(lens.lastSeenHotkeys(tokenId)[0], hotkey5, "the lens reports the same key");
         assertApproxEqAbs(lens.totalStake(tokenId), 10 ether, 0.01 ether, "backing whole across both swaps");
     }
 
