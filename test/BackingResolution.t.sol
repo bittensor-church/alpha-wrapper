@@ -187,9 +187,8 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
     }
 
-    /// @dev An earlier value-based rule answered differently as the market moved. Nothing in the
-    ///      decision reads a price, so neither the size of the loss nor the price of alpha touches
-    ///      the verdict.
+    /// @dev Nothing in the decision reads a price, so neither the size of the loss nor the price
+    ///      of alpha touches the verdict.
     function test_EdgeFreeEmptying_RefusesAtAnyPriceOrSize() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);

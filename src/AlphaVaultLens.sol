@@ -77,7 +77,7 @@ contract AlphaVaultLens {
     ///         record. Gate on `depositsOpenFrom` to refuse on the vault's own terms.
     function isBackingIntact(uint256 tokenId) external view returns (bool) {
         (, VaultReads.Plan memory plan) = _resolveBacking(tokenId);
-        return plan.shortIndex == type(uint256).max;
+        return !VaultReads.isShort(plan);
     }
 
     /// @notice When the losses on file stop holding deposits and quotes shut, as a unix timestamp.
@@ -109,13 +109,15 @@ contract AlphaVaultLens {
         view
         returns (VaultReads.Slot[] memory slots, VaultReads.Plan memory plan)
     {
-        plan.shortIndex = type(uint256).max;
         address clone = vault.subnetClone(tokenId);
         if (clone == address(0)) return (slots, plan);
         uint16 netuid = VaultMath.netuidOf(tokenId);
         if (VaultReads.isIssuedForDissolvedSubnet(tokenId)) {
             (,, plan.total) = VaultReads.backingStake(
-                validatorRegistry, vault.lastSeenHotkeys(tokenId), VaultReads.coldkeyOf(clone), netuid
+                validatorRegistry,
+                VaultReads.activesOf(vault.recordedSlots(tokenId)),
+                VaultReads.coldkeyOf(clone),
+                netuid
             );
             return (slots, plan);
         }

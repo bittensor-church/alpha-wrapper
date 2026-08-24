@@ -413,7 +413,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     /// @dev The record's active keys.
     function _lastSeen(uint256 tokenId) internal view returns (bytes32[] memory) {
-        return vault.lastSeenHotkeys(tokenId);
+        return VaultReads.activesOf(vault.recordedSlots(tokenId));
     }
 
     /// @dev Point the vault's record at what its validators now hold. Sculpting balances through

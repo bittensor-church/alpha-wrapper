@@ -790,7 +790,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
             received += _getStake(keys[i], alice, NETUID1);
         }
         assertApproxEqRel(received, (reachable * 4) / 5, 0.02e18, "the burn matches the delivery");
-        assertLe(_getVaultStake(hotkey1, NETUID1), owed / 2, "the distrusted key gained nothing");
+        assertEq(_getVaultStake(hotkey1, NETUID1), owed / 2, "the distrusted key was left untouched");
         assertEq(lens.locatedStake(TOKEN1), located - received, "what stayed still counts the residual");
     }
 
@@ -812,5 +812,91 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertGt(vault.balanceOf(bob, TOKEN1), 0, "the deposit landed");
         assertEq(_getStakeForColdkey(hotkey5, _toSubstrate(mailbox), NETUID1), 0, "the mailbox was drained");
         assertEq(_getVaultStake(hotkey1, NETUID1), 0, "and nothing was aimed at the erased key");
+    }
+
+    /// @dev A follow onto a key the attesters already list swaps places with that key's own union
+    ///      entry: the total must stand, since a reordering of the sum's terms changes nothing.
+    function test_TotalStake_CountsAFollowOntoAnAttestedKeyOnce() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _setValidators(
+            NETUID1, _hotkeys(hotkey4, hotkey2, hotkey3), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
+        );
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+
+        assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "the followed balance is counted once");
+        uint256 half = vault.balanceOf(alice, TOKEN1) / 2;
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, half, 0);
+        assertApproxEqAbs(lens.locatedStake(TOKEN1), 15 ether, 0.5 ether, "the exit paid the honest half");
+    }
+
+    /// @dev The consolidation roll may draw from a distrusted key but never rest on one: with the
+    ///      richest open key elected as the roller, a pulled balance cannot land on a key whose
+    ///      standing loss it would silently repair.
+    function test_Consolidation_NeverLandsPulledStakeOnAStandingLoss() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        bytes32 coldkey = _subnetColdkey(NETUID1);
+        uint256 shortHold = _getVaultStake(hotkey1, NETUID1) / 2;
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, shortHold);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, coldkey, NETUID1, shortHold / 2);
+        vault.declareShortfall(TOKEN1);
+        _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(5000, 5000));
+
+        uint256 tenth = vault.balanceOf(alice, TOKEN1) / 10;
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, tenth, 0);
+        tenth = vault.balanceOf(alice, TOKEN1) / 10;
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, tenth, _toSubstrate(alice));
+
+        assertLe(_getVaultStake(hotkey1, NETUID1), shortHold, "the standing loss's key received nothing");
+    }
+
+    /// @dev A deposit staked toward the attested name itself still lands after the record followed
+    ///      that validator's stake elsewhere: the intake falls back from the effective key to the
+    ///      name the caller chose.
+    function test_Wrap_ReadsTheChosenNameWhenTheEffectiveKeyHoldsNothing() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        vault.rebalance(NETUID1);
+
+        _simulateAlphaDepositHotkey(bob, NETUID1, 1 ether, hotkey1);
+        vm.prank(bob);
+        vault.wrap(NETUID1, hotkey1);
+
+        assertGt(vault.balanceOf(bob, TOKEN1), 0, "the deposit landed off the chosen name");
+    }
+
+    /// @dev Successor edges chain rather than rewrite, so a deposit that slept through two swaps
+    ///      sits two edges away; the mailbox walks the trail to it.
+    function test_Wrap_WalksAChainedMailboxTrail() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        address mailbox = vault.getDepositAddress(bob, NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey4);
+        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey4, NETUID1, hotkey5);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey5, _toSubstrate(mailbox), NETUID1, 1 ether);
+
+        vm.prank(bob);
+        vault.wrap(NETUID1, hotkey1);
+
+        assertGt(vault.balanceOf(bob, TOKEN1), 0, "the deposit landed from two edges away");
+        assertEq(_getStakeForColdkey(hotkey5, _toSubstrate(mailbox), NETUID1), 0, "and the mailbox was drained");
+    }
+
+    /// @dev Recovery carries the departing key's residual along, so nothing the record can see
+    ///      today becomes invisible tomorrow.
+    function test_RecoverStray_CarriesTheOldKeysResidualAlong() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        bytes32 coldkey = _subnetColdkey(NETUID1);
+        uint256 owed = _getVaultStake(hotkey1, NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, owed / 3);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, coldkey, NETUID1, owed);
+
+        vm.prank(bob);
+        vault.recoverStray(TOKEN1, 0, hotkey4);
+
+        assertEq(_getVaultStake(hotkey1, NETUID1), 0, "the departing key was drained");
+        assertEq(_getVaultStake(hotkey4, NETUID1), owed + owed / 3, "its residual rode along");
+        assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether + owed / 3, 0.01 ether, "and stays counted");
     }
 }

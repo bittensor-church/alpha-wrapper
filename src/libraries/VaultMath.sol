@@ -44,6 +44,21 @@ library VaultMath {
         return type(uint256).max;
     }
 
+    /// @dev Position of `hotkey` within `keys[from..to)`, or `type(uint256).max`.
+    function keysHoldIndex(bytes32[] memory keys, uint256 from, uint256 to, bytes32 hotkey)
+        internal
+        pure
+        returns (uint256)
+    {
+        for (uint256 i = from; i < to;) {
+            if (keys[i] == hotkey) return i;
+            unchecked {
+                ++i;
+            }
+        }
+        return type(uint256).max;
+    }
+
     function keysHold(bytes32[] memory keys, uint256 from, uint256 to, bytes32 hotkey) internal pure returns (bool) {
         for (uint256 i = from; i < to;) {
             if (keys[i] == hotkey) return true;

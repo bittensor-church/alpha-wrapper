@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
-import { NetuidOutOfRange, SlippageExceeded, ZeroAmount, ZeroHotkey } from "src/VaultErrors.sol";
+import { NetuidOutOfRange, SlippageExceeded, ZeroAmount } from "src/VaultErrors.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 import { RevertingReceiver, ReclaimMailboxReentrantReceiver } from "./helpers/TaoRailReceivers.sol";
@@ -62,7 +62,7 @@ contract ReclaimMailboxAlphaAsTaoTest is AlphaVaultTestBase {
 
     function test_RevertWhen_HotkeyIsZero() public {
         vm.prank(alice);
-        vm.expectRevert(ZeroHotkey.selector);
+        vm.expectRevert(ZeroAmount.selector);
         vault.reclaimMailboxAlphaAsTao(NETUID1, bytes32(0), 0);
     }
 

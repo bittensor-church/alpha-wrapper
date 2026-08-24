@@ -754,10 +754,10 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey4, aliceSub, NETUID1), 10 ether);
     }
 
-    function test_RevertWhen_ReclaimAlphaFromMailboxZeroHotkey() public {
+    function test_RevertWhen_ReclaimAlphaFromMailboxZeroHotkeyHoldsNothing() public {
         bytes32 aliceSub = _toSubstrate(alice);
         vm.prank(alice);
-        vm.expectRevert(ZeroHotkey.selector);
+        vm.expectRevert(ZeroAmount.selector);
         vault.reclaimAlphaFromMailbox(NETUID1, bytes32(0), aliceSub);
     }
 
@@ -1770,7 +1770,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     function test_LastSeenSnapshot_InitializedOnFirstWrap() public {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
-        bytes32[] memory lastSeen = vault.lastSeenHotkeys(TOKEN1);
+        bytes32[] memory lastSeen = _lastSeen(TOKEN1);
         assertEq(lastSeen[0], hotkey1);
         assertEq(lastSeen[1], hotkey2);
         assertEq(lastSeen[2], hotkey3);
@@ -1791,7 +1791,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey3, NETUID1), 0, "rotated-out slot must be drained");
         assertEq(_countRebalancedLogs(logs), 1, "silent consolidation; only the post-consolidation alignment logs");
 
-        bytes32[] memory lastSeen = vault.lastSeenHotkeys(TOKEN1);
+        bytes32[] memory lastSeen = _lastSeen(TOKEN1);
         assertEq(lastSeen.length, 3);
         assertEq(lastSeen[2], hotkey4, "cleared rotated-out slot follows the current set");
     }

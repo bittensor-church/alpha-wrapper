@@ -6,7 +6,12 @@ import { IValidatorRegistry } from "../interfaces/IValidatorRegistry.sol";
 import { IAddressMapping, ADDRESS_MAPPING_PRECOMPILE } from "../interfaces/IAddressMapping.sol";
 import { ISubnet, SUBNET_PRECOMPILE } from "../interfaces/ISubnet.sol";
 import { VaultMath } from "./VaultMath.sol";
-import { NoValidatorFound, SubnetInDissolutionBlackoutPeriod, ValidatorSetMalformed } from "../VaultErrors.sol";
+import {
+    HotkeyClaimedTwice,
+    NoValidatorFound,
+    SubnetInDissolutionBlackoutPeriod,
+    ValidatorSetMalformed
+} from "../VaultErrors.sol";
 
 /// @title VaultReads
 /// @notice The chain reads behind a vault position - validator set, per-hotkey stake, subnet
@@ -121,16 +126,17 @@ library VaultReads {
     }
 
     /// @dev One reading of a position: the union keys with follows applied and their balances,
-    ///      what it cannot account for, the keys no mover may land stake on, and the located
-    ///      total. Carried as a struct because the coverage build compiles at minimum
-    ///      optimization, where returning the parts separately runs the stack out.
+    ///      what it cannot account for, the keys no mover may land stake on, where each attested
+    ///      name's stake actually belongs, and the located total. Carried as a struct because the
+    ///      coverage build compiles at minimum optimization, where returning the parts separately
+    ///      runs the stack out.
     struct Plan {
         bytes32[] keys;
         uint256[] balances;
         bool[] unaccounted;
         bytes32[] barred;
+        bytes32[] effective;
         uint256 total;
-        uint256 shortIndex;
     }
 
     /// @dev The chain's share arithmetic credits any position a few RAO short of the amount asked
@@ -156,7 +162,6 @@ library VaultReads {
         returns (Plan memory plan)
     {
         (plan.keys, plan.balances, plan.total) = unionStake(activesOf(slots), currentSet, coldkey, netuid);
-        plan.shortIndex = type(uint256).max;
 
         uint256 count = slots.length;
         plan.unaccounted = new bool[](count);
@@ -165,7 +170,6 @@ library VaultReads {
             uint256 tracked = slots[i].tracked;
             if (!coversTracked(plan.balances[i], tracked)) {
                 if (!_accountForSlot(slots, i, netuid, coldkey, plan, tracked)) {
-                    if (plan.shortIndex == type(uint256).max) plan.shortIndex = i;
                     // The settle that follows re-reads every slot from the chain, which would file
                     // this loss as an ordinary balance change. Flagging the slot keeps its
                     // expectation standing until the alpha is found or its window has run.
@@ -192,6 +196,75 @@ library VaultReads {
                 unchecked {
                     ++size;
                 }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        plan.effective = _assignEffective(slots, currentSet, plan.keys);
+    }
+
+    /// @dev Whether any slot fails to account for itself in this reading.
+    function isShort(Plan memory plan) internal pure returns (bool) {
+        for (uint256 i; i < plan.unaccounted.length;) {
+            if (plan.unaccounted[i]) return true;
+            unchecked {
+                ++i;
+            }
+        }
+        return false;
+    }
+
+    /// @dev Where each attested name's stake actually belongs, as a one-to-one assignment against
+    ///      the post-follow record: a name that is itself holding stake keeps itself - the
+    ///      attesters caught up to a swap the record followed; an identity whose stake moved
+    ///      follows its slot; what matches nothing is a new name. Each slot answers at most once,
+    ///      so no two names can resolve onto one key; the closing check guards that invariant
+    ///      rather than an expected state.
+    function _assignEffective(Slot[] memory slots, bytes32[] memory currentSet, bytes32[] memory keys)
+        private
+        pure
+        returns (bytes32[] memory effective)
+    {
+        uint256 count = slots.length;
+        effective = new bytes32[](currentSet.length);
+        bool[] memory claimed = new bool[](count);
+        for (uint256 i; i < currentSet.length;) {
+            uint256 at = VaultMath.keysHoldIndex(keys, 0, count, currentSet[i]);
+            if (at != type(uint256).max) {
+                effective[i] = currentSet[i];
+                claimed[at] = true;
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        for (uint256 i; i < currentSet.length;) {
+            if (effective[i] == bytes32(0)) {
+                uint256 at = type(uint256).max;
+                for (uint256 j; j < count;) {
+                    if (slots[j].logical == currentSet[i]) {
+                        at = j;
+                        break;
+                    }
+                    unchecked {
+                        ++j;
+                    }
+                }
+                if (at != type(uint256).max && !claimed[at]) {
+                    effective[i] = keys[at];
+                    claimed[at] = true;
+                } else {
+                    effective[i] = currentSet[i];
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        for (uint256 i; i < currentSet.length;) {
+            if (effective[i] != currentSet[i] && VaultMath.appearsTwice(effective, i)) {
+                revert HotkeyClaimedTwice();
             }
             unchecked {
                 ++i;
@@ -234,11 +307,12 @@ library VaultReads {
         uint256 stake = IStaking(STAKING_PRECOMPILE).getStake(next, coldkey, netuid);
         if (!coversTracked(stake, tracked)) return false;
         // The follow leaves the plan exactly as the next call would read it back: the successor
-        // takes the slot's place in the union with its own balance, the retired key drops out, and
-        // an attested successor swaps positions with its own entry so nothing is counted twice.
+        // takes the slot's place in the union with its own balance and the retired key drops out.
+        // An attested successor swaps positions with its own entry, and the total stands - a swap
+        // reorders the sum's terms without changing them.
         uint256 tail = VaultMath.indexOf(plan.keys, next);
-        plan.total = plan.total + stake - plan.balances[index];
         if (tail == type(uint256).max) {
+            plan.total = plan.total + stake - plan.balances[index];
             plan.keys[index] = next;
             plan.balances[index] = stake;
         } else {
