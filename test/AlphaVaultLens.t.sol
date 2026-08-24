@@ -25,10 +25,8 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
     /// @dev A position whose shares were all burned still has a clone, and integrators poll it.
     ///      The quote reports nothing left rather than reverting on the division.
     function test_PreviewUnwrap_QuotesZeroAfterTheLastHolderExits() public {
-        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
-        _wrap(alice, NETUID1);
+        uint256 shares = _depositAndWrap(alice, NETUID1, 10 ether);
 
-        uint256 shares = vault.balanceOf(alice, TOKEN1);
         vm.prank(alice);
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
         assertEq(vault.totalSupply(TOKEN1), 0, "the exit must retire the whole supply");
@@ -47,10 +45,8 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
     /// @dev TAO landing on a clone with no holders left has no one to be attributed to, so it
     ///      stays unassigned instead of accruing to whoever exited.
     function test_ClaimableTaoOf_QuotesZeroWhenTaoArrivesWithNoHolders() public {
-        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
-        _wrap(alice, NETUID1);
+        uint256 shares = _depositAndWrap(alice, NETUID1, 10 ether);
 
-        uint256 shares = vault.balanceOf(alice, TOKEN1);
         vm.prank(alice);
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
         _donateToClone(vault.subnetClone(TOKEN1), 5 ether);
@@ -63,8 +59,7 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
     ///      behind and TAO the vault has not folded into its claim index yet.
     function test_SecondLens_AnswersIdenticallyToTheFirst() public {
         uint256 deposit = 100 ether;
-        _simulateAlphaDeposit(alice, NETUID1, deposit);
-        _wrap(alice, NETUID1);
+        uint256 shares = _depositAndWrap(alice, NETUID1, deposit);
 
         // Rotate hotkey2 and hotkey3 out without a vault call, so the position's backing is spread
         // across remembered and current validators at the moment of the quote.
@@ -72,7 +67,6 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
         _donateToClone(vault.subnetClone(TOKEN1), 5 ether);
 
         AlphaVaultLens second = new AlphaVaultLens(vault);
-        uint256 shares = vault.balanceOf(alice, TOKEN1);
 
         assertGt(lens.totalStake(TOKEN1), 0, "the scenario must leave backing to quote");
         assertGt(lens.claimableTaoOf(alice, TOKEN1), 0, "the scenario must leave TAO to claim");

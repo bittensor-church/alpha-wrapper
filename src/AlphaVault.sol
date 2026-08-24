@@ -349,12 +349,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         _syncTao(tokenId);
         _checkpoint(msg.sender, tokenId, cumulativeTaoPerShare[tokenId]);
         uint256 entitlement = claimableTao[tokenId][msg.sender];
-        // Per-holder accruals floor against a ceiling-rounded allocation, so summed entitlements
-        // can overstate the recorded liability by stray wei; a claim pays only what the liability
-        // backs - anything beyond it would draw on the dissolution backing - and keeps the
-        // difference recorded instead of erasing it.
         uint256 liability = taoLiability[tokenId];
-        uint256 amount = entitlement > liability ? liability : entitlement;
+        // What the liability cannot back stays recorded rather than being erased.
+        uint256 amount = VaultMath.backedEntitlement(entitlement, liability);
         if (amount == 0) revert ZeroAmount();
         amount = VaultMath.toNativeQuantum(amount);
         if (amount == 0) revert ClaimBelowNativePrecision();
@@ -939,10 +936,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///      repeating it at an unchanged balance is a no-op.
     function _checkpoint(address account, uint256 tokenId, uint256 index) private {
         uint256 earned = VaultMath.earnedAt(balanceOf(account, tokenId), index);
-        uint256 debt = taoIndexDebt[tokenId][account];
-        if (earned > debt) {
-            claimableTao[tokenId][account] += earned - debt;
-        }
+        uint256 credit = VaultMath.pendingTao(earned, taoIndexDebt[tokenId][account]);
+        if (credit != 0) claimableTao[tokenId][account] += credit;
         taoIndexDebt[tokenId][account] = earned;
     }
 

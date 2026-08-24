@@ -102,6 +102,19 @@ library VaultMath {
         return (total * shares) / supply;
     }
 
+    /// @dev A claim pays only what the recorded liability backs. Per-holder accruals floor
+    ///      against a ceiling-rounded allocation, so summed entitlements can overstate the
+    ///      liability by stray wei, and anything beyond it would draw on the dissolution backing.
+    function backedEntitlement(uint256 entitlement, uint256 liability) internal pure returns (uint256) {
+        return entitlement > liability ? liability : entitlement;
+    }
+
+    /// @dev Earned-but-unrecorded TAO: what the index credits an account above the level its debt
+    ///      was last anchored at.
+    function pendingTao(uint256 earned, uint256 debt) internal pure returns (uint256) {
+        return earned > debt ? earned - debt : 0;
+    }
+
     /// @dev Rounded down to what a native transfer can actually deliver. The remainder stays
     ///      reserved for the account instead of drifting back into the index.
     function toNativeQuantum(uint256 amount) internal pure returns (uint256) {

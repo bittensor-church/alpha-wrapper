@@ -72,7 +72,8 @@ class Environment:
         ))
 
     def vault_total_stake(self, token_id: int) -> int:
-        """The vault's tracked total alpha (RAO) for a token id."""
+        """Alpha (RAO) backing a token id, summed live across the validators the position
+        holds stake on."""
         return int(chain.cast_call(
             self.lens_address, "totalStake(uint256)(uint256)", token_id,
         ))

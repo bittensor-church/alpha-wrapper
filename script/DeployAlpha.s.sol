@@ -31,8 +31,7 @@ contract DeployAlpha is Script {
         AlphaVault vault = new AlphaVault(vaultUri, address(mailboxLogic), address(subnetLogic), validatorRegistry);
         console.log("AlphaVault:            %s", address(vault));
 
-        // Every quote the vault used to answer lives here. It holds no state, so redeploying it
-        // against the same vault is always safe.
+        // It holds no state, so redeploying it against the same vault is always safe.
         AlphaVaultLens lens = new AlphaVaultLens(vault);
         console.log("AlphaVaultLens:        %s", address(lens));
 

@@ -82,7 +82,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         uint256 shares = vault.balanceOf(alice, TOKEN1);
 
         lens.previewUnwrap(TOKEN1, shares / 2);
-        vm.snapshotGasLastCall("AlphaVault", "previewUnwrap");
+        vm.snapshotGasLastCall("AlphaVaultLens", "previewUnwrap");
     }
 
     // --------- widest supported set ------------------------------------------
@@ -178,6 +178,6 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         uint256 shares = vault.balanceOf(alice, TOKEN1);
 
         lens.previewUnwrap(TOKEN1, shares / 2);
-        vm.snapshotGasLastCall("AlphaVault", "previewUnwrap (64 validators)");
+        vm.snapshotGasLastCall("AlphaVaultLens", "previewUnwrap (64 validators)");
     }
 }

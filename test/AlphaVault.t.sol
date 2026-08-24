@@ -567,8 +567,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         address[] memory s = new address[](2);
         s[0] = vm.addr(SIGNER_PK_1);
         s[1] = vm.addr(SIGNER_PK_2);
-        AlphaVault freshVault = _deployVault(address(new ValidatorRegistry(address(this), s, 2)));
-        AlphaVaultLens freshLens = new AlphaVaultLens(freshVault);
+        (, AlphaVaultLens freshLens) = _deployVaultAndLens(address(new ValidatorRegistry(address(this), s, 2)));
 
         vm.expectRevert(NoValidatorFound.selector);
         freshLens.getCurrentValidators(NETUID1);
@@ -594,17 +593,16 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(_totalVaultStakeAcrossHotkeys(NETUID1), 90 ether);
     }
 
-    // ------------------ _resolveValidators sentinel --------------------------
+    // ------------------ resolveValidators sentinel ---------------------------
 
-    /// @dev `weights[0] == 0` is the "subnet not configured" sentinel. `_resolveValidators`
+    /// @dev `weights[0] == 0` is the "subnet not configured" sentinel. `VaultReads.resolveValidators`
     ///      must revert `NoValidatorFound` whether the registry returns all-zeros or just
     ///      slot-0-zero with non-zero entries elsewhere. The corrupt-but-not-honest case
     ///      cannot be produced by the real registry, so this test deploys a fresh vault
     ///      against the mock.
     function test_RevertWhen_ResolveValidatorsWhenWeightZero() public {
         MockValidatorRegistry mock = new MockValidatorRegistry();
-        AlphaVault mockVault = _deployVault(address(mock));
-        AlphaVaultLens mockLens = new AlphaVaultLens(mockVault);
+        (, AlphaVaultLens mockLens) = _deployVaultAndLens(address(mock));
 
         _setRegBlock(91, 91);
         vm.expectRevert(NoValidatorFound.selector);
@@ -629,8 +627,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     function test_RevertWhen_RegistryReturnsMismatchedLengths() public {
         MockValidatorRegistry mock = new MockValidatorRegistry();
-        AlphaVault mockVault = _deployVault(address(mock));
-        AlphaVaultLens mockLens = new AlphaVaultLens(mockVault);
+        (, AlphaVaultLens mockLens) = _deployVaultAndLens(address(mock));
 
         bytes32[] memory hotkeys = new bytes32[](1);
         uint16[] memory weights = new uint16[](2);
@@ -1937,8 +1934,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_EmptyVault_ViewsReturnZeroNotRevert() public {
-        AlphaVault fresh = _deployVault(address(registry));
-        AlphaVaultLens freshLens = new AlphaVaultLens(fresh);
+        (AlphaVault fresh, AlphaVaultLens freshLens) = _deployVaultAndLens(address(registry));
         fresh.createSubnetProxy(NETUID1);
         uint256 tokenId = fresh.currentTokenId(NETUID1);
 
@@ -2054,8 +2050,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         uint256 supply = vault.totalSupply(TOKEN1);
         uint256 burnShares = vault.balanceOf(alice, TOKEN1) * burnPct / 100;
-        // Mirrors _assetsFor: (shares * (stake + VIRTUAL_ASSETS)) / (supply + VIRTUAL_SHARES).
-        // VIRTUAL_ASSETS = 1, VIRTUAL_SHARES = 1e9 in AlphaVault.
+        // Mirrors VaultMath.assetsFor: (shares * (stake + VIRTUAL_ASSETS)) / (supply + VIRTUAL_SHARES),
+        // where VIRTUAL_ASSETS = 1 and VIRTUAL_SHARES = 1e9.
         uint256 expectedAssets = (burnShares * ((b1 + b2 + b3) + 1)) / (supply + 1e9);
 
         bytes32 aliceSub = _toSubstrate(alice);

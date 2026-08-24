@@ -121,7 +121,7 @@ contract AlphaVaultLens {
         uint256 index = vault.cumulativeTaoPerShare(tokenId) + indexIncrease;
         uint256 backing = liability + liabilityIncrease;
         uint256 entitlement = vault.claimableTao(tokenId, account) + _pendingAt(account, tokenId, index);
-        return VaultMath.toNativeQuantum(entitlement > backing ? backing : entitlement);
+        return VaultMath.toNativeQuantum(VaultMath.backedEntitlement(entitlement, backing));
     }
 
     /// @notice Exactly the subnet's configured validators; reverts when none are configured.
@@ -151,8 +151,8 @@ contract AlphaVaultLens {
 
     /// @dev Earned-but-unrecorded TAO for the account at the given index level.
     function _pendingAt(address account, uint256 tokenId, uint256 index) private view returns (uint256) {
-        uint256 earnedToDate = VaultMath.earnedAt(vault.balanceOf(account, tokenId), index);
-        uint256 debt = vault.taoIndexDebt(tokenId, account);
-        return earnedToDate > debt ? earnedToDate - debt : 0;
+        return VaultMath.pendingTao(
+            VaultMath.earnedAt(vault.balanceOf(account, tokenId), index), vault.taoIndexDebt(tokenId, account)
+        );
     }
 }

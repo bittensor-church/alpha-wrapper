@@ -17,7 +17,7 @@ Pricing mid-refund would distribute an incomplete amount.
 Once cleanup completes the position is permanently dissolved: the
 netuid's current registration block differs from the token id's. From
 then on `unwrap` pays native TAO pro-rata from the clone's refund
-balance, the lens call `previewUnwrap` quotes that payout, and
+balance. On the lens, `previewUnwrap` quotes that payout while
 `sharePrice` and `previewWrap` revert with `SubnetDissolved`. Both payouts start once the
 refund sits on the clone: until it arrives - or while all of the clone's
 TAO is reserved for claims - `unwrap` reverts `NothingToUnwrap` and

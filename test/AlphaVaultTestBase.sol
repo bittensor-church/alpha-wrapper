@@ -90,8 +90,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         registry = new ValidatorRegistry(address(this), signers, 2);
 
         // validatorRegistry is immutable, so it must exist before the vault is constructed.
-        vault = _deployVault(address(registry));
-        lens = new AlphaVaultLens(vault);
+        (vault, lens) = _deployVaultAndLens(address(registry));
 
         _setValidators(
             NETUID1, _hotkeys(hotkey1, hotkey2, hotkey3), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
@@ -103,9 +102,12 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     }
 
     /// @dev `validatorRegistry` is immutable, so tests that need a different registry construct a
-    ///      fresh vault against it rather than swapping it on the shared `vault`.
-    function _deployVault(address _registry) internal returns (AlphaVault) {
-        return new AlphaVault(VAULT_URI, address(mailboxLogic), address(subnetLogic), _registry);
+    ///      fresh vault against it rather than swapping it on the shared `vault`. The lens comes
+    ///      with it: reading a fresh vault's quotes off the shared lens is the mismatched pair the
+    ///      user guide warns integrators about.
+    function _deployVaultAndLens(address _registry) internal returns (AlphaVault freshVault, AlphaVaultLens freshLens) {
+        freshVault = new AlphaVault(VAULT_URI, address(mailboxLogic), address(subnetLogic), _registry);
+        freshLens = new AlphaVaultLens(freshVault);
     }
 
     function _setValidators(uint256 netuid, bytes32[] memory hks, uint16[] memory wts) internal {
