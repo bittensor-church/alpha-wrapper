@@ -626,9 +626,10 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "and the backing is whole again");
     }
 
-    /// @dev Recovery may not resolve two still-attested validators onto one key: the slot's own
-    ///      validator and the named key's would both answer for the same balance.
-    function test_RevertWhen_RecoveryWouldResolveTwoValidatorsOntoOneKey() public {
+    /// @dev Recovery onto an attested key is a genuine answer even while the slot's own validator
+    ///      stays attested: the assignment routes each name through the slot answering for it, so
+    ///      the recovered key backs one expectation and every rail keeps working.
+    function test_RecoverStray_AcceptsAnAttestedKeyNoSlotAnswersFor() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);
         uint256 owed = _getVaultStake(hotkey1, NETUID1);
@@ -636,10 +637,56 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
             NETUID1, _hotkeys(hotkey1, hotkey2, hotkey4), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
         );
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, coldkey, NETUID1, owed);
-        _buildSwapTrail(NETUID1, hotkey1, 2);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
 
-        vm.expectPartialRevert(HotkeyClaimedTwice.selector);
+        vm.prank(bob);
         vault.recoverStray(TOKEN1, 0, hotkey4);
+
+        assertTrue(lens.isBackingIntact(TOKEN1), "the named key accounts for the loss");
+        vault.rebalance(NETUID1);
+        uint256 quarter = vault.balanceOf(alice, TOKEN1) / 4;
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, quarter, _toSubstrate(alice));
+    }
+
+    /// @dev The reviewer's chained-swap catch-up: slots (A - B), (B - D), (C, C) are a healthy
+    ///      record, and an attestation naming B, D and C must resolve one-to-one onto B, D and C
+    ///      rather than reading B through its old identity and colliding with D.
+    function test_EffectiveSet_ResolvesAChainedSwapCatchUpOneToOne() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey2, hotkey4);
+        vault.rebalance(NETUID1);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey2);
+        vault.rebalance(NETUID1);
+
+        _setValidators(
+            NETUID1, _hotkeys(hotkey2, hotkey4, hotkey3), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
+        );
+
+        vault.rebalance(NETUID1);
+        _simulateAlphaDepositHotkey(bob, NETUID1, 1 ether, hotkey2);
+        vm.prank(bob);
+        vault.wrap(NETUID1, hotkey2);
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice));
+        assertApproxEqAbs(lens.totalStake(TOKEN1), 31 ether - (31 ether / 4), 0.4 ether, "the position stayed whole");
+    }
+
+    /// @dev Recovery onto an attested name whose own slot moved on: with slots (A, A) short,
+    ///      (B - D) and (C, C), the alpha that left A sits under attested B, which nothing
+    ///      answers for - naming it heals the record in place.
+    function test_RecoverStray_AcceptsAnAttestedNameWhoseSlotMovedOn() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey2, hotkey4);
+        vault.rebalance(NETUID1);
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey2);
+
+        vm.prank(bob);
+        vault.recoverStray(TOKEN1, 0, hotkey2);
+
+        assertTrue(lens.isBackingIntact(TOKEN1), "the moved-on name accounts for the loss");
+        assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "and the backing is whole");
+        vault.rebalance(NETUID1);
     }
 
     /// @dev When the attesters have replaced the swapped validator with the very key holding its

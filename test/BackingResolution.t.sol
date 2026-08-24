@@ -124,19 +124,16 @@ contract BackingResolutionTest is AlphaVaultTestBase {
     ///      attesters then name B in its own right, A's slot and B's slot resolve onto one balance
     ///      and the token would report twice the backing it holds. The set is refused instead, and
     ///      the attesters clear it by dropping one of the pair.
-    function test_SetNamingBothEndsOfASwap_FailsClosed() public {
+    function test_SetNamingBothEndsOfASwap_ResolvesOneToOne() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
         vault.rebalance(NETUID1);
 
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey4, hotkey2), _weights(4000, 3000, 3000));
 
-        vm.expectPartialRevert(HotkeyClaimedTwice.selector);
         vault.rebalance(NETUID1);
-
-        _setValidators(NETUID1, _hotkeys(hotkey4, hotkey2), _weights(6000, 4000));
-        vault.rebalance(NETUID1);
-        assertTrue(lens.isBackingIntact(TOKEN1), "dropping the retired name clears the collision");
+        assertTrue(lens.isBackingIntact(TOKEN1), "both ends of the swap resolve to their own keys");
+        assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "and nothing is counted twice");
     }
 
     /// @dev A swap can carry one slot's alpha onto a name the set still lists, when that name's
@@ -151,10 +148,11 @@ contract BackingResolutionTest is AlphaVaultTestBase {
 
         vault.rebalance(NETUID1);
 
-        VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
-        assertEq(slots[0].active, hotkey2, "the first slot followed onto the freed name");
-        assertEq(slots[1].active, hotkey5, "the second slot kept the key its own swap reached");
         assertTrue(lens.isBackingIntact(TOKEN1), "no balance answers for two slots");
+        assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "the whole position is counted once");
+        uint256 quarter = vault.balanceOf(alice, TOKEN1) / 4;
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, quarter, _toSubstrate(alice));
     }
 
     // -------------------- Emptyings the chain does not explain -------------------

@@ -106,11 +106,13 @@ Every staking call uses `active`. Weight assignment and registry matching start
 from `logical`. Nothing ever aims a transfer at a key the chain retired, so no
 separate substitution pass is needed and no bounded alias walk has to exist.
 
-When a new attested set arrives, desired keys match existing slots by `logical`
-or by `active` — never by array index, since sets may be reordered. A key
-matching nothing starts with `logical == active`. A dropped slot remains a
-verified source until its backing is consolidated. Ambiguous matches, and two
-desired keys resolving to one `active`, are errors.
+When a new attested set arrives, desired keys match existing slots one to one -
+never by array index, since sets may be reordered. A name that is itself
+holding stake keeps itself: the attesters caught up to a swap the record
+followed. An identity whose stake moved follows its slot. A key matching
+nothing starts with `logical == active`, and a slot nothing answers through any
+more remains a verified source until its backing is consolidated. Each slot
+answers at most once, so two desired keys can never resolve onto one `active`.
 
 ## One planner
 

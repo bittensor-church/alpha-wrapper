@@ -230,7 +230,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                     mailboxKey, landing, netuid, IStaking(STAKING_PRECOMPILE).getStake(mailboxKey, destColdkey, netuid)
                 );
         }
-        _consolidateRotatedStake(tokenId, clone, destColdkey, hotkeys, effective, alphaPriceE18, barred);
+        _consolidateRotatedStake(tokenId, clone, destColdkey, effective, alphaPriceE18, barred);
 
         uint256 totalAlpha = _rebalance(tokenId, clone, hotkeys, effective, weights, destColdkey, alphaPriceE18, barred);
 
@@ -406,7 +406,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32[] memory hotkeys = _effectiveSet(tokenId, logicalSet);
         // Nothing on this path trades against the pool, so one price read holds for the whole call.
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
-        _consolidateRotatedStake(tokenId, clone, coldkey, logicalSet, hotkeys, alphaPriceE18, barred);
+        _consolidateRotatedStake(tokenId, clone, coldkey, hotkeys, alphaPriceE18, barred);
 
         // After consolidation the whole backing sits on the current validators, so their
         // balances count everything this rail can deliver.
@@ -541,7 +541,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32[] memory barred = plan.barred;
         bytes32[] memory effective = _effectiveSet(tokenId, logicalSet);
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
-        _consolidateRotatedStake(tokenId, clone, coldkey, logicalSet, effective, alphaPriceE18, barred);
+        _consolidateRotatedStake(tokenId, clone, coldkey, effective, alphaPriceE18, barred);
         _rebalance(tokenId, clone, logicalSet, effective, weights, coldkey, alphaPriceE18, barred);
     }
 
@@ -844,15 +844,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 tokenId,
         address clone,
         bytes32 coldkey,
-        bytes32[] memory logicalSet,
         bytes32[] memory currentSet,
         uint256 alphaPriceE18,
         bytes32[] memory barred
     ) private {
-        // Whether a slot was rotated out is a question about the validator the registry named, not
-        // about where a hotkey swap has since carried its alpha. A slot whose `logical` is still
-        // attested stays put, wherever `active` now points.
-        bytes32[] memory rotated = _rotatedOutActiveKeys(tokenId, logicalSet);
+        // A slot the assignment routes an attested name through stays put; one nothing answers
+        // through any more must roll onto the effective set before a settle can forget it.
+        bytes32[] memory rotated = _rotatedOutActiveKeys(tokenId, currentSet);
         if (rotated.length != 0) {
             uint16 netuid = VaultMath.netuidOf(tokenId);
             (
@@ -955,7 +953,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
     }
 
-    function _rotatedOutActiveKeys(uint256 tokenId, bytes32[] memory logicalSet)
+    function _rotatedOutActiveKeys(uint256 tokenId, bytes32[] memory effectiveSet)
         private
         view
         returns (bytes32[] memory rotated)
@@ -964,7 +962,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         rotated = new bytes32[](tokenSlots.length);
         uint256 size;
         for (uint256 i; i < tokenSlots.length;) {
-            if (_isRotatedOut(tokenSlots[i].logical, logicalSet)) {
+            if (_isRotatedOut(tokenSlots[i].active, effectiveSet)) {
                 rotated[size] = tokenSlots[i].active;
                 unchecked {
                     ++size;
@@ -1016,9 +1014,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @dev    Anyone may call this, and that is safe by construction rather than by permission:
     ///         only the subnet clone can stake under its own coldkey, so a balance found there is
     ///         already holders' backing, and moving a slot onto it can only raise the located
-    ///         total. Refused only when it would lean two expectations on one balance: a key
-    ///         another slot answers for, or an attested key while this slot's validator is also
-    ///         still attested. The record keeps what each slot is owed until a settle books the
+    ///         total. Refused only when another slot already answers for the named key - two
+    ///         expectations may never lean on one balance. The record keeps what each slot is owed until a settle books the
     ///         loss, so the alpha stays reachable by whoever finds it first - after that there is
     ///         nothing left to recover against and this reverts `BackingIntact`.
     /// @param  tokenId   ERC1155 tokenId identifying the (netuid, registrationBlock) position.
@@ -1032,13 +1029,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
         VaultReads.Slot[] storage tokenSlots = _slots[tokenId];
         VaultReads.Slot storage slot = tokenSlots[slotIndex];
-        (bytes32[] memory attested,) = VaultReads.resolveValidators(validatorRegistry, netuid);
-        if (
-            _recordHolds(tokenSlots, hotkey)
-                || (VaultMath.contains(attested, hotkey) && VaultMath.contains(attested, slot.logical))
-        ) {
-            revert HotkeyClaimedTwice();
-        }
+        if (_recordHolds(tokenSlots, hotkey)) revert HotkeyClaimedTwice();
 
         bytes32 coldkey = VaultReads.coldkeyOf(clone);
         uint256 tracked = slot.tracked;
@@ -1128,9 +1119,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
     }
 
-    /// @dev Where each attested validator's stake actually belongs: its own key, unless the record
-    ///      shows a hotkey swap has carried that validator's alpha somewhere else. Read straight
-    ///      from the record, so no lineage lookup and no hop limit come into it.
+    /// @dev Where each attested validator's stake actually belongs, as a one-to-one assignment
+    ///      between the attested names and the record. A name that is itself holding stake keeps
+    ///      itself - the attesters caught up to a swap the record followed; an identity whose
+    ///      stake moved follows its slot; what matches nothing is a new name. Each slot answers
+    ///      at most once, so no two names can resolve onto one key.
     function _effectiveSet(uint256 tokenId, bytes32[] memory logicalSet)
         private
         view
@@ -1148,17 +1141,33 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             }
         }
         effective = new bytes32[](logicalSet.length);
+        bool[] memory claimed = new bool[](slotCount);
         for (uint256 i; i < logicalSet.length;) {
-            uint256 at = VaultMath.indexOf(logicals, logicalSet[i]);
-            effective[i] = at == type(uint256).max ? logicalSet[i] : actives[at];
+            uint256 at = VaultMath.indexOf(actives, logicalSet[i]);
+            if (at != type(uint256).max) {
+                effective[i] = logicalSet[i];
+                claimed[at] = true;
+            }
             unchecked {
                 ++i;
             }
         }
-        // A followed hotkey swap can land on a key another slot already answers for, and two slots
-        // leaning on one balance would count it twice. Only a slot a swap has moved can collide -
-        // the registry rejects a set naming one validator twice - so an untouched set pays a single
-        // comparison per entry. The attesters clear a real collision by dropping one of the pair.
+        for (uint256 i; i < logicalSet.length;) {
+            if (effective[i] == bytes32(0)) {
+                uint256 at = VaultMath.indexOf(logicals, logicalSet[i]);
+                if (at != type(uint256).max && !claimed[at]) {
+                    effective[i] = actives[at];
+                    claimed[at] = true;
+                } else {
+                    effective[i] = logicalSet[i];
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        // The assignment cannot double-book a key - each slot answers once and the attested names
+        // are unique - so this guards the invariant rather than an expected state.
         for (uint256 i; i < logicalSet.length;) {
             if (effective[i] != logicalSet[i] && VaultMath.appearsTwice(effective, i)) {
                 revert HotkeyClaimedTwice();
