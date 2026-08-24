@@ -16,6 +16,10 @@ readers and the shared library they build on.
 
 Run `forge build` first -- the Python scripts load ABIs from `out/`.
 
+`get_vault_state.py` reads backing and share price from an `AlphaVaultLens`, so it takes a
+`--lens-address` alongside `--vault-address`. Supply a lens you trust: it refuses a lens whose
+`vault()` names a different vault, which catches the wrong address rather than a dishonest one.
+
 Volume column suffixes identify their units: `_rao` is raw alpha (1e-9 alpha) and `_wei`
 is native TAO (1e-18 TAO). Shares are raw ERC-1155 share units. Live alpha payouts,
 nominal alpha requested for TAO, and actual TAO payouts remain distinct; only values with

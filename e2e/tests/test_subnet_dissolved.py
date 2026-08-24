@@ -107,7 +107,7 @@ def test_subnet_dissolved(env):
     assert env.vault_total_stake(dissolved_token_id) == 0, "totalStake nonzero after dissolution"
 
     share_price_probe = chain.run(
-        ["cast", "call", env.vault_address, "sharePrice(uint256)(uint256)",
+        ["cast", "call", env.lens_address, "sharePrice(uint256)(uint256)",
          str(dissolved_token_id), "--rpc-url", config.RPC_URL],
         check=False,
     )

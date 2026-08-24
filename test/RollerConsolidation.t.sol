@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
-import { AlphaVault } from "src/AlphaVault.sol";
+import { ConsolidationBelowFloor } from "src/VaultErrors.sol";
 import { CHAIN_MIN_STAKE, MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
@@ -28,7 +28,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
     ///      both, emptying each rotated-out slot and refreshing the remembered set - no tracking, no forfeiture.
     function test_Rebalance_ConsolidatesMultipleRotatedOutSlots() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
-        uint256 totalBefore = vault.totalStake(TOKEN1);
+        uint256 totalBefore = lens.totalStake(TOKEN1);
 
         // Drop hotkey2 and hotkey3 in one rotation; the roll carries the pile through both rotated-out slots.
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey4), _weights(5000, 5000));
@@ -36,7 +36,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
 
         assertEq(_getVaultStake(hotkey2, NETUID1), 0, "first rotated-out slot consolidated");
         assertEq(_getVaultStake(hotkey3, NETUID1), 0, "second rotated-out slot consolidated");
-        assertEq(vault.totalStake(TOKEN1), totalBefore, "total conserved across the chained roll");
+        assertEq(lens.totalStake(TOKEN1), totalBefore, "total conserved across the chained roll");
         bytes32[] memory seen = vault.lastSeenHotkeys(TOKEN1);
         assertEq(seen.length, 2, "remembered set refreshed to the 2-validator current set");
         assertEq(seen[0], hotkey1);
@@ -52,12 +52,12 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
 
         uint256 bobDeposit = 5 ether;
         _simulateAlphaDepositHotkey(bob, 99, bobDeposit, hotkey1);
-        uint256 previewedShares = vault.previewWrap(tokenId, bobDeposit);
+        uint256 previewedShares = lens.previewWrap(tokenId, bobDeposit);
         _wrapHotkey(bob, 99, hotkey1);
 
         assertEq(vault.balanceOf(bob, tokenId), previewedShares, "mint parity with the union-priced preview");
         assertEq(_getVaultStake(hotkey4, 99), 0, "rotated-out dust consolidated by the roll");
-        assertEq(vault.totalStake(tokenId), bobDeposit + dust, "rotated-out stake folded into the current-set backing");
+        assertEq(lens.totalStake(tokenId), bobDeposit + dust, "rotated-out stake folded into the current-set backing");
         bytes32[] memory seen = vault.lastSeenHotkeys(tokenId);
         assertEq(seen[0], hotkey1, "remembered set refreshed to the current set");
     }
@@ -67,7 +67,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
     function test_Rebalance_ConsolidatesWhenRicherRotatedOutSlotSitsAtLaterIndex() public {
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(3000, 7000));
         _depositAndWrap(alice, NETUID1, 10 ether);
-        uint256 totalBefore = vault.totalStake(TOKEN1);
+        uint256 totalBefore = lens.totalStake(TOKEN1);
 
         // Rotate BOTH validators out; the 70%-weighted hotkey2 is the richest rotated-out slot at index 1.
         _setValidators(NETUID1, _hotkeys(hotkey4), _weights(10_000));
@@ -78,7 +78,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey1, NETUID1), 0, "earlier rotated-out slot consolidated");
         assertEq(_getVaultStake(hotkey2, NETUID1), 0, "richest rotated-out slot consolidated");
         assertEq(_getVaultStake(hotkey4, NETUID1), totalBefore, "whole pile landed on the current set");
-        assertEq(vault.totalStake(TOKEN1), totalBefore, "total conserved");
+        assertEq(lens.totalStake(TOKEN1), totalBefore, "total conserved");
     }
 
     /// @dev A funded rotated-out slot is consolidated by rolling the union-richest pile through it: the pile
@@ -97,7 +97,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey3, NETUID1), 0, "rotated-out slot consolidated by the roll");
         assertEq(_getVaultStake(hotkey1, NETUID1), target);
         assertEq(_getVaultStake(hotkey2, NETUID1), target);
-        assertEq(vault.totalStake(TOKEN1), 30 ether, "total conserved");
+        assertEq(lens.totalStake(TOKEN1), 30 ether, "total conserved");
     }
 
     /// @dev A same-subnet move can be credited a RAO short, so after one dropped validator drains
@@ -122,13 +122,13 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
 
         assertEq(_getVaultStake(hotkey1, 99), 0, "drained validator emptied");
         assertEq(_getVaultStake(hotkey2, 99), 0, "dust folded off the second dropped validator");
-        assertEq(vault.totalStake(tokenId), _getVaultStake(hotkey4, 99), "backing all sits on the current set");
+        assertEq(lens.totalStake(tokenId), _getVaultStake(hotkey4, 99), "backing all sits on the current set");
         assertEq(vault.lastSeenHotkeys(tokenId).length, 1, "nothing left to remember");
     }
 
     function test_Unwrap_SucceedsWhenPriceReadsZero() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
-        (uint256 previewedAssets,) = vault.previewUnwrap(TOKEN1, shares);
+        (uint256 previewedAssets,) = lens.previewUnwrap(TOKEN1, shares);
         _setAlphaPriceReadsZero(NETUID1);
 
         vm.prank(alice);
@@ -143,7 +143,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
     function test_RevertWhen_ConsolidatingDustOnlyVault() public {
         _seedDustOnlyVault();
 
-        vm.expectRevert(AlphaVault.ConsolidationBelowFloor.selector);
+        vm.expectRevert(ConsolidationBelowFloor.selector);
         vault.rebalance(99);
     }
 
@@ -153,7 +153,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
 
         uint256 shares = vault.balanceOf(alice, tokenId);
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.ConsolidationBelowFloor.selector);
+        vm.expectRevert(ConsolidationBelowFloor.selector);
         vault.unwrap(tokenId, shares, _toSubstrate(alice));
     }
 
@@ -169,7 +169,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         vault.unwrapForTao(tokenId, shares, 0);
 
         assertEq(alice.balance - balanceBefore, dust, "full dust value recovered as TAO");
-        assertEq(vault.totalStake(tokenId), 0, "nothing left behind");
+        assertEq(lens.totalStake(tokenId), 0, "nothing left behind");
     }
 
     // At a zero price read the consolidation cannot label the richest balance, so it falls through and the chain's
@@ -190,7 +190,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         _setVaultStakes(NETUID1, 10 ether, 10 ether, 10 ether);
 
         uint256 burnShares = vault.balanceOf(alice, TOKEN1) * 60 / 100;
-        (uint256 previewAssets,) = vault.previewUnwrap(TOKEN1, burnShares);
+        (uint256 previewAssets,) = lens.previewUnwrap(TOKEN1, burnShares);
         assertGt(previewAssets, 10 ether, "request must exceed any single slot to force a gather");
 
         vm.prank(alice);
@@ -200,7 +200,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(received, previewAssets, "delivery is exact and matches the preview");
         uint256 receivedOnGatherTarget = MockStaking(STAKING_PRECOMPILE).getStake(hotkey2, _toSubstrate(alice), NETUID1);
         assertEq(receivedOnGatherTarget, previewAssets, "the whole delivery arrives in one transfer");
-        assertEq(vault.totalStake(TOKEN1), 30 ether - previewAssets, "only the delivered alpha left the vault");
+        assertEq(lens.totalStake(TOKEN1), 30 ether - previewAssets, "only the delivered alpha left the vault");
     }
 
     /// @dev The event reports the capped alpha payout when gather hops round the backing below the
@@ -225,14 +225,14 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
     ///      remembered set is not refreshed, and the rotated-out stake is never dropped.
     function test_RevertWhen_RollerMoveFails() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
-        uint256 totalBefore = vault.totalStake(TOKEN1);
+        uint256 totalBefore = lens.totalStake(TOKEN1);
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2, hotkey4), _weights(3334, 3333, 3333));
         MockStaking(STAKING_PRECOMPILE).setMoveStakeReverts(true);
 
         vm.expectRevert(bytes("MockStaking: moveStake reverted"));
         vault.rebalance(NETUID1);
 
-        assertEq(vault.totalStake(TOKEN1), totalBefore, "backing unchanged after the reverted roll");
+        assertEq(lens.totalStake(TOKEN1), totalBefore, "backing unchanged after the reverted roll");
         assertGt(_getVaultStake(hotkey3, NETUID1), 0, "rotated-out stake not dropped");
         bytes32[] memory seen = vault.lastSeenHotkeys(TOKEN1);
         assertEq(seen[2], hotkey3, "remembered set still references the pre-rotation set");
@@ -245,7 +245,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         _depositAndWrap(alice, NETUID1, 30 ether);
 
         assertGt(vault.balanceOf(alice, TOKEN1), 0, "wrap succeeds when the oracle reads 0");
-        assertEq(vault.totalStake(TOKEN1), 30 ether, "full deposit backs the shares");
+        assertEq(lens.totalStake(TOKEN1), 30 ether, "full deposit backs the shares");
     }
 
     /// @dev Oracle-soft unwrapForTao: at a zero price read the partial-tail floor check is skipped,
@@ -267,7 +267,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(alice.balance - balanceBefore, 5e6, "only the full-drain slot sold; partial tail waits");
         assertEq(_getVaultStake(hotkey1, NETUID1), 0, "full drain sold");
         assertEq(_getVaultStake(hotkey3, NETUID1), 40 ether, "partial remainder left in the pool at price 0");
-        (uint256 refundValue,) = vault.previewUnwrap(TOKEN1, vault.balanceOf(alice, TOKEN1) - (sharesBefore - shares));
+        (uint256 refundValue,) = lens.previewUnwrap(TOKEN1, vault.balanceOf(alice, TOKEN1) - (sharesBefore - shares));
         assertApproxEqAbs(refundValue, 1e6, 1, "the waiting tail came back as shares worth exactly it");
     }
 
@@ -282,6 +282,6 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         vault.unwrapForTao(TOKEN1, shares, 0);
 
         assertEq(alice.balance - balanceBefore, 100 ether, "full-slot sells exit even when the oracle reads 0");
-        assertEq(vault.totalStake(TOKEN1), 0);
+        assertEq(lens.totalStake(TOKEN1), 0);
     }
 }

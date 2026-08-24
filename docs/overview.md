@@ -8,9 +8,15 @@ alpha or for its TAO value.
 
 ## The contracts
 
-`AlphaVault` is the only contract users talk to. It is an ERC-1155 with one
-token id per subnet position and holds all the logic, permissionless and
-final at deployment.
+`AlphaVault` is the contract users send transactions to. It is an ERC-1155
+with one token id per subnet position and holds all the logic,
+permissionless and final at deployment.
+
+`AlphaVaultLens` answers the questions: how much alpha backs a position,
+what a share is worth, what a deposit or an exit would pay, and how much
+TAO you can claim. It is deployed alongside a vault, stores nothing, and
+can only read, so there is nothing to trust it with. It reads the same
+chain state the vault reads, so its answers are the ones the vault acts on.
 
 Each subnet position gets its own `SubnetClone`, a minimal proxy whose EVM
 address maps to a substrate coldkey. All alpha backing a token id is staked
@@ -43,8 +49,8 @@ The first `wrap` on a subnet deploys the clone and opens the position;
 
 ## Share price
 
-Shares are priced by the ratio of staked alpha to share supply.
-`sharePrice(tokenId)` returns alpha per share, scaled by 1e18. Staking
+Shares are priced by the ratio of staked alpha to share supply. The lens
+call `sharePrice(tokenId)` returns alpha per share, scaled by 1e18. Staking
 emissions accrue to the clone's stake, so the price rises over time and
 later depositors mint fewer shares per alpha. The price counts staked
 alpha only; native TAO sitting on the clone is owed to specific holders

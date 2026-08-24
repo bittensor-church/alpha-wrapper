@@ -11,8 +11,27 @@ import { DepositMailbox } from "./DepositMailbox.sol";
 import { IStaking, STAKING_PRECOMPILE } from "./interfaces/IStaking.sol";
 import { IAlpha, ALPHA_PRECOMPILE } from "./interfaces/IAlpha.sol";
 import { IValidatorRegistry } from "./interfaces/IValidatorRegistry.sol";
-import { IAddressMapping, ADDRESS_MAPPING_PRECOMPILE } from "./interfaces/IAddressMapping.sol";
 import { ISubnet, SUBNET_PRECOMPILE } from "./interfaces/ISubnet.sol";
+import { VaultMath } from "./libraries/VaultMath.sol";
+import { VaultReads } from "./libraries/VaultReads.sol";
+import {
+    ChosenHotkeyNotInSet,
+    ClaimBelowNativePrecision,
+    ConsolidationBelowFloor,
+    DepositTooSmall,
+    GatherBelowFloor,
+    InsufficientShares,
+    NetuidOutOfRange,
+    NothingToUnwrap,
+    SlippageExceeded,
+    SubnetNotRegistered,
+    SupplyCapExceeded,
+    WithdrawTooSmall,
+    ZeroAddress,
+    ZeroAmount,
+    ZeroColdkey,
+    ZeroHotkey
+} from "./VaultErrors.sol";
 
 /// @title AlphaVault
 /// @notice ERC1155 multi-vault that wraps Bittensor Alpha Stake into fungible share tokens.
@@ -20,8 +39,9 @@ import { ISubnet, SUBNET_PRECOMPILE } from "./interfaces/ISubnet.sol";
 ///
 /// @dev Architecture:
 ///   - Token ID = (netuid | registrationBlock << 16). No registration needed - vaults materialize on first deposit.
-///   - Each vault tracks its own sharePrice independently: totalStake(tokenId) / totalSupply(tokenId).
-///     Integrators should read `sharePrice`, which also reverts during dissolution.
+///   - Each vault tracks its own share price independently: backing alpha over totalSupply(tokenId).
+///     Every quote lives on `AlphaVaultLens`, deployed alongside and reading this contract's
+///     getters; it holds no state of its own and can be redeployed without touching the vault.
 ///   - EIP-1167 clones serve as deterministic "Mailbox" deposit addresses per (user, netuid).
 ///   - Validators + weights are read exclusively from ValidatorRegistry (no on-chain fallback).
 ///     Its address is immutable and the vault has no admin; weights are attested by a threshold of
@@ -52,7 +72,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     mapping(uint256 => bytes32[]) private _lastSeenHotkeys;
 
     /// @notice Cumulative TAO credited per share over a token's lifetime, scaled by
-    ///         `TAO_INDEX_PRECISION`. Grows when the clone receives TAO the vault did not pay out.
+    ///         `VaultMath.TAO_INDEX_PRECISION`. Grows when the clone receives TAO the vault did not pay out.
     mapping(uint256 => uint256) public cumulativeTaoPerShare;
 
     /// @notice TAO recognized for holders through the index but not yet claimed. This portion of
@@ -67,22 +87,14 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     mapping(uint256 => mapping(address => uint256)) public claimableTao;
 
     // -------------------- Precision ---------------------------------------------
-    /// @dev Virtual shares/assets to prevent inflation attacks (ERC4626 pattern).
-    uint256 private constant VIRTUAL_SHARES = 1e9;
-    uint256 private constant VIRTUAL_ASSETS = 1;
     uint16 private constant BPS_BASE = 10_000;
     /// @dev `getAlphaPrice` rounds down to a multiple of this (e18 scale), so the true price is
     ///      always below the read plus one step.
     uint256 private constant ALPHA_PRICE_QUANTUM_E18 = 1e9;
-    /// @dev Claim-index scale.
-    uint256 private constant TAO_INDEX_PRECISION = 1e36;
-    /// @dev Native TAO carries 9 decimals behind the 18-decimal EVM interface, so a value transfer
-    ///      delivers only whole multiples of this quantum.
-    uint256 private constant TAO_NATIVE_QUANTUM = 1e9;
     /// @dev Post-mint share-supply bound. Below it a synchronization's flooring loses less than
     ///      one native quantum and any whole-quantum arrival moves the claim index; only a
     ///      swept-then-recapitalized position can approach it.
-    uint256 private constant SUPPLY_CAP = TAO_NATIVE_QUANTUM * TAO_INDEX_PRECISION;
+    uint256 private constant SUPPLY_CAP = VaultMath.TAO_NATIVE_QUANTUM * VaultMath.TAO_INDEX_PRECISION;
 
     // -------------------- Events ------------------------------------------------
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
@@ -107,29 +119,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     );
     /// @notice A holder withdrew accumulated native TAO. `amount` is in EVM wei.
     event TaoClaimed(address indexed user, uint256 indexed tokenId, address recipient, uint256 amount);
-
-    // -------------------- Errors ------------------------------------------------
-    error ZeroAmount();
-    error ZeroAddress();
-    error ZeroHotkey();
-    error ZeroColdkey();
-    error InsufficientShares();
-    error NoValidatorFound();
-    error ValidatorSetMalformed();
-    error SubnetNotRegistered();
-    error SubnetInDissolutionBlackoutPeriod();
-    error SubnetDissolved();
-    error NothingToUnwrap();
-    error NoSharesOutstanding();
-    error DepositTooSmall();
-    error WithdrawTooSmall();
-    error ClaimBelowNativePrecision();
-    error SupplyCapExceeded();
-    error NetuidOutOfRange();
-    error ChosenHotkeyNotInSet();
-    error SlippageExceeded(uint256 amountOut);
-    error ConsolidationBelowFloor();
-    error GatherBelowFloor();
 
     // -------------------- Constructor -------------------------------------------
     /// @param _uri ERC1155 metadata URI template, fixed for the contract's lifetime.
@@ -200,17 +189,18 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 tokenId = currentTokenId(netuid);
         // forge-lint: disable-next-line(unsafe-typecast)
         uint16 nid = uint16(netuid);
-        _requireNotDissolving(nid);
-        (bytes32[] memory hotkeys, uint16[] memory weights) = _resolveValidators(nid);
-        if (!_contains(hotkeys, chosenHotkey)) revert ChosenHotkeyNotInSet();
+        VaultReads.requireNotDissolving(nid);
+        (bytes32[] memory hotkeys, uint16[] memory weights) = VaultReads.resolveValidators(validatorRegistry, nid);
+        if (!VaultMath.contains(hotkeys, chosenHotkey)) revert ChosenHotkeyNotInSet();
 
         address clone = subnetClone[tokenId];
         if (clone == address(0)) clone = _deploySubnetClone(tokenId);
 
         address userClone = _ensureMailboxClone(msg.sender, netuid);
-        bytes32 destColdkey = _coldkeyOf(clone);
+        bytes32 destColdkey = VaultReads.coldkeyOf(clone);
 
-        uint256 totalDeposit = IStaking(STAKING_PRECOMPILE).getStake(chosenHotkey, _coldkeyOf(userClone), netuid);
+        uint256 totalDeposit =
+            IStaking(STAKING_PRECOMPILE).getStake(chosenHotkey, VaultReads.coldkeyOf(userClone), netuid);
         if (totalDeposit == 0) revert ZeroAmount();
 
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
@@ -225,7 +215,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 totalAlpha = _rebalance(tokenId, clone, hotkeys, weights, destColdkey, alphaPriceE18);
 
         uint256 preStake = totalAlpha > totalDeposit ? totalAlpha - totalDeposit : 0;
-        uint256 shares = _sharesFor(preStake, totalSupply(tokenId), totalDeposit);
+        uint256 shares = VaultMath.sharesFor(preStake, totalSupply(tokenId), totalDeposit);
         if (shares == 0) revert ZeroAmount();
         // Recapitalizing a swept position multiplies supply toward the bound; retiring the swept
         // shares through the zero-backing unwrap resets supply and lifts it.
@@ -258,11 +248,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     function unwrap(uint256 tokenId, uint256 shares, bytes32 userSubstrateColdkey) external nonReentrant {
         if (shares == 0) revert ZeroAmount();
         if (balanceOf(msg.sender, tokenId) < shares) revert InsufficientShares();
-        uint16 netuid = _netuid(tokenId);
-        _requireNotDissolving(netuid);
+        uint16 netuid = VaultMath.netuidOf(tokenId);
+        VaultReads.requireNotDissolving(netuid);
         address clone = subnetClone[tokenId];
 
-        if (_isIssuedForDissolvedSubnet(tokenId)) {
+        if (VaultReads.isIssuedForDissolvedSubnet(tokenId)) {
             _unwrapFromDissolvedSubnet(tokenId, shares, clone);
         } else {
             _unwrapFromLiveSubnet(tokenId, shares, userSubstrateColdkey, clone, netuid);
@@ -291,12 +281,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         if (shares == 0) revert ZeroAmount();
         if (balanceOf(msg.sender, tokenId) < shares) revert InsufficientShares();
         address clone = subnetClone[tokenId];
-        uint16 netuid = _netuid(tokenId);
-        _requireNotDissolving(netuid);
+        uint16 netuid = VaultMath.netuidOf(tokenId);
+        VaultReads.requireNotDissolving(netuid);
 
-        bytes32 vaultColdkey = _coldkeyOf(clone);
+        bytes32 vaultColdkey = VaultReads.coldkeyOf(clone);
         (bytes32[] memory hotkeys, uint256[] memory balances, uint256 total) =
-            _unionStake(tokenId, netuid, vaultColdkey);
+            VaultReads.backingStake(validatorRegistry, _lastSeenHotkeys[tokenId], vaultColdkey, netuid);
         // The dissolving window is excluded above and completed dissolution zeroes the alpha
         // balance, so a non-zero total implies a live subnet and a zero total cannot be
         // exited via this rail regardless of cause.
@@ -306,7 +296,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // A full burn claims the whole backing exactly: the rounded-down conversion can price it
         // a few RAO short, which would degrade the floor-exempt full drains into floored partials
         // the chain rejects - locking the last holder's sub-floor dust out of its only exit.
-        uint256 assets = shares == supply ? total : _assetsFor(total, supply, shares);
+        uint256 assets = shares == supply ? total : VaultMath.assetsFor(total, supply, shares);
         if (assets == 0) revert ZeroAmount();
 
         _burn(msg.sender, tokenId, shares);
@@ -327,7 +317,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // A sell the chain accepts can still fill short at the pool's price floor, so the position
         // reports what left. Selling past the request means the chain swept backing that belongs to
         // the holders who stay; the subtraction refuses to pay it out.
-        uint256 sold = total - _sumBalances(_fetchBalances(hotkeys, vaultColdkey, netuid));
+        uint256 sold = total - VaultMath.sumBalances(VaultReads.fetchBalances(hotkeys, vaultColdkey, netuid));
         uint256 unsold = assets - sold;
         // The chain keeps a RAO or so of every sale; refunding that to a full exit would mint a
         // sub-floor position no rail can ever sell. A partial burn keeps it - it merges into the
@@ -341,7 +331,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
         // The mint must follow the payout: proceeds still in the clone would be folded into the
         // claim index and promised to every holder, this caller included.
-        uint256 refundShares = _sharesFor(total - assets, supply - shares, unsold);
+        uint256 refundShares = VaultMath.sharesFor(total - assets, supply - shares, unsold);
         if (refundShares != 0) _mint(msg.sender, tokenId, refundShares, "");
 
         emit UnwrappedForTao(msg.sender, tokenId, shares - refundShares, sold, taoOut);
@@ -359,16 +349,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         _syncTao(tokenId);
         _checkpoint(msg.sender, tokenId, cumulativeTaoPerShare[tokenId]);
         uint256 entitlement = claimableTao[tokenId][msg.sender];
-        // Per-holder accruals floor against a ceiling-rounded allocation, so summed entitlements
-        // can overstate the recorded liability by stray wei; a claim pays only what the liability
-        // backs - anything beyond it would draw on the dissolution backing - and keeps the
-        // difference recorded instead of erasing it.
         uint256 liability = taoLiability[tokenId];
-        uint256 amount = entitlement > liability ? liability : entitlement;
+        // What the liability cannot back stays recorded rather than being erased.
+        uint256 amount = VaultMath.backedEntitlement(entitlement, liability);
         if (amount == 0) revert ZeroAmount();
-        // A native transfer delivers only whole quantums; deduct exactly what is delivered so the
-        // sub-quantum remainder stays reserved for the caller instead of drifting back to the index.
-        amount -= amount % TAO_NATIVE_QUANTUM;
+        amount = VaultMath.toNativeQuantum(amount);
         if (amount == 0) revert ClaimBelowNativePrecision();
         claimableTao[tokenId][msg.sender] = entitlement - amount;
         taoLiability[tokenId] = liability - amount;
@@ -383,16 +368,16 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         address clone,
         uint16 netuid
     ) private {
-        (bytes32[] memory hotkeys, uint16[] memory weights) = _resolveValidators(netuid);
-        bytes32 coldkey = _coldkeyOf(clone);
+        (bytes32[] memory hotkeys, uint16[] memory weights) = VaultReads.resolveValidators(validatorRegistry, netuid);
+        bytes32 coldkey = VaultReads.coldkeyOf(clone);
         // Nothing on this path trades against the pool, so one price read holds for the whole call.
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
         _consolidateRotatedStake(tokenId, clone, coldkey, hotkeys, alphaPriceE18);
 
         // After consolidation the whole backing sits on the current validators, so their
         // balances count everything.
-        uint256[] memory balances = _fetchBalances(hotkeys, coldkey, netuid);
-        uint256 totalAlpha = _sumBalances(balances);
+        uint256[] memory balances = VaultReads.fetchBalances(hotkeys, coldkey, netuid);
+        uint256 totalAlpha = VaultMath.sumBalances(balances);
         // A fully swept position cannot regain alpha, and the burn's checkpoint keeps any
         // swept-sale proceeds claimable, so the shares are retired instead of trapped.
         if (totalAlpha == 0) {
@@ -401,7 +386,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             return;
         }
 
-        uint256 assets = _assetsFor(totalAlpha, totalSupply(tokenId), shares);
+        uint256 assets = VaultMath.assetsFor(totalAlpha, totalSupply(tokenId), shares);
         if (assets == 0) revert ZeroAmount();
 
         // A sub-floor request is undeliverable on the alpha rail (the chain rejects the transfer);
@@ -434,7 +419,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 assets,
         uint256 alphaPriceE18
     ) private returns (uint256 alphaOut) {
-        uint16 netuid = _netuid(tokenId);
+        uint16 netuid = VaultMath.netuidOf(tokenId);
         uint256 deliveryIndex;
         for (uint256 i = 1; i < balances.length;) {
             if (balances[i] > balances[deliveryIndex]) deliveryIndex = i;
@@ -474,16 +459,16 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         alphaOut = assets < deliverable ? assets : deliverable;
         SubnetClone(payable(clone)).flush(userColdkey, hotkeys[deliveryIndex], netuid, alphaOut);
         // Re-read live balances so the weight re-split never moves more than a slot holds.
-        uint256[] memory postBalances = _fetchBalances(hotkeys, coldkey, netuid);
+        uint256[] memory postBalances = VaultReads.fetchBalances(hotkeys, coldkey, netuid);
         _alignToWeights(tokenId, clone, hotkeys, weights, postBalances, alphaPriceE18);
     }
 
     function _unwrapFromDissolvedSubnet(uint256 tokenId, uint256 shares, address clone) private {
-        uint256 backing = _unreservedCloneTao(tokenId, clone);
+        uint256 backing = VaultMath.unreservedTao(clone.balance, taoLiability[tokenId]);
         if (backing == 0) revert NothingToUnwrap();
 
         uint256 supplyBefore = totalSupply(tokenId);
-        uint256 userTao = (backing * shares) / supplyBefore;
+        uint256 userTao = VaultMath.proRata(backing, shares, supplyBefore);
         _burn(msg.sender, tokenId, shares);
         if (userTao > 0) SubnetClone(payable(clone)).unwrapTao(payable(msg.sender), userTao);
         emit DissolvedSubnetUnwrapped(msg.sender, tokenId, shares, userTao);
@@ -506,9 +491,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
         // forge-lint: disable-next-line(unsafe-typecast)
         uint16 nid = uint16(netuid);
-        _requireNotDissolving(nid);
-        (bytes32[] memory hotkeys, uint16[] memory weights) = _resolveValidators(nid);
-        bytes32 coldkey = _coldkeyOf(clone);
+        VaultReads.requireNotDissolving(nid);
+        (bytes32[] memory hotkeys, uint16[] memory weights) = VaultReads.resolveValidators(validatorRegistry, nid);
+        bytes32 coldkey = VaultReads.coldkeyOf(clone);
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
         _consolidateRotatedStake(tokenId, clone, coldkey, hotkeys, alphaPriceE18);
         _rebalance(tokenId, clone, hotkeys, weights, coldkey, alphaPriceE18);
@@ -522,7 +507,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32 coldkey,
         uint256 alphaPriceE18
     ) private returns (uint256) {
-        uint256[] memory balances = _fetchBalances(hotkeys, coldkey, _netuid(tokenId));
+        uint256[] memory balances = VaultReads.fetchBalances(hotkeys, coldkey, VaultMath.netuidOf(tokenId));
         return _alignToWeights(tokenId, clone, hotkeys, weights, balances, alphaPriceE18);
     }
 
@@ -534,7 +519,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256[] memory balances,
         uint256 alphaPriceE18
     ) private returns (uint256 total) {
-        total = _sumBalances(balances);
+        total = VaultMath.sumBalances(balances);
 
         // A single validator holds everything by definition; there is nothing to move against.
         if (weights.length == 1 || total == 0) return total;
@@ -606,109 +591,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // every move at a zero price read) leaves the split drifted - harmless, since share value
         // depends on the total, not the split.
         if (alphaPriceE18 == 0 || _taoValue(moveAmount, alphaPriceE18) < minStakeTao) return false;
-        SubnetClone(payable(clone)).moveStake(hotkeys[overIndex], hotkeys[underIndex], _netuid(tokenId), moveAmount);
+        SubnetClone(payable(clone))
+            .moveStake(hotkeys[overIndex], hotkeys[underIndex], VaultMath.netuidOf(tokenId), moveAmount);
         emit Rebalanced(tokenId, hotkeys[overIndex], hotkeys[underIndex], moveAmount);
         balances[overIndex] -= moveAmount;
         balances[underIndex] += moveAmount;
         return true;
-    }
-
-    // -------------------- View Functions ----------------------------------------
-
-    /// @notice Total alpha backing this token's shares. Returns 0 before the clone exists.
-    /// @dev    While subtensor dissolution cleanup runs for the netuid the backing alpha is in
-    ///         flux; treat the value as unstable whenever `isSubnetDissolving(netuid)` is true.
-    /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
-    /// @return Alpha staked under the clone for this token.
-    function totalStake(uint256 tokenId) public view returns (uint256) {
-        address clone = subnetClone[tokenId];
-        if (clone == address(0)) return 0;
-        (,, uint256 total) = _unionStake(tokenId, _netuid(tokenId), _coldkeyOf(clone));
-        return total;
-    }
-
-    /// @notice Price of one share in 1e18 precision, expressed in alpha.
-    /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while the subnet is being dissolved,
-    ///         `SubnetDissolved` once dissolution has completed or
-    ///         the tokenId does not correspond to the currently-registered subnet, and
-    ///         `NoSharesOutstanding` when no shares have been minted against this tokenId
-    ///         (a share price with zero supply has no meaningful value).
-    /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
-    /// @return Price of one share scaled by 1e18.
-    function sharePrice(uint256 tokenId) external view returns (uint256) {
-        _requireCurrentRegistration(tokenId);
-        uint256 supply = totalSupply(tokenId);
-        if (supply == 0) revert NoSharesOutstanding();
-        return (totalStake(tokenId) * 1e18) / supply;
-    }
-
-    /// @notice Preview how many shares would be minted for a deposit of `assets` alpha.
-    /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` during the blackout and
-    ///         `SubnetDissolved` for a tokenId whose subnet has been dissolved - deposits
-    ///         route through `currentTokenId(netuid)` and cannot land on a stale tokenId.
-    /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
-    /// @param  assets  Amount of alpha being deposited.
-    /// @return Number of shares that would be minted.
-    function previewWrap(uint256 tokenId, uint256 assets) external view returns (uint256) {
-        _requireCurrentRegistration(tokenId);
-        return _convertToShares(tokenId, assets);
-    }
-
-    /// @notice Preview the unwrap of `shares` for a position.
-    /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while the subnet is being dissolved
-    ///         and `SubnetDissolved` for a dissolved position whose clone holds no TAO refund.
-    ///         Live-path delivery is exact to within a few RAO of chain-side share rounding: unwrap
-    ///         delivers this amount or reverts, so a sub-floor total is not deliverable here and
-    ///         must be exited via unwrapForTao. That voluntary alpha-for-TAO sell is a market order
-    ///         with no preview of its own: its payout is bounded by the caller's minTaoOut, not
-    ///         quoted here. `tao` is non-zero only for the dissolved-subnet payout. The caller's
-    ///         claimable-TAO entitlement is never part of this quote: it survives unwrapping and
-    ///         is quoted by `claimableTaoOf`.
-    /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
-    /// @param  shares  Shares being previewed.
-    /// @return alpha   Alpha delivered on the live path.
-    /// @return tao     Native TAO paid on the dissolved path.
-    function previewUnwrap(uint256 tokenId, uint256 shares) external view returns (uint256 alpha, uint256 tao) {
-        if (shares == 0) return (0, 0);
-        address clone = subnetClone[tokenId];
-        if (clone == address(0)) return (0, 0);
-        uint256 supply = totalSupply(tokenId);
-        if (supply == 0) return (0, 0);
-
-        uint16 netuid = _netuid(tokenId);
-        _requireNotDissolving(netuid);
-
-        if (_isIssuedForDissolvedSubnet(tokenId)) {
-            uint256 backing = _unreservedCloneTao(tokenId, clone);
-            if (backing == 0) revert SubnetDissolved();
-            return (0, (backing * shares) / supply);
-        }
-
-        // Reverts NoValidatorFound when the registry has no set for this subnet.
-        (bytes32[] memory current,) = _resolveValidators(netuid);
-
-        (,, uint256 totalAlpha) = _unionStake(tokenId, netuid, _coldkeyOf(clone), current);
-        return (_assetsFor(totalAlpha, supply, shares), 0);
-    }
-
-    /// @notice TAO withdrawable by `account` for `tokenId` right now: exactly what `claimTao`
-    ///         would pay, including entitlement the storage has not settled yet, quoted at the
-    ///         granularity a native transfer can deliver.
-    function claimableTaoOf(address account, uint256 tokenId) external view returns (uint256) {
-        (uint256 indexIncrease, uint256 liabilityIncrease) = _previewSyncTao(tokenId);
-        uint256 index = cumulativeTaoPerShare[tokenId] + indexIncrease;
-        uint256 backing = taoLiability[tokenId] + liabilityIncrease;
-        uint256 entitlement = claimableTao[tokenId][account] + _pendingAt(account, tokenId, index);
-        uint256 amount = entitlement > backing ? backing : entitlement;
-        return amount - amount % TAO_NATIVE_QUANTUM;
-    }
-
-    /// @notice Exactly the subnet's configured validators; reverts when none are configured.
-    function getCurrentValidators(uint256 netuid) external view returns (bytes32[] memory) {
-        if (netuid > type(uint16).max) revert NetuidOutOfRange();
-        // forge-lint: disable-next-line(unsafe-typecast)
-        (bytes32[] memory hotkeys,) = _resolveValidators(uint16(netuid));
-        return hotkeys;
     }
 
     // -------------------- Mailbox Recovery --------------------------------------
@@ -743,7 +631,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         if (destSubstrateColdkey == bytes32(0)) revert ZeroColdkey();
 
         address predicted = getDepositAddress(msg.sender, netuid);
-        bytes32 mailboxColdkey = _coldkeyOf(predicted);
+        bytes32 mailboxColdkey = VaultReads.coldkeyOf(predicted);
         uint256 amount = IStaking(STAKING_PRECOMPILE).getStake(hotkey, mailboxColdkey, netuid);
         if (amount == 0) revert ZeroAmount();
 
@@ -759,7 +647,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         if (netuid > type(uint16).max) revert NetuidOutOfRange();
         if (hotkey == bytes32(0)) revert ZeroHotkey();
         address predicted = getDepositAddress(msg.sender, netuid);
-        bytes32 mailboxColdkey = _coldkeyOf(predicted);
+        bytes32 mailboxColdkey = VaultReads.coldkeyOf(predicted);
         uint256 amount = IStaking(STAKING_PRECOMPILE).getStake(hotkey, mailboxColdkey, netuid);
         if (amount == 0) revert ZeroAmount();
 
@@ -775,71 +663,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
     // -------------------- Internal Helpers --------------------------------------
 
-    /// @dev Reverts `NoValidatorFound` if the registry has no configured set for `netuid`.
-    function _resolveValidators(uint16 netuid)
-        private
-        view
-        returns (bytes32[] memory hotkeys, uint16[] memory weights)
-    {
-        (hotkeys, weights) = validatorRegistry.getValidators(netuid);
-        if (hotkeys.length == 0) revert NoValidatorFound();
-        // The registry interface guarantees matching lengths; a registry that breaks it would
-        // otherwise surface as a panic deep inside weight alignment, after stake has moved.
-        if (hotkeys.length != weights.length) revert ValidatorSetMalformed();
-    }
-
-    function _fetchBalances(bytes32[] memory hotkeys, bytes32 coldkey, uint16 netuid)
-        private
-        view
-        returns (uint256[] memory balances)
-    {
-        balances = new uint256[](hotkeys.length);
-        IStaking staking = IStaking(STAKING_PRECOMPILE);
-        for (uint256 i; i < hotkeys.length;) {
-            balances[i] = staking.getStake(hotkeys[i], coldkey, netuid);
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
-    function _sumBalances(uint256[] memory balances) private pure returns (uint256 total) {
-        for (uint256 i; i < balances.length;) {
-            total += balances[i];
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
-    function _sharesFor(uint256 stake, uint256 supply, uint256 assets) private pure returns (uint256) {
-        return Math.mulDiv(assets, supply + VIRTUAL_SHARES, stake + VIRTUAL_ASSETS);
-    }
-
-    function _assetsFor(uint256 stake, uint256 supply, uint256 shares) private pure returns (uint256) {
-        return (shares * (stake + VIRTUAL_ASSETS)) / (supply + VIRTUAL_SHARES);
-    }
-
-    function _convertToShares(uint256 tokenId, uint256 assets) private view returns (uint256) {
-        return _sharesFor(totalStake(tokenId), totalSupply(tokenId), assets);
-    }
-
-    function _coldkeyOf(address evmAddress) private view returns (bytes32) {
-        return IAddressMapping(ADDRESS_MAPPING_PRECOMPILE).addressMapping(evmAddress);
-    }
-
     function _isRotatedOut(bytes32 hotkey, bytes32[] memory currentSet) private pure returns (bool) {
-        return !_contains(currentSet, hotkey);
-    }
-
-    function _contains(bytes32[] memory set, bytes32 hotkey) private pure returns (bool) {
-        for (uint256 i; i < set.length;) {
-            if (set[i] == hotkey) return true;
-            unchecked {
-                ++i;
-            }
-        }
-        return false;
+        return !VaultMath.contains(currentSet, hotkey);
     }
 
     /// @dev Tao value of `alphaAmount` at `alphaPriceE18`, rounded down - the same arithmetic the
@@ -958,7 +783,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ) private {
         bytes32[] memory lastSeen = _lastSeenHotkeys[tokenId];
         if (_anyRotatedOut(lastSeen, currentSet)) {
-            uint16 netuid = _netuid(tokenId);
+            uint16 netuid = VaultMath.netuidOf(tokenId);
             (
                 bytes32 rollerHotkey,
                 uint256 richestBalance,
@@ -1064,62 +889,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
     }
 
-    function _unionStake(uint256 tokenId, uint16 netuid, bytes32 coldkey)
-        private
-        view
-        returns (bytes32[] memory, uint256[] memory, uint256)
-    {
-        (bytes32[] memory current,) = validatorRegistry.getValidators(netuid);
-        return _unionStake(tokenId, netuid, coldkey, current);
-    }
-
-    /// @dev Every slot the position may hold alpha on: the remembered set, then any current
-    ///      validator not already in it.
-    function _unionSlots(uint256 tokenId, bytes32[] memory current) private view returns (bytes32[] memory slots) {
-        bytes32[] memory lastSeen = _lastSeenHotkeys[tokenId];
-        slots = new bytes32[](lastSeen.length + current.length);
-        uint256 size = lastSeen.length;
-        for (uint256 i; i < size;) {
-            slots[i] = lastSeen[i];
-            unchecked {
-                ++i;
-            }
-        }
-        // Both lists are individually duplicate-free: the registry rejects duplicate hotkeys within
-        // a validator set, and the remembered set is a past copy of such a set. Only the overlap
-        // between the two lists needs removing.
-        for (uint256 i; i < current.length;) {
-            if (!_contains(lastSeen, current[i])) {
-                slots[size] = current[i];
-                unchecked {
-                    ++size;
-                }
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        // Only the length word of an array this function allocated is written, so no memory outside
-        // it is touched.
-        assembly ("memory-safe") {
-            mstore(slots, size)
-        }
-    }
-
-    /// @dev Per-hotkey stake across the remembered and current validator sets, with its total. A view
-    ///      has no chance to consolidate first, so it must count stake wherever it sits: between a
-    ///      registry commit and the next vault call the whole position is on validators the set no
-    ///      longer names, and reading only the current set would report no backing at all.
-    function _unionStake(uint256 tokenId, uint16 netuid, bytes32 coldkey, bytes32[] memory current)
-        private
-        view
-        returns (bytes32[] memory hotkeys, uint256[] memory balances, uint256 total)
-    {
-        hotkeys = _unionSlots(tokenId, current);
-        balances = _fetchBalances(hotkeys, coldkey, netuid);
-        total = _sumBalances(balances);
-    }
-
     function lastSeenHotkeys(uint256 tokenId) external view returns (bytes32[] memory) {
         return _lastSeenHotkeys[tokenId];
     }
@@ -1145,102 +914,35 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         emit SubnetProxyCreated(tokenId, clone);
     }
 
-    function _netuid(uint256 tokenId) private pure returns (uint16) {
-        // forge-lint: disable-next-line(unsafe-typecast)
-        return uint16(tokenId & 0xFFFF);
-    }
-
-    function _registrationBlock(uint256 tokenId) private pure returns (uint64) {
-        // forge-lint: disable-next-line(unsafe-typecast)
-        return uint64(tokenId >> 16);
-    }
-
-    function _isIssuedForDissolvedSubnet(uint256 tokenId) private view returns (bool) {
-        uint64 currentRegistrationBlock = ISubnet(SUBNET_PRECOMPILE).getNetworkRegistrationBlock(_netuid(tokenId));
-        return currentRegistrationBlock == 0 || currentRegistrationBlock != _registrationBlock(tokenId);
-    }
-
-    /// @dev Subtensor dissolves a subnet asynchronously over many blocks; alpha balances and
-    ///      TAO refunds are in flux for the whole window, so every share-priced path is frozen
-    ///      until dissolution completes. The check is per netuid, so an already-dissolved
-    ///      position is also frozen while a newer subnet on the same netuid dissolves.
-    function _requireNotDissolving(uint16 netuid) private view {
-        if (ISubnet(SUBNET_PRECOMPILE).isSubnetDissolving(netuid)) revert SubnetInDissolutionBlackoutPeriod();
-    }
-
-    /// @dev Shared guard for views that quote only the currently-registered subnet: the blackout
-    ///      check must precede the registration-block comparison so an in-flux registration is
-    ///      never classified as dissolved.
-    function _requireCurrentRegistration(uint256 tokenId) private view {
-        _requireNotDissolving(_netuid(tokenId));
-        if (_isIssuedForDissolvedSubnet(tokenId)) revert SubnetDissolved();
-    }
-
     // -------------------- TAO Claim Index ----------------------------------------
 
     /// @dev Folds TAO the clone received since the last synchronization into the per-share index.
     function _syncTao(uint256 tokenId) private {
-        (uint256 indexIncrease, uint256 liabilityIncrease) = _previewSyncTao(tokenId);
+        address clone = subnetClone[tokenId];
+        if (clone == address(0)) return;
+        // An empty clone is the common case on every balance change, so it exits before the
+        // liability lookup.
+        uint256 balance = clone.balance;
+        if (balance == 0) return;
+        uint256 newTao = VaultReads.indexableTao(tokenId, balance, taoLiability[tokenId]);
+        if (newTao == 0) return;
+        (uint256 indexIncrease, uint256 liabilityIncrease) = VaultMath.syncAmounts(newTao, totalSupply(tokenId));
         if (indexIncrease == 0) return;
         cumulativeTaoPerShare[tokenId] += indexIncrease;
         taoLiability[tokenId] += liabilityIncrease;
     }
 
-    /// @dev The increases a synchronization would record right now. Zero while the subnet is
-    ///      dissolving or dissolved: from then on new clone balance is the dissolution refund,
-    ///      which the dissolved unwrap path distributes pro rata instead. Zero at zero supply:
-    ///      with no holders there is no one to attribute the arrival to, so it stays unreserved
-    ///      until shares exist again.
-    function _previewSyncTao(uint256 tokenId) private view returns (uint256 indexIncrease, uint256 liabilityIncrease) {
-        address clone = subnetClone[tokenId];
-        if (clone == address(0)) return (0, 0);
-        uint256 newTao = _unreservedCloneTao(tokenId, clone);
-        if (newTao == 0) return (0, 0);
-        if (ISubnet(SUBNET_PRECOMPILE).isSubnetDissolving(_netuid(tokenId))) return (0, 0);
-        if (_isIssuedForDissolvedSubnet(tokenId)) return (0, 0);
-        uint256 supply = totalSupply(tokenId);
-        if (supply == 0) return (0, 0);
-        indexIncrease = Math.mulDiv(newTao, TAO_INDEX_PRECISION, supply);
-        // Rounded up so every index increase moves the liability: a floored-to-zero allocation
-        // would leave the same arrival re-countable on every later synchronization. The product
-        // never exceeds newTao times the scale, so the ceiling cannot over-reserve.
-        liabilityIncrease = Math.mulDiv(indexIncrease, supply, TAO_INDEX_PRECISION, Math.Rounding.Ceil);
-    }
-
-    /// @dev The clone balance not yet promised through the claim index: assignable to the index
-    ///      while the subnet is live, and the redemption backing once it is dissolved.
-    function _unreservedCloneTao(uint256 tokenId, address clone) private view returns (uint256) {
-        uint256 balance = clone.balance;
-        // The early exit spares the liability read on the common empty-clone path.
-        if (balance == 0) return 0;
-        uint256 reserved = taoLiability[tokenId];
-        return balance > reserved ? balance - reserved : 0;
-    }
-
     /// @dev Banks the account's earned-but-unrecorded TAO and re-anchors its debt at `index`;
     ///      repeating it at an unchanged balance is a no-op.
     function _checkpoint(address account, uint256 tokenId, uint256 index) private {
-        uint256 earned = _earnedAt(account, tokenId, index);
-        uint256 debt = taoIndexDebt[tokenId][account];
-        if (earned > debt) {
-            claimableTao[tokenId][account] += earned - debt;
-        }
+        uint256 earned = VaultMath.earnedAt(balanceOf(account, tokenId), index);
+        uint256 credit = VaultMath.pendingTao(earned, taoIndexDebt[tokenId][account]);
+        if (credit != 0) claimableTao[tokenId][account] += credit;
         taoIndexDebt[tokenId][account] = earned;
     }
 
-    /// @dev Earned-but-unrecorded TAO for the account at the given index level.
-    function _pendingAt(address account, uint256 tokenId, uint256 index) private view returns (uint256) {
-        uint256 earnedToDate = _earnedAt(account, tokenId, index);
-        uint256 debt = taoIndexDebt[tokenId][account];
-        return earnedToDate > debt ? earnedToDate - debt : 0;
-    }
-
     function _settleIndexDebt(address account, uint256 tokenId, uint256 index) private {
-        taoIndexDebt[tokenId][account] = _earnedAt(account, tokenId, index);
-    }
-
-    function _earnedAt(address account, uint256 tokenId, uint256 index) private view returns (uint256) {
-        return Math.mulDiv(balanceOf(account, tokenId), index, TAO_INDEX_PRECISION);
+        taoIndexDebt[tokenId][account] = VaultMath.earnedAt(balanceOf(account, tokenId), index);
     }
 
     // -------------------- Overrides ---------------------------------------------

@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
-import { AlphaVault } from "src/AlphaVault.sol";
+import { NetuidOutOfRange, SlippageExceeded, ZeroAmount, ZeroHotkey } from "src/VaultErrors.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 import { RevertingReceiver, ReclaimMailboxReentrantReceiver } from "./helpers/TaoRailReceivers.sol";
@@ -56,19 +56,19 @@ contract ReclaimMailboxAlphaAsTaoTest is AlphaVaultTestBase {
 
     function test_RevertWhen_NetuidExceedsUint16() public {
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.NetuidOutOfRange.selector);
+        vm.expectRevert(NetuidOutOfRange.selector);
         vault.reclaimMailboxAlphaAsTao(uint256(type(uint16).max) + 1, hotkey1, 0);
     }
 
     function test_RevertWhen_HotkeyIsZero() public {
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.ZeroHotkey.selector);
+        vm.expectRevert(ZeroHotkey.selector);
         vault.reclaimMailboxAlphaAsTao(NETUID1, bytes32(0), 0);
     }
 
     function test_RevertWhen_NoMailboxStakeForGivenHotkey() public {
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.ZeroAmount.selector);
+        vm.expectRevert(ZeroAmount.selector);
         vault.reclaimMailboxAlphaAsTao(NETUID1, hotkey1, 0);
     }
 
@@ -78,7 +78,7 @@ contract ReclaimMailboxAlphaAsTaoTest is AlphaVaultTestBase {
         uint256 expected = _expectedTaoFor(50 ether);
 
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(AlphaVault.SlippageExceeded.selector, expected));
+        vm.expectRevert(abi.encodeWithSelector(SlippageExceeded.selector, expected));
         vault.reclaimMailboxAlphaAsTao(NETUID1, hotkey1, expected + 1);
     }
 

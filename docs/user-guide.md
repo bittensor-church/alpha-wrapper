@@ -4,10 +4,30 @@ You need an EVM account on the Bittensor chain with TAO for gas, and alpha
 already staked on the subnet you want to wrap. Read
 [overview.md](overview.md) first if the vault is new to you.
 
+Two addresses matter. You send every transaction to the vault. You read
+every quote - backing, share price, deposit and exit previews, claimable
+TAO, and the validator set - from the lens deployed alongside it. Take the
+lens address from the same place you took the vault address from. A lens is
+ordinary code that anyone can deploy, and the chain marks none of them as
+official.
+
+Then check that the two agree: `vault()` on the lens returns the vault it
+reads, and it must equal the address you send transactions to. That catches
+a lens left over from an earlier vault, which would keep answering with
+that vault's numbers. It tells you the two addresses agree, and that is all
+it tells you - any contract can return the right address from `vault()` and
+still invent every quote it gives you. What makes the quotes real is where
+the address came from.
+
+If you are building a contract on top of the vault, pin the lens address at
+deployment and compare its runtime code against the lens you reviewed. A
+quote that sizes a slippage bound is worth attacking, so accepting a lens
+address as a call argument is a way to be paid less than you asked for.
+
 ## Wrapping
 
-1. Check the validator set: `getCurrentValidators(netuid)` returns the
-   subnet's hotkeys, one to 64. The vault only accepts deposits sitting under one of
+1. Check the validator set: `getCurrentValidators(netuid)` on the lens
+   returns the subnet's hotkeys, one to 64. The vault only accepts deposits sitting under one of
    them; if your stake is delegated elsewhere, first move it under one
    of these with the chain's move_stake call.
 2. Get your deposit address: `getDepositAddress(you, netuid)`. This is an
