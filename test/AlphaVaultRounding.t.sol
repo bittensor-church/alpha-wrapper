@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import { AlphaVault } from "src/AlphaVault.sol";
+import { NothingToUnwrap, ZeroAmount } from "src/VaultErrors.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 
 /// @dev Rounding-to-zero and empty-state guards for the share math, split out of AlphaVault.t.sol.
@@ -24,7 +25,7 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
 
         _simulateAlphaDeposit(bob, NETUID1, dust);
         vm.prank(bob);
-        vm.expectRevert(AlphaVault.ZeroAmount.selector);
+        vm.expectRevert(ZeroAmount.selector);
         vault.wrap(NETUID1, hotkey1);
 
         assertEq(vault.balanceOf(bob, TOKEN1), 0);
@@ -49,7 +50,7 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         // 1 share against ~1e28 supply / ~1e19 stake rounds to 0 assets: fires the assets==0
         // guard (not NothingToUnwrap, totalAlpha is still > 0), no shares burned.
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.ZeroAmount.selector);
+        vm.expectRevert(ZeroAmount.selector);
         vault.unwrap(TOKEN1, 1, _toSubstrate(alice));
         assertEq(vault.balanceOf(alice, TOKEN1), shares);
 
@@ -111,7 +112,7 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         _simulateTaoAwardedOnDissolution(tokenId, pot);
         _simulateDissolutionCompleted(NETUID1);
 
-        (uint256 alphaQuote, uint256 taoQuote) = vault.previewUnwrap(tokenId, shares);
+        (uint256 alphaQuote, uint256 taoQuote) = lens.previewUnwrap(tokenId, shares);
         assertEq(alphaQuote, 0);
 
         uint256 before = alice.balance;
@@ -134,7 +135,7 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         // Clone holds 0 TAO -> unwrap reverts NothingToUnwrap without burning shares.
         assertEq(clone.balance, 0);
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.NothingToUnwrap.selector);
+        vm.expectRevert(NothingToUnwrap.selector);
         vault.unwrap(tokenId, shares, _toSubstrate(alice));
 
         // Shares survived: once the dissolution TAO lands, the same position pays out.

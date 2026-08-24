@@ -81,7 +81,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
         uint256 shares = vault.balanceOf(alice, TOKEN1);
 
-        vault.previewUnwrap(TOKEN1, shares / 2);
+        lens.previewUnwrap(TOKEN1, shares / 2);
         vm.snapshotGasLastCall("AlphaVault", "previewUnwrap");
     }
 
@@ -177,7 +177,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
         uint256 shares = vault.balanceOf(alice, TOKEN1);
 
-        vault.previewUnwrap(TOKEN1, shares / 2);
+        lens.previewUnwrap(TOKEN1, shares / 2);
         vm.snapshotGasLastCall("AlphaVault", "previewUnwrap (64 validators)");
     }
 }

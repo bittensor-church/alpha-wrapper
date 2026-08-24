@@ -3,6 +3,13 @@ pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
+import {
+    InsufficientShares,
+    NothingToUnwrap,
+    SlippageExceeded,
+    WithdrawTooSmall,
+    ZeroAmount
+} from "src/VaultErrors.sol";
 import { MockAlpha } from "./mocks/MockAlpha.sol";
 import { CHAIN_MIN_STAKE } from "./mocks/MockStaking.sol";
 import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
@@ -24,12 +31,12 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
 
     /// @dev Alpha the holder's whole share balance is worth right now.
     function _positionValue(address holder) internal view returns (uint256 alpha) {
-        (alpha,) = vault.previewUnwrap(TOKEN1, vault.balanceOf(holder, TOKEN1));
+        (alpha,) = lens.previewUnwrap(TOKEN1, vault.balanceOf(holder, TOKEN1));
     }
 
     /// @dev Alpha backing the shares an exit handed back on top of what the caller did not burn.
     function _refundValue(address holder, uint256 keptShares) internal view returns (uint256 alpha) {
-        (alpha,) = vault.previewUnwrap(TOKEN1, vault.balanceOf(holder, TOKEN1) - keptShares);
+        (alpha,) = lens.previewUnwrap(TOKEN1, vault.balanceOf(holder, TOKEN1) - keptShares);
     }
 
     function test_BurnAllShares_PaysFullAlphaAsTao() public {
@@ -42,7 +49,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
 
         assertEq(vault.balanceOf(alice, TOKEN1), 0);
         assertEq(alice.balance - aliceBalanceBefore, 100 ether);
-        assertEq(vault.totalStake(TOKEN1), 0);
+        assertEq(lens.totalStake(TOKEN1), 0);
     }
 
     function test_FullBurnAfterEmissionGrowth_DrainsSubFloorDust() public {
@@ -59,7 +66,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         vault.unwrapForTao(TOKEN1, supply, 1);
 
         assertEq(vault.balanceOf(alice, TOKEN1), 0);
-        assertEq(vault.totalStake(TOKEN1), 0);
+        assertEq(lens.totalStake(TOKEN1), 0);
         assertGt(alice.balance, aliceBalanceBefore);
     }
 
@@ -77,7 +84,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         vault.unwrapForTao(TOKEN1, supply, 1);
 
         assertEq(vault.balanceOf(alice, TOKEN1), 0);
-        assertEq(vault.totalStake(TOKEN1), 0);
+        assertEq(lens.totalStake(TOKEN1), 0);
     }
 
     // Whatever the slot distribution, burn size, and price: the payout equals the sold alpha's
@@ -112,7 +119,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
 
         // Up to six per-slot sells each floor-divide their payout, losing under one RAO apiece.
         if (ok) {
-            uint256 sold = total - vault.totalStake(TOKEN1);
+            uint256 sold = total - lens.totalStake(TOKEN1);
             uint256 paid = alice.balance - balanceBefore;
             assertApproxEqAbs(paid, _expectedTaoFor(sold), 6, "payout is the sold spot value");
             assertLe(paid, _expectedTaoFor(expected) + 6, "payout never exceeds the request's value");
@@ -122,12 +129,12 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
                 "any shortfall is threshold-pinned dust at the read"
             );
         } else {
-            assertEq(bytes4(ret), AlphaVault.WithdrawTooSmall.selector, "only the nothing-sold revert may fire");
+            assertEq(bytes4(ret), WithdrawTooSmall.selector, "only the nothing-sold revert may fire");
             assertTrue(
                 read == 0 || (expected * read) / 1e18 < unsellableTailBound,
                 "nothing sold only when the whole request is an unsellable tail"
             );
-            assertEq(vault.totalStake(TOKEN1), total, "nothing moved on revert");
+            assertEq(lens.totalStake(TOKEN1), total, "nothing moved on revert");
         }
     }
 
@@ -203,14 +210,14 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_RevertWhen_SharesIsZero() public {
         _depositForAlice(100 ether);
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.ZeroAmount.selector);
+        vm.expectRevert(ZeroAmount.selector);
         vault.unwrapForTao(TOKEN1, 0, 0);
     }
 
     function test_RevertWhen_SharesExceedCallerBalance() public {
         uint256 shares = _depositForAlice(100 ether);
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.InsufficientShares.selector);
+        vm.expectRevert(InsufficientShares.selector);
         vault.unwrapForTao(TOKEN1, shares + 1, 0);
     }
 
@@ -221,7 +228,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         _simulateNewNetworkRegistered(TOKEN1, 999, 5 ether);
 
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.NothingToUnwrap.selector);
+        vm.expectRevert(NothingToUnwrap.selector);
         vault.unwrapForTao(TOKEN1, shares, 0);
     }
 
@@ -236,7 +243,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         require(shares > 1, "test requires shares > 1 after deposit");
 
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.ZeroAmount.selector);
+        vm.expectRevert(ZeroAmount.selector);
         vault.unwrapForTao(TOKEN1, 1, 0);
     }
 
@@ -246,7 +253,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         uint256 expected = _expectedTaoFor(100 ether);
 
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(AlphaVault.SlippageExceeded.selector, expected));
+        vm.expectRevert(abi.encodeWithSelector(SlippageExceeded.selector, expected));
         vault.unwrapForTao(TOKEN1, shares, expected + 1);
     }
 
@@ -499,7 +506,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
 
         vault.rebalance(NETUID1);
 
-        assertApproxEqAbs(vault.totalStake(TOKEN1), 50 ether, 1e9);
+        assertApproxEqAbs(lens.totalStake(TOKEN1), 50 ether, 1e9);
         assertApproxEqAbs(_getVaultStake(hotkey1, NETUID1), _weighted(50 ether, NETUID1_BPS_HK1), 1e9);
         assertApproxEqAbs(_getVaultStake(hotkey2, NETUID1), _weighted(50 ether, NETUID1_BPS_HK2), 1e9);
         assertApproxEqAbs(_getVaultStake(hotkey3, NETUID1), _weighted(50 ether, NETUID1_BPS_HK3), 1e9);
@@ -550,7 +557,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         uint256 shares = _sharesForExactAssets(TOKEN1, 1e6, total);
 
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
+        vm.expectRevert(WithdrawTooSmall.selector);
         vault.unwrapForTao(TOKEN1, shares, 0);
 
         assertEq(vault.balanceOf(alice, TOKEN1), sharesBefore, "burn rolled back with the revert");
@@ -574,7 +581,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         assertEq(alice.balance - balanceBefore, 5e6, "delivered the exempt full drain, skipped the dust");
         assertEq(_getVaultStake(hotkey1, NETUID1), 0, "full drain sold");
         assertEq(_getVaultStake(hotkey3, NETUID1), 40 ether, "sub-floor remainder left in the pool");
-        assertEq(vault.totalStake(TOKEN1), total - 5e6, "only the delivered alpha left the vault");
+        assertEq(lens.totalStake(TOKEN1), total - 5e6, "only the delivered alpha left the vault");
         assertApproxEqAbs(_refundValue(alice, sharesBefore - shares), 1e6, 1, "refund is worth the unsold dust");
         assertApproxEqAbs(_positionValue(alice), valueBefore - 5e6, 2, "only the sold alpha left the position");
     }
@@ -642,7 +649,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         vault.unwrapForTao(TOKEN1, shares, 0);
 
         assertGe(clone.balance, vault.taoLiability(TOKEN1), "the clone still covers every recognized claim");
-        uint256 claims = vault.claimableTaoOf(alice, TOKEN1) + vault.claimableTaoOf(bob, TOKEN1);
+        uint256 claims = lens.claimableTaoOf(alice, TOKEN1) + lens.claimableTaoOf(bob, TOKEN1);
         assertApproxEqAbs(claims, 8 ether, 2e9, "the donation is still owed to the holders who earned it");
     }
 
@@ -662,7 +669,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         vault.unwrapForTao(TOKEN1, shares, 0);
 
         assertEq(vault.balanceOf(address(receiver), TOKEN1), sharesBefore, "the whole exit rolled back");
-        assertEq(vault.totalStake(TOKEN1), total, "no alpha left the vault");
+        assertEq(lens.totalStake(TOKEN1), total, "no alpha left the vault");
     }
 
     // A swap that stops early returns alpha counted as sold; a full burn must refund it, not strand it.
@@ -677,7 +684,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         vault.unwrapForTao(TOKEN1, shares, 0);
 
         assertEq(alice.balance - balanceBefore, 60 ether, "paid only for the alpha the chain swapped");
-        assertEq(vault.totalStake(TOKEN1), 40 ether, "the chain kept the unswapped alpha staked");
+        assertEq(lens.totalStake(TOKEN1), 40 ether, "the chain kept the unswapped alpha staked");
         assertApproxEqAbs(_positionValue(alice), 40 ether, 2, "the caller still owns it, not the vault");
     }
 
@@ -693,7 +700,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         vm.prank(alice);
         vault.unwrapForTao(TOKEN1, shares, 0);
 
-        assertEq(vault.totalStake(TOKEN1), 1, "the chain kept a RAO back");
+        assertEq(lens.totalStake(TOKEN1), 1, "the chain kept a RAO back");
         assertEq(vault.balanceOf(alice, TOKEN1), 0, "sub-floor dust mints no position");
         assertEq(vault.totalSupply(TOKEN1), 0, "the position is fully retired");
     }
@@ -755,7 +762,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         uint256 shares = _sharesForExactAssets(TOKEN1, 5e6 + 1e6, total);
 
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(AlphaVault.SlippageExceeded.selector, 5e6));
+        vm.expectRevert(abi.encodeWithSelector(SlippageExceeded.selector, 5e6));
         vault.unwrapForTao(TOKEN1, shares, 5e6 + 1e6);
 
         assertEq(vault.balanceOf(alice, TOKEN1), sharesBefore, "burn rolled back with the slippage revert");
@@ -773,13 +780,13 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         vault.safeTransferFrom(alice, bob, TOKEN1, shares - dustShares, "");
 
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
+        vm.expectRevert(WithdrawTooSmall.selector);
         vault.unwrapForTao(TOKEN1, dustShares, 0);
 
         _depositAndWrap(alice, NETUID1, 5e6);
 
         uint256 allShares = vault.balanceOf(alice, TOKEN1);
-        (uint256 expectedAssets,) = vault.previewUnwrap(TOKEN1, allShares);
+        (uint256 expectedAssets,) = lens.previewUnwrap(TOKEN1, allShares);
         uint256 balanceBefore = alice.balance;
 
         vm.prank(alice);
@@ -802,7 +809,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
 
         uint256 sharesBefore = vault.balanceOf(alice, TOKEN1);
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
+        vm.expectRevert(WithdrawTooSmall.selector);
         vault.unwrapForTao(TOKEN1, burnShares, 0);
 
         assertEq(vault.balanceOf(alice, TOKEN1), sharesBefore, "shares intact after the clean skip");
@@ -824,7 +831,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
 
         assertEq(alice.balance - balanceBefore, 50e6 - sweepSafeLeftover, "paid only the sweep-safe chunk");
         assertEq(_getVaultStake(hotkey1, NETUID1), sweepSafeLeftover, "slot keeps the sweep-safe minimum");
-        assertEq(vault.totalStake(TOKEN1), sweepSafeLeftover, "nothing was force-swept");
+        assertEq(lens.totalStake(TOKEN1), sweepSafeLeftover, "nothing was force-swept");
         assertApproxEqAbs(
             _refundValue(alice, sharesBefore - shares),
             45e6 - (50e6 - sweepSafeLeftover),
@@ -843,7 +850,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         uint256 shares = _sharesForExactAssets(TOKEN1, 10e6, total);
 
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
+        vm.expectRevert(WithdrawTooSmall.selector);
         vault.unwrapForTao(TOKEN1, shares, 0);
 
         assertEq(vault.balanceOf(alice, TOKEN1), sharesBefore, "burn rolled back with the revert");
@@ -903,7 +910,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         uint256 shares = _sharesForExactAssets(TOKEN1, 1e6, total);
 
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
+        vm.expectRevert(WithdrawTooSmall.selector);
         vault.unwrapForTao(TOKEN1, shares, 0);
     }
 
@@ -919,7 +926,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         MockAlpha(ALPHA_PRECOMPILE).setSimSwapQuote(50e6, 44e6);
 
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
+        vm.expectRevert(WithdrawTooSmall.selector);
         vault.unwrapForTao(TOKEN1, shares, 0);
 
         assertEq(_getVaultStake(hotkey1, NETUID1), 50e6, "impact-endangered leftover left untouched");

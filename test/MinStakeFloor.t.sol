@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
+import { ConsolidationBelowFloor, DepositTooSmall, GatherBelowFloor, WithdrawTooSmall } from "src/VaultErrors.sol";
 import { CHAIN_MIN_STAKE, CHAIN_MIN_TRANSFER, MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
@@ -22,7 +23,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         // 3e6 alpha = 1.5e6 tao, below the 2e6 floor.
         _simulateAlphaDepositHotkey(alice, 99, 3e6, hotkey4);
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.DepositTooSmall.selector);
+        vm.expectRevert(DepositTooSmall.selector);
         vault.wrap(99, hotkey4);
     }
 
@@ -100,7 +101,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.GatherBelowFloor.selector);
+        vm.expectRevert(GatherBelowFloor.selector);
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
     }
 
@@ -113,7 +114,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         uint256 burnShares = vault.balanceOf(alice, TOKEN1) * 5 / 100;
 
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
+        vm.expectRevert(WithdrawTooSmall.selector);
         vault.unwrap(TOKEN1, burnShares, _toSubstrate(alice));
     }
 
@@ -135,7 +136,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         // 3e6 tao cleared the chain's previous 2e6 minimum but not the raised one.
         _simulateAlphaDepositHotkey(alice, 99, 3e6, hotkey4);
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.DepositTooSmall.selector);
+        vm.expectRevert(DepositTooSmall.selector);
         vault.wrap(99, hotkey4);
     }
 
@@ -146,7 +147,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         // A 3e6-value request cleared the previous minimum; the raised one now refuses it.
         uint256 shares = _sharesForExactAssets(TOKEN1, 3e6, 40e6);
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
+        vm.expectRevert(WithdrawTooSmall.selector);
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
     }
 
@@ -159,7 +160,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, 99, deposit, hotkey4);
 
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.DepositTooSmall.selector);
+        vm.expectRevert(DepositTooSmall.selector);
         vault.wrap(99, hotkey4);
 
         _setChainMinStake(CHAIN_MIN_TRANSFER);
@@ -181,7 +182,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
         _setChainMinStake(50e6);
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
+        vm.expectRevert(WithdrawTooSmall.selector);
         vault.unwrapForTao(TOKEN1, tenth, 0);
     }
 
@@ -217,7 +218,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, 99, 1e6, hotkey4);
 
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.DepositTooSmall.selector);
+        vm.expectRevert(DepositTooSmall.selector);
         vault.wrap(99, hotkey4);
 
         _setChainMinStake(5e5);
@@ -261,7 +262,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         if (!ok) {
             bytes memory expectedRefusal = clearsVaultGate
                 ? abi.encodeWithSignature("Error(string)", "MockStaking: AmountTooLow")
-                : abi.encodeWithSelector(AlphaVault.DepositTooSmall.selector);
+                : abi.encodeWithSelector(DepositTooSmall.selector);
             assertEq(keccak256(ret), keccak256(expectedRefusal), "the refusal came from the bar that binds first");
             assertEq(_getVaultStake(hotkey4, 99), 0, "nothing staked behind the refusal");
             assertEq(vault.balanceOf(alice, vault.currentTokenId(99)), 0, "no shares minted behind the refusal");
@@ -278,7 +279,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         // 25e6 clears the raised minimum, but no single slot covers it and the richest holds 15e6.
         uint256 shares = _sharesForExactAssets(TOKEN1, 25e6, 40e6);
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.GatherBelowFloor.selector);
+        vm.expectRevert(GatherBelowFloor.selector);
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
     }
 
@@ -290,11 +291,11 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
         // 3e6 alpha = 1.5e6 tao: above zero, below the floor.
         uint256 shares = _sharesForExactAssets(TOKEN1, 3e6, 40e6);
-        (uint256 previewAlpha,) = vault.previewUnwrap(TOKEN1, shares);
+        (uint256 previewAlpha,) = lens.previewUnwrap(TOKEN1, shares);
         assertEq(previewAlpha, 3e6, "preview quotes the pro-rata alpha");
 
         vm.prank(alice);
-        vm.expectRevert(AlphaVault.WithdrawTooSmall.selector);
+        vm.expectRevert(WithdrawTooSmall.selector);
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
     }
 
@@ -312,7 +313,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
         vault.rebalance(NETUID1);
 
-        assertEq(vault.totalStake(TOKEN1), total, "every attempted move cleared the chain floor");
+        assertEq(lens.totalStake(TOKEN1), total, "every attempted move cleared the chain floor");
     }
 
     // Three outcomes: the vault refuses up front only where the rounded-down read proves the amount
@@ -335,9 +336,9 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
         if (ok) {
             assertEq(_getVaultStake(hotkey4, 99), 0, "rotated-out stake consolidated");
-            assertEq(vault.totalStake(tokenId), dust, "pile conserved onto the current set");
+            assertEq(lens.totalStake(tokenId), dust, "pile conserved onto the current set");
             assertGe(trueValue, CHAIN_MIN_TRANSFER, "the roll landed, so it cleared the chain's move bar");
-        } else if (bytes4(ret) == AlphaVault.ConsolidationBelowFloor.selector) {
+        } else if (bytes4(ret) == ConsolidationBelowFloor.selector) {
             assertLt((dust * (read + 1e9)) / 1e18, CHAIN_MIN_STAKE, "reject only fires on the provable bound");
         } else {
             assertEq(
@@ -378,18 +379,17 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
         if (ok) {
             assertEq(_userStakeAcrossHotkeys(alice, NETUID1), expected, "delivery is exact");
-            assertEq(vault.totalStake(TOKEN1), total - expected, "only the delivered alpha left the vault");
+            assertEq(lens.totalStake(TOKEN1), total - expected, "only the delivered alpha left the vault");
         } else {
             bytes4 selector = bytes4(ret);
             bool chainRefusedTheMove =
                 keccak256(ret) == keccak256(abi.encodeWithSignature("Error(string)", "MockStaking: AmountTooLow"));
             assertTrue(
-                selector == AlphaVault.WithdrawTooSmall.selector || selector == AlphaVault.GatherBelowFloor.selector
-                    || chainRefusedTheMove,
+                selector == WithdrawTooSmall.selector || selector == GatherBelowFloor.selector || chainRefusedTheMove,
                 "only floor-classed reverts are legitimate"
             );
             assertEq(vault.balanceOf(alice, TOKEN1), supply, "shares intact after rollback");
-            assertEq(vault.totalStake(TOKEN1), total, "nothing moved on revert");
+            assertEq(lens.totalStake(TOKEN1), total, "nothing moved on revert");
         }
     }
 
@@ -458,7 +458,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         _depositAndWrap(alice, NETUID1, deposit);
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
-        (uint256 previewAlpha,) = vault.previewUnwrap(TOKEN1, shares);
+        (uint256 previewAlpha,) = lens.previewUnwrap(TOKEN1, shares);
         vm.prank(alice);
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
 
@@ -474,7 +474,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         _setVaultStakes(NETUID1, 1_500_000_000_000_000, 1_500_000_000_000_000, 1_500_000_000_000_000);
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
-        (uint256 previewAlpha,) = vault.previewUnwrap(TOKEN1, shares);
+        (uint256 previewAlpha,) = lens.previewUnwrap(TOKEN1, shares);
         vm.prank(alice);
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
 

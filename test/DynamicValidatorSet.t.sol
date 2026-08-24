@@ -20,7 +20,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         _depositAndWrap(alice, NETUID1, 10 ether);
 
         _assertEvenSpread(hks, NETUID1, 10 ether);
-        assertEq(vault.totalStake(TOKEN1), 10 ether);
+        assertEq(lens.totalStake(TOKEN1), 10 ether);
     }
 
     function test_Wrap_StakesWholePositionOnSingleValidator() public {
@@ -28,7 +28,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         _depositAndWrap(alice, NETUID1, 10 ether);
 
         assertEq(_getVaultStake(hks[0], NETUID1), 10 ether);
-        assertEq(vault.totalStake(TOKEN1), 10 ether);
+        assertEq(lens.totalStake(TOKEN1), 10 ether);
     }
 
     function test_Rebalance_ShrinkFromCapLeavesNoStaleTail() public {
@@ -41,7 +41,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         for (uint256 i = 3; i < MAX_VALIDATORS; ++i) {
             assertEq(_getVaultStake(wide[i], NETUID1), 0, "dropped validator still funded");
         }
-        assertEq(vault.totalStake(TOKEN1), 10 ether, "total conserved across the shrink");
+        assertEq(lens.totalStake(TOKEN1), 10 ether, "total conserved across the shrink");
         assertEq(vault.lastSeenHotkeys(TOKEN1).length, 3, "remembered set carries no stale tail");
 
         _assertEvenSpread(narrow, NETUID1, 10 ether);
@@ -55,7 +55,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
 
         _assertEvenSpread(wide, NETUID1, 10 ether);
-        assertEq(vault.totalStake(TOKEN1), 10 ether);
+        assertEq(lens.totalStake(TOKEN1), 10 ether);
         assertEq(vault.lastSeenHotkeys(TOKEN1).length, MAX_VALIDATORS);
     }
 
@@ -75,7 +75,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
 
         assertEq(_getVaultStake(wide[MAX_VALIDATORS - 1], NETUID1), 0, "dropped validator swept");
-        assertEq(vault.totalStake(TOKEN1), UNSPREADABLE_DEPOSIT, "total conserved");
+        assertEq(lens.totalStake(TOKEN1), UNSPREADABLE_DEPOSIT, "total conserved");
         assertEq(vault.lastSeenHotkeys(TOKEN1).length, MAX_VALIDATORS - 1, "nothing left to remember");
     }
 
@@ -88,7 +88,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         bytes32[] memory second = _hotkeysFrom("second-wave", MAX_VALIDATORS);
         _setValidators(NETUID1, second, _evenWeights(MAX_VALIDATORS));
 
-        assertEq(vault.totalStake(TOKEN1), 10 ether, "union read prices the whole position");
+        assertEq(lens.totalStake(TOKEN1), 10 ether, "union read prices the whole position");
 
         vault.rebalance(NETUID1);
 
@@ -115,7 +115,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         vault.unwrapForTao(TOKEN1, shares, 0);
 
         assertEq(alice.balance - balanceBefore, 10 ether, "rotated-out position sold in full");
-        assertEq(vault.totalStake(TOKEN1), 0);
+        assertEq(lens.totalStake(TOKEN1), 0);
     }
 
     /// @dev A price the EVM reads as zero carries no bound, so the roll must attempt the move and
@@ -131,7 +131,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
 
         assertEq(_getVaultStake(wide[MAX_VALIDATORS - 1], NETUID1), 0, "dropped validator swept");
-        assertEq(vault.totalStake(TOKEN1), 10 ether);
+        assertEq(lens.totalStake(TOKEN1), 10 ether);
     }
 
     /// @dev At 64 validators an even split of a small position puts every target under the chain's
@@ -145,7 +145,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         _depositAndWrap(alice, NETUID1, deposit);
 
         assertEq(_getVaultStake(hks[0], NETUID1), deposit, "position stays where it landed");
-        assertEq(vault.totalStake(TOKEN1), deposit, "and is fully priced");
+        assertEq(lens.totalStake(TOKEN1), deposit, "and is fully priced");
     }
 
     // Every slot's target clears the chain's floor at the widest set, so the spread is always legal
@@ -162,7 +162,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         _depositAndWrap(alice, NETUID1, amount);
 
         _assertEvenSpread(hks, NETUID1, amount);
-        assertEq(vault.totalStake(TOKEN1), amount);
+        assertEq(lens.totalStake(TOKEN1), amount);
     }
 
     function testFuzz_Rebalance_RotationPreservesTotal(uint256 fromCount, uint256 toCount, uint256 amount) public {
@@ -180,7 +180,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
 
         assertEq(_vaultStakeAcross(rotated, NETUID1), amount, "whole position moved to the new set");
-        assertEq(vault.totalStake(TOKEN1), amount);
+        assertEq(lens.totalStake(TOKEN1), amount);
         assertEq(vault.lastSeenHotkeys(TOKEN1).length, toCount, "the remembered set follows the new one");
     }
 
@@ -193,12 +193,12 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         _depositAndWrap(alice, NETUID1, amount);
 
         uint256 shares = vault.balanceOf(alice, TOKEN1) * burnBps / BPS_BASE;
-        (uint256 previewAlpha,) = vault.previewUnwrap(TOKEN1, shares);
+        (uint256 previewAlpha,) = lens.previewUnwrap(TOKEN1, shares);
 
         vm.prank(alice);
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
 
         assertEq(_stakeAcross(hks, _toSubstrate(alice), NETUID1), previewAlpha, "delivery matches the quote");
-        assertEq(vault.totalStake(TOKEN1), amount - previewAlpha, "only the delivered alpha left the vault");
+        assertEq(lens.totalStake(TOKEN1), amount - previewAlpha, "only the delivered alpha left the vault");
     }
 }

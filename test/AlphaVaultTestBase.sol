@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import { Vm } from "forge-std/Test.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
+import { AlphaVaultLens } from "src/AlphaVaultLens.sol";
 import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
 import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
@@ -22,6 +23,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
 
     AlphaVault public vault;
+    AlphaVaultLens public lens;
     DepositMailbox public mailboxLogic;
     SubnetClone public subnetLogic;
     ValidatorRegistry public registry;
@@ -89,6 +91,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
         // validatorRegistry is immutable, so it must exist before the vault is constructed.
         vault = _deployVault(address(registry));
+        lens = new AlphaVaultLens(vault);
 
         _setValidators(
             NETUID1, _hotkeys(hotkey1, hotkey2, hotkey3), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
@@ -192,7 +195,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         address cloneAddr = vault.getDepositAddress(user, netuid);
         bytes32 cloneColdkey = _toSubstrate(cloneAddr);
         // Use the best validator hotkey for this subnet (matches what wrap will resolve)
-        bytes32 hotkey = vault.getCurrentValidators(netuid)[0];
+        bytes32 hotkey = lens.getCurrentValidators(netuid)[0];
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey, cloneColdkey, netuid, amount);
     }
 
@@ -208,7 +211,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     }
 
     function _wrap(address user, uint256 netuid) internal {
-        _wrapHotkey(user, netuid, vault.getCurrentValidators(netuid)[0]);
+        _wrapHotkey(user, netuid, lens.getCurrentValidators(netuid)[0]);
     }
 
     function _wrapHotkey(address user, uint256 netuid, bytes32 chosenHotkey) internal {
@@ -370,7 +373,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     // The claimable-TAO quote is a commitment: a nonzero quote pays exactly, a zero quote means
     // the claim reverts.
     function _claimQuotedAmount(address user, uint256 tokenId) internal returns (uint256 delivered) {
-        uint256 quoted = vault.claimableTaoOf(user, tokenId);
+        uint256 quoted = lens.claimableTaoOf(user, tokenId);
         if (quoted == 0) {
             vm.expectRevert();
             vm.prank(user);
