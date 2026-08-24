@@ -11,10 +11,15 @@ import { NetuidOutOfRange, NoSharesOutstanding, SubnetDissolved, ZeroAddress } f
 /// @notice Every quote an `AlphaVault` integrator needs: backing, share price, deposit and exit
 ///         previews, claimable TAO and the configured validator set.
 /// @dev    Holds no state and has no privileges: it reads the vault's public getters and the same
-///         chain state the vault itself reads, through the libraries the vault uses, so a quote and
-///         the call it quotes cannot drift. Being separate is what keeps the quotes changeable: the
-///         vault is immutable and has no admin, so anything living inside it is frozen for good,
-///         while a lens can be redeployed against the same vault whenever a quote needs to improve.
+///         chain state the vault reads, through the same libraries, so a lens and a vault built
+///         from one source agree by construction. That agreement belongs to the build rather than
+///         to the pairing: a lens compiled from changed library source still answers for the same
+///         vault while computing differently, and any contract at all can return the right address
+///         from `vault()`. The address to read quotes from is therefore one to take from a trusted
+///         source and pin, and its runtime code is worth comparing against a reviewed build.
+///         Being separate is what keeps the quotes changeable: the vault is immutable and has no
+///         admin, so anything living inside it is frozen for good, while a lens can be redeployed
+///         against the same vault whenever a quote needs to improve.
 contract AlphaVaultLens {
     AlphaVault public immutable vault;
     /// @notice The registry the vault takes its validator sets from, resolved once at construction

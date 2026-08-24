@@ -33,7 +33,8 @@ def _validator_columns(registry: Contract | None, netuid: int) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--vault-address", required=True, help="AlphaVault contract address")
-    parser.add_argument("--lens-address", required=True, help="AlphaVaultLens contract address")
+    parser.add_argument("--lens-address", required=True,
+                        help="AlphaVaultLens contract address, from the same trusted source as the vault")
     parser.add_argument("--registry-address", help="Optional ValidatorRegistry address (enables validator columns)")
     parser.add_argument("--rpc-url", required=True, help="HTTP RPC URL of the Subtensor EVM endpoint")
     target = parser.add_mutually_exclusive_group(required=True)
@@ -51,6 +52,7 @@ def main() -> None:
         abi=load_abi("AlphaVaultLens"),
     )
     # A row assembled from a mismatched pair would mix one vault's supply with another's backing.
+    # This catches the wrong lens, not a dishonest one: the address still has to be trusted.
     lens_vault = lens.functions.vault().call()
     if lens_vault != w3.to_checksum_address(args.vault_address):
         sys.exit(f"lens {args.lens_address} reads vault {lens_vault}, not {args.vault_address}")

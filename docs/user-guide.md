@@ -6,13 +6,23 @@ already staked on the subnet you want to wrap. Read
 
 Two addresses matter. You send every transaction to the vault. You read
 every quote - backing, share price, deposit and exit previews, claimable
-TAO, and the validator set - from the lens deployed alongside it.
+TAO, and the validator set - from the lens deployed alongside it. Take the
+lens address from the same place you took the vault address from. A lens is
+ordinary code that anyone can deploy, and the chain marks none of them as
+official.
 
-Check that the two belong together before you trust a quote: `vault()` on
-the lens returns the vault it reads, and it must equal the address you
-send transactions to. Anyone can deploy a lens against any vault, and a
-lens left over from an earlier vault keeps answering with that vault's
-numbers. The check costs one call and only has to be done once per pair.
+Then check that the two agree: `vault()` on the lens returns the vault it
+reads, and it must equal the address you send transactions to. That catches
+a lens left over from an earlier vault, which would keep answering with
+that vault's numbers. It tells you the two addresses agree, and that is all
+it tells you - any contract can return the right address from `vault()` and
+still invent every quote it gives you. What makes the quotes real is where
+the address came from.
+
+If you are building a contract on top of the vault, pin the lens address at
+deployment and compare its runtime code against the lens you reviewed. A
+quote that sizes a slippage bound is worth attacking, so accepting a lens
+address as a call argument is a way to be paid less than you asked for.
 
 ## Wrapping
 
