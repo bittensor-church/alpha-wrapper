@@ -85,6 +85,33 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         vm.snapshotGasLastCall("AlphaVaultLens", "previewUnwrap");
     }
 
+    // The batch repeats one id, so its entry prices the loop rather than the cold-storage cost of
+    // twenty separate positions: a regression guard, not evidence of a saving. Batching collapses
+    // only the caller's round trips, ~2% against the same twenty reads made one by one.
+    function test_gas_claimableTaoOf() public {
+        _seedClaimableTao();
+
+        lens.claimableTaoOf(alice, TOKEN1);
+        vm.snapshotGasLastCall("AlphaVaultLens", "claimableTaoOf");
+    }
+
+    function test_gas_batchClaimableTaoOf_20Positions() public {
+        _seedClaimableTao();
+        uint256[] memory ids = new uint256[](20);
+        for (uint256 i = 0; i < ids.length; i++) {
+            ids[i] = TOKEN1;
+        }
+
+        lens.batchClaimableTaoOf(alice, ids);
+        vm.snapshotGasLastCall("AlphaVaultLens", "batchClaimableTaoOf (20 positions)");
+    }
+
+    function _seedClaimableTao() private {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        _donateToClone(vault.subnetClone(TOKEN1), 3 ether);
+    }
+
     // --------- widest supported set ------------------------------------------
     // Three validators is the expected size; the entries below price the 64-validator ceiling so a
     // change that only shows up at full width cannot land unnoticed.
