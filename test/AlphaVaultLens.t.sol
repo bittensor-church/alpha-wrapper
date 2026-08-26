@@ -86,4 +86,54 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
     function test_Constructor_ResolvesTheVaultsRegistry() public view {
         assertEq(address(lens.validatorRegistry()), address(vault.validatorRegistry()));
     }
+
+    /// @dev The batch exists only to save the caller round trips, so its answers have to be the
+    ///      single-position quotes exactly - including for a position the holder has nothing in,
+    ///      and one whose clone was never created.
+    function test_BatchClaimableTaoOf_MatchesTheSingleQuotePositionForPosition() public {
+        _depositAndWrap(alice, NETUID1, 10 ether);
+        _depositAndWrap(alice, NETUID2, 4 ether);
+        _donateToClone(vault.subnetClone(TOKEN1), 3 ether);
+        _donateToClone(vault.subnetClone(TOKEN2), 1 ether);
+
+        uint256 unseeded = vault.currentTokenId(NETUID2) + 1; // no clone was ever deployed for it
+        uint256[] memory ids = new uint256[](3);
+        ids[0] = TOKEN1;
+        ids[1] = TOKEN2;
+        ids[2] = unseeded;
+
+        uint256[] memory batch = lens.batchClaimableTaoOf(alice, ids);
+        assertEq(batch.length, ids.length, "one amount per id");
+        assertGt(batch[0], 0, "the scenario must leave TAO to quote");
+        assertGt(batch[1], 0, "the scenario must leave TAO to quote on the second position");
+        assertEq(batch[2], 0, "a position with no clone quotes nothing");
+        for (uint256 i = 0; i < ids.length; i++) {
+            assertEq(batch[i], lens.claimableTaoOf(alice, ids[i]), "batch diverged from the single quote");
+        }
+    }
+
+    function test_BatchClaimableTaoOf_QuotesNothingForNoPositions() public view {
+        assertEq(lens.batchClaimableTaoOf(alice, new uint256[](0)).length, 0);
+    }
+
+    /// @dev Order and repetition must not change an answer: the quote is a pure read of each
+    ///      position, so a duplicated id quotes the same both times.
+    function testFuzz_BatchClaimableTaoOf_IsOrderAndRepetitionIndependent(uint256 donation) public {
+        donation = bound(donation, 1 gwei, 1e6 ether);
+        _depositAndWrap(alice, NETUID1, 10 ether);
+        _depositAndWrap(alice, NETUID2, 4 ether);
+        _donateToClone(vault.subnetClone(TOKEN1), donation);
+
+        uint256[] memory ids = new uint256[](4);
+        ids[0] = TOKEN2;
+        ids[1] = TOKEN1;
+        ids[2] = TOKEN1;
+        ids[3] = TOKEN2;
+
+        uint256[] memory batch = lens.batchClaimableTaoOf(alice, ids);
+        assertEq(batch[1], batch[2], "the same id quoted twice must agree");
+        assertEq(batch[0], batch[3], "the same id quoted twice must agree");
+        assertEq(batch[1], lens.claimableTaoOf(alice, TOKEN1), "TOKEN1");
+        assertEq(batch[0], lens.claimableTaoOf(alice, TOKEN2), "TOKEN2");
+    }
 }
