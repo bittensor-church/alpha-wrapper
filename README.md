@@ -25,6 +25,9 @@ Bittensor alpha-token wrapper (ERC-1155 vault + staking precompile integration).
   chain's minimums, stray TAO
 - [Security model](docs/security-model.md) - roles, trust boundaries,
   safeguards
+- [Backing resolution](docs/design/backing-resolution.md) - what the vault
+  does when a validator's hotkey swap or a chain sweep moves its alpha: the
+  one-hop resolver, the recovery window, and the write-off
 
 Tooling docs: [`scripts/README.md`](scripts/README.md) for the on-chain
 observability scripts, [`e2e/README.md`](e2e/README.md) for the end-to-end
@@ -39,3 +42,31 @@ git submodule update --init --recursive
 forge build
 forge test
 ```
+
+## Gas
+
+`snapshots/AlphaVault.json` and `snapshots/AlphaVaultLens.json` record what each
+entry point costs, and CI fails on a change, so a regression shows up in review.
+
+**Read them as approximations.** The unit tests mock every chain call, and a mock
+costs what it costs rather than what the chain charges. Measured against a live
+localnet at three validators: `wrap` and `unwrap` land within about a tenth of the
+recorded figures, while `unwrapForTao` runs half again dearer than shown - it leans
+hardest on the swap and unstake calls the mock makes cheap. The sixty-four-validator
+entries have no measured counterpart at all and are the least trustworthy, since that
+is where per-validator chain reads dominate.
+
+For a real figure, read the gas the end-to-end run prints for every call it makes.
+Each run collects them into its GitHub Actions summary, one row per broadcast call.
+
+Regenerate the snapshots with the profile and thread count CI checks them under:
+
+```bash
+FOUNDRY_PROFILE=ci FOUNDRY_GAS_SNAPSHOT_CHECK=false FOUNDRY_GAS_SNAPSHOT_EMIT=true \
+  forge snapshot --tolerance 1 --no-match-contract Invariant --threads 4
+```
+
+The thread count matters: the fuzzer's dictionary is shared across concurrently
+running tests, so a different one produces different inputs and a snapshot CI will
+reject. Run `forge coverage` only after regenerating, never before - it builds
+unoptimized and overwrites the recorded numbers.
