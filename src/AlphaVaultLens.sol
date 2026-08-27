@@ -192,6 +192,25 @@ contract AlphaVaultLens {
     ///         would pay, including entitlement the storage has not settled yet, quoted at the
     ///         granularity a native transfer can deliver.
     function claimableTaoOf(address account, uint256 tokenId) external view returns (uint256) {
+        return _claimableTaoOf(account, tokenId);
+    }
+
+    /// @notice `claimableTaoOf` for a set of positions at once, aligned to `tokenIds`.
+    /// @dev    A holder spread across many subnets quotes its whole native entitlement in one
+    ///         call. Each position is quoted independently: they share no state, so this is the
+    ///         per-position quote repeated, never a different answer from the single-position one.
+    function batchClaimableTaoOf(address account, uint256[] calldata tokenIds)
+        external
+        view
+        returns (uint256[] memory amounts)
+    {
+        amounts = new uint256[](tokenIds.length);
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            amounts[i] = _claimableTaoOf(account, tokenIds[i]);
+        }
+    }
+
+    function _claimableTaoOf(address account, uint256 tokenId) private view returns (uint256) {
         uint256 liability = vault.taoLiability(tokenId);
         (uint256 indexIncrease, uint256 liabilityIncrease) = _previewSyncTao(tokenId, liability);
         uint256 index = vault.cumulativeTaoPerShare(tokenId) + indexIncrease;
