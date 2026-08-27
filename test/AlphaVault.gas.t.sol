@@ -4,6 +4,16 @@ pragma solidity ^0.8.20;
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { MAX_VALIDATORS } from "src/ValidatorRegistry.sol";
 
+// Per-call gas, recorded into snapshots/AlphaVault.json so a regression shows up in review.
+//
+// The figures are approximations. Every chain call here is mocked, and a mock costs what it
+// costs rather than what the chain charges. Measured against a live localnet at three
+// validators, wrap and unwrap land within about a tenth of these numbers, while the TAO rail
+// runs half again dearer than shown - it leans hardest on the calls the mock makes cheap. The
+// sixty-four-validator entries have no measured counterpart and are the least trustworthy of
+// all, since that is where per-validator reads dominate. Use these to catch a change in cost,
+// and the gas the e2e run prints for every call to size a real one.
+
 /// forge-config: default.isolate = true
 contract AlphaVaultGasTest is AlphaVaultTestBase {
     function test_gas_wrap_firstWrap() public {
