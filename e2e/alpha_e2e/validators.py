@@ -9,7 +9,7 @@ import pathlib
 import sys
 from typing import List
 
-from . import config
+from . import chain, config
 
 _SCRIPTS_DIR = pathlib.Path(__file__).resolve().parents[2] / "scripts"
 
@@ -107,4 +107,5 @@ def set_validators(
     receipt = w3.eth.wait_for_transaction_receipt(transaction_hash, timeout=60)
     if receipt.status != 1:
         raise ValidatorUpdateError(f"updateValidators failed (tx {transaction_hash.hex()})")
+    print(f"  {chain.GAS_LOG_PREFIX} {'updateValidators':<44} {receipt.gasUsed:>10,}")
     return transaction_hash.hex()

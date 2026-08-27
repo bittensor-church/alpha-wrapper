@@ -7,6 +7,7 @@ import { VaultReads } from "src/libraries/VaultReads.sol";
 import {
     BackingShortfall,
     BackingUnchanged,
+    BackingUnchanged,
     NothingToRecover,
     NothingToUnwrap,
     RecoveryBelowFloor,
@@ -142,6 +143,41 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
     function test_RevertWhen_SyncingATokenWithNoPosition() public {
         vm.expectRevert(NothingToUnwrap.selector);
         vault.syncBacking(TOKEN1);
+    }
+
+    /// @dev A dissolved position's alpha legitimately became TAO, so its emptied slots are not a
+    ///      loss and must not be filed as one.
+    function test_RevertWhen_SyncingARetiredTokenId() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _setRegBlock(NETUID1, 999);
+
+        vm.expectRevert(BackingUnchanged.selector);
+        vault.syncBacking(TOKEN1);
+    }
+
+    /// @dev A slot whose backing went missing must not keep the record pointed at the key it went
+    ///      missing from: a write-off there would leave holders' alpha staked under a key the
+    ///      attesters never named, and a retired one would refuse every move aimed at it.
+    function test_WriteOff_ReturnsAShortSlotToItsAttestedValidator() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        vault.rebalance(NETUID1);
+        assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey4, "the record followed the swap");
+
+        // The successor is then emptied with nothing on chain explaining it, and left unusable.
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, _subnetColdkey(NETUID1), NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey4, true);
+        _runOutRecoveryWindow(TOKEN1);
+
+        vault.rebalance(NETUID1);
+
+        assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey1, "the slot answers to its validator again");
+        assertEq(_getVaultStake(hotkey4, NETUID1), 0, "and nothing was staked toward the dead key");
+        assertTrue(lens.isBackingIntact(TOKEN1), "the token is ordinary again");
+
+        uint256 quarter = vault.balanceOf(alice, TOKEN1) / 4;
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, quarter, _toSubstrate(alice));
     }
 
     /// @dev Starting a clock persists followed swaps and settles nothing else, so it takes the same

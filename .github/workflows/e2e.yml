@@ -97,7 +97,24 @@ jobs:
 
       - name: Run E2E test
         working-directory: e2e
-        run: python -m pytest ${{ matrix.scenario }} -v -m scenario --tb=short
+        # -s so the scenarios' own output, the per-call gas lines included, reaches the log;
+        # pipefail so a failing run still fails the step through the tee.
+        run: |
+          set -o pipefail
+          python -m pytest ${{ matrix.scenario }} -v -s -m scenario --tb=short | tee /tmp/e2e.log
+
+      - name: Report on-chain gas per call
+        if: always()
+        # Real precompile costs, which no local run can measure. One row per broadcast call.
+        run: |
+          if grep -q 'GAS |' /tmp/e2e.log; then
+            {
+              echo "## On-chain gas: ${{ matrix.scenario }}"
+              echo '```'
+              grep 'GAS |' /tmp/e2e.log | sed 's/^ *GAS | *//'
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Collect subtensor logs
         if: failure()

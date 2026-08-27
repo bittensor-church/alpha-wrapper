@@ -172,11 +172,9 @@ contract BackingResolutionTest is AlphaVaultTestBase {
 
     // -------------------- Emptyings the chain does not explain -------------------
 
-    /// @dev The chain's dust sweep records nothing at all. Reading that silence as proof of a sweep
-    ///      would be unsound, because a swap leaves the same silence once the old key is registered
-    ///      again and the chain drops the edge: an operator could swap away with the alpha,
-    ///      re-register, and have the vault write the loss off and reprice the token beneath it. So
-    ///      an emptying nothing explains stands until a watcher resolves it or its window runs.
+    /// @dev A dust sweep records nothing at all, and a swap leaves the same silence once its edge
+    ///      is dropped - so reading silence as a sweep would let an operator take the alpha and
+    ///      have the vault reprice the token beneath its holders.
     function test_EdgeFreeEmptying_FailsClosed() public {
         uint256 netuid = 5;
         _registerSubnet(netuid, hotkey1);

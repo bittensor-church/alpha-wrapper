@@ -95,8 +95,10 @@ over several sales.
   to preserve the backing and then chooses liveness over waiting longer.
 - Backing nobody recovers inside that window is written off across the
   holders of the moment, and alpha found afterwards accrues to whoever
-  holds shares then. Both are accepted policy rather than accidents; the
-  vault has no recapitalization mechanism.
+  holds shares then. Whoever knows where that alpha sits can deposit at
+  the written-down price first and recover it second, taking most of it
+  from the holders who bore the loss. Accepted policy rather than an
+  accident; the vault has no recapitalization mechanism.
 - The vault relies on someone watching it. Nothing is lost if no one
   does - the window still runs and the token still reopens - but the
   missing alpha is then socialized rather than recovered.

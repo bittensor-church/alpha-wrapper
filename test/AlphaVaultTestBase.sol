@@ -433,8 +433,9 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     function _simulateOffVaultSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
         bytes32 coldkey = _subnetColdkey(netuid);
         uint256 amount = _getStakeForColdkey(fromHotkey, coldkey, netuid);
+        uint256 alreadyThere = _getStakeForColdkey(toHotkey, coldkey, netuid);
         MockStaking(STAKING_PRECOMPILE).setStake(fromHotkey, coldkey, netuid, 0);
-        MockStaking(STAKING_PRECOMPILE).setStake(toHotkey, coldkey, netuid, amount);
+        MockStaking(STAKING_PRECOMPILE).setStake(toHotkey, coldkey, netuid, alreadyThere + amount);
     }
 
     /// @dev A swap as the chain records it: the stake moves and the successor edge points at it.

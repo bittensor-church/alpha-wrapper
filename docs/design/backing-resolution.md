@@ -120,10 +120,16 @@ the vault itself never owns one.
 At the deadline the missing remainder is given up on and the loss falls
 across everyone holding shares from that moment. This is a write-off
 policy, not a finding that the alpha was destroyed. Alpha found later is
-new backing for whoever holds shares then, and a holder who arrived
-after the write-off may benefit from it. That transfer between cohorts
-is deliberate: it is the price of a bounded window, chosen over leaving
-a token shut indefinitely.
+new backing for whoever holds shares then.
+
+That transfer between cohorts is deliberate, and it is not merely
+passive drift. Deposits reopen at the deadline while `recoverStray`
+keeps working, so whoever knows where the stray alpha sits controls the
+order: they can deposit against the written-down price and only then
+bring the alpha home, taking most of it from the holders who bore the
+loss. The vault does not prevent that. It is the accepted price of a
+bounded window, chosen over leaving a token shut indefinitely, and there
+is no recapitalization mechanism.
 
 Alpha below the chain's movement floor, and dust a chain operation
 rounds away, may stay unrecovered and be socialized the same way.

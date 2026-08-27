@@ -73,6 +73,20 @@ def cast_send(
         return {"status": "0x0", "raw": completed.stdout + completed.stderr}
 
 
+# Printed once per on-chain call so a CI log can be grepped for the real cost of every
+# vault entry point: mock gas says nothing about the precompiles, which dominate here.
+GAS_LOG_PREFIX = "GAS |"
+
+
+def report_gas(label: str, receipt: dict, *, reverted: bool = False) -> None:
+    """Print one greppable line for a broadcast call's gas."""
+    used = receipt_gas_used(receipt)
+    if used is None:
+        return
+    outcome = " (reverted)" if reverted else ""
+    print(f"  {GAS_LOG_PREFIX} {label:<44} {used:>10,}{outcome}")
+
+
 def receipt_ok(receipt: dict) -> bool:
     return receipt.get("status") == "0x1"
 

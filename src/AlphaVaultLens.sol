@@ -39,11 +39,10 @@ contract AlphaVaultLens {
     }
 
     /// @notice Total alpha backing this token's shares. Returns 0 before the clone exists.
-    /// @dev    Reverts `BackingShortfall` while the vault holds backing it cannot account for and
-    ///         that loss's recovery window is still running. What it would otherwise report counts
-    ///         only what the vault can locate, so it understates the holding and steps back up the
-    ///         moment the alpha is found; anything valuing the token off it would be right by
-    ///         accident. `locatedStake` reports that figure regardless, and `isBackingIntact` and
+    /// @dev    Reverts `BackingShortfall` while a loss's recovery window is still running: the
+    ///         figure it would otherwise give counts only what the vault can locate, so it
+    ///         understates the holding and steps back up the moment the alpha is found.
+    ///         `locatedStake` gives that figure regardless, and `isBackingIntact` and
     ///         `frozenUntil` report the state without reverting.
     ///
     ///         While subtensor dissolution cleanup runs for the netuid the backing alpha is in
@@ -60,10 +59,9 @@ contract AlphaVaultLens {
         return backing.total;
     }
 
-    /// @notice Alpha the vault can find for this token right now, whether or not that is all of it.
-    /// @dev    The figure behind `totalStake`, answering where that one refuses. Read it to see
-    ///         what the position holds while a loss is being chased - never to value a holding,
-    ///         which is what `totalStake` is for and why that one would rather revert than answer.
+    /// @notice Alpha the vault can find for this token, whether or not that is all of it.
+    /// @dev    The figure behind `totalStake`, answering where that one refuses. For watching a
+    ///         position while a loss is chased, never for valuing a holding.
     function locatedStake(uint256 tokenId) external view returns (uint256) {
         (, VaultReads.Backing memory backing) = _readBacking(tokenId);
         return backing.total;
@@ -76,11 +74,10 @@ contract AlphaVaultLens {
     }
 
     /// @notice Whether the vault can account for the alpha it expects under every validator it
-    ///         records. A hotkey swap the vault can follow on its own reads true.
-    /// @dev    False reports a visible gap, which is not by itself a refusal: the rails refuse
-    ///         while some missing slot's recovery window is still running, and answer again from
-    ///         the moment it runs out - this still reads false until a settling call re-anchors
-    ///         the record. Gate on `frozenUntil` to refuse on the vault's own terms.
+    ///         records. A hotkey swap it can follow on its own reads true.
+    /// @dev    A visible gap is not by itself a refusal: the rails answer again from the moment a
+    ///         window runs out, while this still reads false until a settling call re-anchors the
+    ///         record. Gate on `frozenUntil` to refuse on the vault's own terms.
     function isBackingIntact(uint256 tokenId) external view returns (bool) {
         (, VaultReads.Backing memory backing) = _readBacking(tokenId);
         return !VaultReads.isShort(backing);
@@ -88,11 +85,10 @@ contract AlphaVaultLens {
 
     /// @notice When the losses on file stop holding the token shut, as a unix timestamp; zero when
     ///         nothing is missing.
-    /// @dev    The latest deadline across the slots the vault cannot account for. A visible loss
-    ///         nobody has recorded yet reads `type(uint256).max`: no deadline exists until a call
-    ///         to `syncBacking` or a settling rail starts one, and reporting zero there would read
-    ///         as open now while every rail refuses. A timestamp already past means every window
-    ///         has run and the token answers again.
+    /// @dev    The latest deadline across the slots the vault cannot account for. A loss nobody
+    ///         has recorded yet reads `type(uint256).max`, since no deadline exists until
+    ///         `syncBacking` or a settling rail starts one. A timestamp already past means every
+    ///         window has run and the token answers again.
     function frozenUntil(uint256 tokenId) external view returns (uint256 deadline) {
         (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _readBacking(tokenId);
         for (uint256 i; i < backing.short.length;) {
@@ -108,9 +104,8 @@ contract AlphaVaultLens {
         }
     }
 
-    /// @dev The same reading the vault's own rails take, through the same library and never
-    ///      applied. A dissolved token's alpha legitimately became TAO, so nothing is held to the
-    ///      record there and the reading is empty.
+    /// @dev The same reading the vault's rails take, never applied. A dissolved token's alpha
+    ///      became TAO, so no record holds it to anything and it is simply totalled.
     function _readBacking(uint256 tokenId)
         private
         view

@@ -80,12 +80,8 @@ library VaultReads {
 
     // -------------------- Backing record ----------------------------------------
 
-    /// @dev One record per validator the position is spread across. `logical` is the attested
-    ///      identity the registry assigns weight to; `active` is the key expected to be holding
-    ///      that identity's alpha. They start equal and diverge only when a hotkey swap moves the
-    ///      stake before the attesters catch up. `tracked` is the exact balance the last settle
-    ///      read at `active`, and `shortSince` is when a call first found that balance missing -
-    ///      zero while the slot accounts for itself.
+    /// @dev One record per validator the position is spread across. `logical` and `active` differ
+    ///      only while a hotkey swap has moved the stake and the attesters have not caught up.
     struct Slot {
         bytes32 logical;
         bytes32 active;
@@ -93,11 +89,14 @@ library VaultReads {
         uint64 shortSince;
     }
 
-    /// @dev One reading of a record against the chain: the physical key each slot resolves to, what
-    ///      sits there, which slots cannot account for themselves, the located total, and the first
-    ///      slot whose loss still holds the position shut. Carried as a struct because the coverage
-    ///      build compiles at minimum optimization, where returning the parts separately runs the
-    ///      stack out.
+    /// @dev One reading of a record against the chain. A struct because the coverage build
+    ///      compiles at minimum optimization, where returning the parts separately runs the stack
+    ///      out.
+    /// @param keys     The key each slot resolves to.
+    /// @param balances What sits under each of them.
+    /// @param short    Which slots cannot account for themselves.
+    /// @param total    What the reading located in all.
+    /// @param standing First slot whose loss still holds the position shut; max when none does.
     struct Backing {
         bytes32[] keys;
         uint256[] balances;
@@ -106,20 +105,17 @@ library VaultReads {
         uint256 standing;
     }
 
-    /// @dev The chain credits its own transfers, moves and swap migrations a few RAO short of the
-    ///      amount asked for, so expectations are compared with this much give rather than for
-    ///      equality. It is an accepted ceiling on accounting dust the vault will never chase, not
-    ///      a claim that the chain preserves exact equality.
+    /// @dev Expectations are compared with this much give, never for equality. An accepted ceiling
+    ///      on accounting dust the vault will not chase.
     uint256 internal constant TRACKED_SLACK_RAO = 1e3;
 
-    /// @dev How long a watcher has to point the vault at missing alpha before the record gives up
-    ///      on it and the remainder is written off across everyone still holding shares. Each
-    ///      slot's loss runs its own window from the call that first recorded it.
+    /// @dev How long anyone has to point the vault at missing alpha before the remainder is
+    ///      written off across the holders of the moment. Each slot's loss runs its own window.
     uint256 internal constant RECOVERY_WINDOW = 3 hours;
 
-    /// @dev Reads the record against the chain without writing anything, resolving at most one
-    ///      hotkey swap per slot. Shared by the vault's rails and the lens's quotes, so a quote and
-    ///      the call it quotes can never disagree about what the position holds.
+    /// @dev Reads the record against the chain, writing nothing and resolving at most one hotkey
+    ///      swap per slot. The vault's rails and the lens's quotes share it, so they cannot
+    ///      disagree about what the position holds.
     function resolveBacking(Slot[] memory slots, bytes32 coldkey, uint16 netuid)
         internal
         view
@@ -154,18 +150,12 @@ library VaultReads {
         }
     }
 
-    /// @dev The one shortfall that resolves itself: an ordinary validator hotkey swap, read off the
-    ///      chain's own successor edge and accepted only when it explains the whole slot.
-    ///
-    ///      A residual left on the old key is refused rather than followed, because a slot spread
-    ///      across two physical keys is more than the record can carry; a watcher consolidates it
-    ///      with `recoverStray` instead. A successor another slot already answers for is refused
-    ///      too - one balance may never back two expectations. Exactly one edge is read and the
-    ///      successor's own successor never is: a deeper trail, an erased edge, an ambiguous or a
-    ///      partial case is a shortfall for the watcher to resolve.
-    ///
-    ///      Deliberately no price and no threshold: judging a past event by today's valuation gets
-    ///      it wrong in both directions as the market moves.
+    /// @dev The one shortfall that resolves itself: a validator hotkey swap, accepted only when the
+    ///      successor explains the whole slot. A residual left behind is refused because a slot
+    ///      spread across two keys is more than the record can carry, and a successor another slot
+    ///      answers for is refused because one balance may never back two expectations. Exactly one
+    ///      edge is read, and no price: judging a past event by today's valuation gets it wrong in
+    ///      both directions.
     function _followSwap(
         bytes32[] memory keys,
         uint256 index,
@@ -194,21 +184,19 @@ library VaultReads {
         }
     }
 
-    /// @dev Whether `stake` accounts for a slot owed `tracked`, with the give the chain's own
-    ///      crediting requires.
+    /// @dev Whether `stake` accounts for a slot owed `tracked`.
     function coversTracked(uint256 stake, uint256 tracked) internal pure returns (bool) {
         return stake + TRACKED_SLACK_RAO >= tracked;
     }
 
-    /// @dev Whether a loss recorded at `shortSince` still holds the position shut. A loss nobody
-    ///      has recorded yet counts: a deadline cannot pass before it exists, so an unrecorded loss
-    ///      blocks until someone calls `syncBacking` to start its clock.
+    /// @dev Whether a loss recorded at `shortSince` still holds the position shut. An unrecorded
+    ///      loss counts: a deadline cannot pass before it exists.
     function isWindowStanding(uint64 shortSince) internal view returns (bool) {
         // forge-lint: disable-next-line(block-timestamp)
         return shortSince == 0 || block.timestamp < shortSince + RECOVERY_WINDOW;
     }
 
-    /// @dev Whether any slot in this reading fails to account for itself, whatever its clock says.
+    /// @dev Whether any slot fails to account for itself, whatever its clock says.
     function isShort(Backing memory backing) internal pure returns (bool) {
         for (uint256 i; i < backing.short.length;) {
             if (backing.short[i]) return true;
