@@ -23,6 +23,7 @@ import {
     InsufficientShares,
     NetuidOutOfRange,
     NothingToUnwrap,
+    PositionTooSmall,
     SlippageExceeded,
     SubnetNotRegistered,
     SupplyCapExceeded,
@@ -175,7 +176,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///         `ChosenHotkeyNotInSet` otherwise. Use `reclaimAlphaFromMailbox` to recover alpha
     ///         parked under a non-attested hotkey.
     ///         Reverts `DepositTooSmall` when the deposit's tao value is below the chain's stake
-    ///         floor at a readable price; at a zero price read the flush falls through to the chain.
+    ///         floor, or `PositionTooSmall` when the resulting position cannot keep every non-zero
+    ///         validator slice above the chain's nominator sweep threshold, at a readable price.
+    ///         At a zero price read the flush falls through to the chain.
     ///         The fresh deposit lands before the consolidation so the roll can start from it,
     ///         letting rotated-out dust be consolidated even when it is the only other balance.
     ///         Rebalance moves below the stake floor are skipped pre-call, so small deposits may
@@ -207,12 +210,17 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         if (alphaPriceE18 != 0 && _isBelowFloorAtReadPrice(totalDeposit, alphaPriceE18)) {
             revert DepositTooSmall();
         }
+        uint256 dustThresholdTao = IStaking(STAKING_PRECOMPILE).getNominatorMinRequiredStake();
 
         // Flush before the consolidation so the roll can start from the fresh deposit.
         DepositMailbox(payable(userClone)).flush(destColdkey, chosenHotkey, netuid, totalDeposit);
         _consolidateRotatedStake(tokenId, clone, destColdkey, hotkeys, alphaPriceE18);
 
-        uint256 totalAlpha = _rebalance(tokenId, clone, hotkeys, weights, destColdkey, alphaPriceE18);
+        (uint256 totalAlpha, bool sweepSafe) =
+            _rebalance(tokenId, clone, hotkeys, weights, destColdkey, alphaPriceE18, dustThresholdTao);
+        if (!sweepSafe || (alphaPriceE18 != 0 && _taoValue(totalAlpha, alphaPriceE18) < dustThresholdTao)) {
+            revert PositionTooSmall();
+        }
 
         uint256 preStake = totalAlpha > totalDeposit ? totalAlpha - totalDeposit : 0;
         uint256 shares = VaultMath.sharesFor(preStake, totalSupply(tokenId), totalDeposit);
@@ -372,6 +380,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32 coldkey = VaultReads.coldkeyOf(clone);
         // Nothing on this path trades against the pool, so one price read holds for the whole call.
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
+        uint256 dustThresholdTao = IStaking(STAKING_PRECOMPILE).getNominatorMinRequiredStake();
         _consolidateRotatedStake(tokenId, clone, coldkey, hotkeys, alphaPriceE18);
 
         // After consolidation the whole backing sits on the current validators, so their
@@ -386,7 +395,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             return;
         }
 
-        uint256 assets = VaultMath.assetsFor(totalAlpha, totalSupply(tokenId), shares);
+        uint256 supply = totalSupply(tokenId);
+        // The last holder owns the whole backing. The virtual-asset cushion can otherwise quote a
+        // full burn a few RAO short after emissions, leaving a sweepable position with no shares.
+        uint256 assets = shares == supply ? totalAlpha : VaultMath.assetsFor(totalAlpha, supply, shares);
         if (assets == 0) revert ZeroAmount();
 
         // A sub-floor request is undeliverable on the alpha rail (the chain rejects the transfer);
@@ -396,18 +408,32 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             revert WithdrawTooSmall();
         }
 
+        uint256 remainingAlpha = totalAlpha - assets;
+        if (remainingAlpha != 0 && alphaPriceE18 != 0 && _taoValue(remainingAlpha, alphaPriceE18) < dustThresholdTao) {
+            revert PositionTooSmall();
+        }
+
         _burn(msg.sender, tokenId, shares);
         uint256 alphaOut = _deliverAndAlign(
-            tokenId, clone, hotkeys, weights, balances, coldkey, userSubstrateColdkey, assets, alphaPriceE18
+            tokenId,
+            clone,
+            hotkeys,
+            weights,
+            balances,
+            coldkey,
+            userSubstrateColdkey,
+            assets,
+            alphaPriceE18,
+            dustThresholdTao
         );
 
         emit Unwrapped(msg.sender, tokenId, shares, alphaOut);
     }
 
     /// @dev Delivers `assets` to `userColdkey` in one transfer - gathering the position onto a
-    ///      single hotkey first when no slot covers the request - then re-splits what remains toward
-    ///      `weights`. Reverts `GatherBelowFloor` when the gather's largest slot provably cannot
-    ///      clear the stake floor.
+    ///      single hotkey first when no slot covers the request or a direct delivery would leave a
+    ///      sweepable tail - then re-splits what remains toward `weights`. Reverts
+    ///      `GatherBelowFloor` when the gather's largest slot provably cannot clear the stake floor.
     function _deliverAndAlign(
         uint256 tokenId,
         address clone,
@@ -417,9 +443,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32 coldkey,
         bytes32 userColdkey,
         uint256 assets,
-        uint256 alphaPriceE18
+        uint256 alphaPriceE18,
+        uint256 dustThresholdTao
     ) private returns (uint256 alphaOut) {
         uint16 netuid = VaultMath.netuidOf(tokenId);
+        uint256 minSliceAlpha = _minSliceAlpha(dustThresholdTao, alphaPriceE18);
         uint256 deliveryIndex;
         for (uint256 i = 1; i < balances.length;) {
             if (balances[i] > balances[deliveryIndex]) deliveryIndex = i;
@@ -431,7 +459,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // gather is different: the chain can credit each move slightly short, so summed balances
         // overstate what a slot holds and the delivery slot is re-read after a gather runs.
         uint256 deliverable = balances[deliveryIndex];
-        if (balances[deliveryIndex] < assets) {
+        bool leavesUnsafeTail = deliverable > assets && deliverable - assets < minSliceAlpha;
+        if (deliverable < assets || leavesUnsafeTail) {
             // Every gather hop moves at least the largest slot's balance, so if even that cannot
             // clear the floor, no hop can: refuse up front rather than forward a call that could
             // burn the whole budget.
@@ -441,7 +470,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             // Each hop re-reads the moving balance from the chain: the previous hop may have been
             // credited one RAO short, and asking for more than the slot holds would revert.
             // `balances` still tracks which slots are drained and when the gather has enough.
-            for (uint256 i; i < balances.length && balances[deliveryIndex] < assets;) {
+            uint256 requiredBalance = assets + minSliceAlpha;
+            for (uint256 i; i < balances.length && balances[deliveryIndex] < requiredBalance;) {
                 if (i != deliveryIndex && balances[i] != 0) {
                     uint256 pile = IStaking(STAKING_PRECOMPILE).getStake(hotkeys[deliveryIndex], coldkey, netuid);
                     SubnetClone(payable(clone)).moveStake(hotkeys[deliveryIndex], hotkeys[i], netuid, pile);
@@ -460,7 +490,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         SubnetClone(payable(clone)).flush(userColdkey, hotkeys[deliveryIndex], netuid, alphaOut);
         // Re-read live balances so the weight re-split never moves more than a slot holds.
         uint256[] memory postBalances = VaultReads.fetchBalances(hotkeys, coldkey, netuid);
-        _alignToWeights(tokenId, clone, hotkeys, weights, postBalances, alphaPriceE18);
+        (, bool sweepSafe) =
+            _alignToWeights(tokenId, clone, hotkeys, weights, postBalances, alphaPriceE18, dustThresholdTao);
+        if (!sweepSafe) revert PositionTooSmall();
     }
 
     function _unwrapFromDissolvedSubnet(uint256 tokenId, uint256 shares, address clone) private {
@@ -495,8 +527,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         (bytes32[] memory hotkeys, uint16[] memory weights) = VaultReads.resolveValidators(validatorRegistry, nid);
         bytes32 coldkey = VaultReads.coldkeyOf(clone);
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
+        uint256 dustThresholdTao = IStaking(STAKING_PRECOMPILE).getNominatorMinRequiredStake();
         _consolidateRotatedStake(tokenId, clone, coldkey, hotkeys, alphaPriceE18);
-        _rebalance(tokenId, clone, hotkeys, weights, coldkey, alphaPriceE18);
+        _rebalance(tokenId, clone, hotkeys, weights, coldkey, alphaPriceE18, dustThresholdTao);
     }
 
     function _rebalance(
@@ -505,10 +538,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32[] memory hotkeys,
         uint16[] memory weights,
         bytes32 coldkey,
-        uint256 alphaPriceE18
-    ) private returns (uint256) {
+        uint256 alphaPriceE18,
+        uint256 dustThresholdTao
+    ) private returns (uint256, bool) {
         uint256[] memory balances = VaultReads.fetchBalances(hotkeys, coldkey, VaultMath.netuidOf(tokenId));
-        return _alignToWeights(tokenId, clone, hotkeys, weights, balances, alphaPriceE18);
+        return _alignToWeights(tokenId, clone, hotkeys, weights, balances, alphaPriceE18, dustThresholdTao);
     }
 
     function _alignToWeights(
@@ -517,12 +551,16 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32[] memory hotkeys,
         uint16[] memory weights,
         uint256[] memory balances,
-        uint256 alphaPriceE18
-    ) private returns (uint256 total) {
+        uint256 alphaPriceE18,
+        uint256 dustThresholdTao
+    ) private returns (uint256 total, bool sweepSafe) {
         total = VaultMath.sumBalances(balances);
+        uint256 minSliceAlpha = _minSliceAlpha(dustThresholdTao, alphaPriceE18);
 
         // A single validator holds everything by definition; there is nothing to move against.
-        if (weights.length == 1 || total == 0) return total;
+        if (weights.length == 1 || total == 0) {
+            return (total, total == 0 || minSliceAlpha == 0 || total >= minSliceAlpha);
+        }
 
         uint256 lastIndex = weights.length - 1;
         uint256[] memory targets = new uint256[](weights.length);
@@ -538,15 +576,69 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             targets[lastIndex] = total - assigned;
         }
 
+        _foldSubFloorTargets(targets, weights, total, minSliceAlpha);
+
         // Each step settles at least one slot exactly at its target, and surpluses and deficits
         // cancel out, so settling all but one slot settles the last one too. The floor cannot
         // change mid-transaction, so one read serves every step.
         uint256 minStakeTao = _minStakeTao();
         for (uint256 round; round < lastIndex;) {
-            if (!_rebalanceStep(tokenId, clone, hotkeys, balances, targets, alphaPriceE18, minStakeTao)) break;
+            if (!_rebalanceStep(tokenId, clone, hotkeys, balances, targets, alphaPriceE18, minStakeTao, minSliceAlpha)) break;
             unchecked {
                 ++round;
             }
+        }
+
+        if (minSliceAlpha == 0) return (total, true);
+        for (uint256 i; i < balances.length;) {
+            uint256 balance = balances[i];
+            if (balance != 0 && balance < minSliceAlpha) return (total, false);
+            unchecked {
+                ++i;
+            }
+        }
+        return (total, true);
+    }
+
+    /// @dev Removes sweepable non-zero targets and gives their exact total to the highest-weight
+    ///      surviving validator. If the position fits on only one safe slice, that validator gets
+    ///      the whole position. Target totals are conserved exactly.
+    function _foldSubFloorTargets(
+        uint256[] memory targets,
+        uint16[] memory weights,
+        uint256 total,
+        uint256 minSliceAlpha
+    ) private pure {
+        if (minSliceAlpha == 0) return;
+
+        uint256 folded;
+        uint256 recipient = type(uint256).max;
+        uint256 recipientWeight;
+        for (uint256 i; i < targets.length;) {
+            uint256 target = targets[i];
+            if (target != 0 && target < minSliceAlpha) {
+                folded += target;
+                targets[i] = 0;
+            } else if (target >= minSliceAlpha && weights[i] > recipientWeight) {
+                recipient = i;
+                recipientWeight = weights[i];
+            }
+            unchecked {
+                ++i;
+            }
+        }
+
+        if (recipient == type(uint256).max) {
+            recipient = 0;
+            for (uint256 i = 1; i < weights.length;) {
+                if (weights[i] > weights[recipient]) recipient = i;
+                unchecked {
+                    ++i;
+                }
+            }
+            targets[recipient] = total;
+        } else {
+            targets[recipient] += folded;
         }
     }
 
@@ -557,7 +649,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256[] memory balances,
         uint256[] memory targets,
         uint256 alphaPriceE18,
-        uint256 minStakeTao
+        uint256 minStakeTao,
+        uint256 minSliceAlpha
     ) private returns (bool) {
         uint256 overIndex;
         uint256 maxOver;
@@ -585,12 +678,24 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         if (maxOver == 0 || maxUnder == 0) return false;
 
         uint256 moveAmount = maxOver < maxUnder ? maxOver : maxUnder;
+        // Never manufacture a sweepable tail. A source whose target is non-zero is already at
+        // least `minSliceAlpha`, so only a zero-target source can hit this branch; emptying it is
+        // safe and still settles that slot. If the destination would remain below the threshold,
+        // skip instead: a later sub-operation-floor correction is not guaranteed to run.
+        uint256 sourceLeftover = balances[overIndex] - moveAmount;
+        if (sourceLeftover != 0 && sourceLeftover < minSliceAlpha) moveAmount = balances[overIndex];
+        if (moveAmount > type(uint64).max - balances[underIndex]) return false;
+        uint256 destinationBalance = balances[underIndex] + moveAmount;
+        if (destinationBalance != 0 && destinationBalance < minSliceAlpha) return false;
+
         // A move the chain rejects burns all the gas sent with it, so a move below the floor is
-        // skipped, never attempted. Nothing that passes can be rejected as too small: nothing here
-        // trades against the pool and the price read only rounds down. A skipped move (including
-        // every move at a zero price read) leaves the split drifted - harmless, since share value
-        // depends on the total, not the split.
+        // skipped, never attempted. This check follows the safe full-drain adjustment above: a
+        // small nominal correction may be replaced by a whole source balance the chain will move.
+        // Nothing that passes can be rejected as too small: nothing here trades against the pool
+        // and the price read only rounds down. A skipped move (including every move at a zero price
+        // read) leaves the split drifted - harmless, since share value depends on the total.
         if (alphaPriceE18 == 0 || _taoValue(moveAmount, alphaPriceE18) < minStakeTao) return false;
+
         SubnetClone(payable(clone))
             .moveStake(hotkeys[overIndex], hotkeys[underIndex], VaultMath.netuidOf(tokenId), moveAmount);
         emit Rebalanced(tokenId, hotkeys[overIndex], hotkeys[underIndex], moveAmount);
@@ -679,6 +784,15 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///      them also refuses moves the chain would have taken - those exit via the TAO rail.
     function _minStakeTao() private view returns (uint256) {
         return IStaking(STAKING_PRECOMPILE).getDefaultMinStake();
+    }
+
+    /// @dev Smallest alpha balance whose value at the rounded-down EVM price reaches the chain's
+    ///      nominator sweep threshold. Rounding alpha up and using the read directly is
+    ///      conservative: the full-precision chain price can only be higher. A zero price leaves
+    ///      the splitter drifted because `_rebalanceStep` refuses every move at that read.
+    function _minSliceAlpha(uint256 dustThresholdTao, uint256 alphaPriceE18) private pure returns (uint256) {
+        if (dustThresholdTao == 0 || alphaPriceE18 == 0) return 0;
+        return Math.mulDiv(dustThresholdTao, 1e18, alphaPriceE18, Math.Rounding.Ceil);
     }
 
     /// @dev The rounded-down read can under-value the amount, so this can reject what the chain

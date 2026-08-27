@@ -45,10 +45,19 @@ address as a call argument is a way to be paid less than you asked for.
    you.
 
 One `wrap` collects one hotkey's balance, so stake parked under several
-hotkeys takes one call each. A deposit whose TAO value is below the
-chain's minimum stake size is refused (`DepositTooSmall`); top the mailbox
-up and wrap once. `previewWrap(tokenId, assets)` quotes the share amount
-beforehand.
+hotkeys takes one call each. Two minimums apply. A deposit whose TAO value
+is below the chain's operation minimum is refused (`DepositTooSmall`). A
+wrap whose resulting position cannot keep every non-zero validator slice
+above the larger nominator sweep threshold is refused (`PositionTooSmall`),
+because the chain could otherwise force-sell backing. Top the mailbox up
+and wrap once. A small top-up is accepted when the existing position makes
+the resulting split safe. `previewWrap(tokenId, assets)` quotes the share
+amount beforehand.
+
+When a position is too small to fund every attested validator weight above
+the sweep threshold, the vault deliberately uses fewer validators and
+concentrates the position on the highest-weight ones. This does not change
+the share price, which depends on total backing rather than its split.
 
 ## What you hold
 
@@ -73,8 +82,10 @@ of the current validators; unstake it yourself if you want liquid TAO.
 Delivery is all-or-nothing: you receive the full quote, to within a few
 RAO of chain-side rounding, or the call reverts. A request below the
 chain's minimum stake size reverts (`WithdrawTooSmall`); see the TAO exit
-below for the way out. Double-check the coldkey argument - the chain
-delivers to whatever key you name.
+below for the way out. A partial exit that would leave the entire vault
+position below the nominator sweep threshold reverts (`PositionTooSmall`);
+burn the remaining supply together or use the TAO exit. Double-check the
+coldkey argument - the chain delivers to whatever key you name.
 
 `unwrapForTao(tokenId, shares, minTaoOut)` sells your share of the backing
 into the subnet's pool and pays you native TAO on your EVM address. This

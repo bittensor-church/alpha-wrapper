@@ -12,6 +12,7 @@ import {
     NetuidOutOfRange,
     NoSharesOutstanding,
     NoValidatorFound,
+    PositionTooSmall,
     SubnetDissolved,
     SubnetInDissolutionBlackoutPeriod,
     SubnetNotRegistered,
@@ -369,9 +370,9 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     // ------------------ Virtual shares prevent inflation attack --------
 
     function test_FirstWrapperInflationAttack() public {
-        // Smallest D under default weights [3334, 3333, 3333] and CHAIN_MIN_STAKE = 2e6
-        // where every per-slot move (D * 3333 / 10000) clears the floor: D >= 6_001_801.
-        _simulateAlphaDeposit(alice, NETUID1, 6_001_802);
+        // Smallest D under default weights [3334, 3333, 3333] where every per-slot target reaches
+        // the 20e6 nominator threshold, plus one RAO of margin for the last target's rounding.
+        _simulateAlphaDeposit(alice, NETUID1, 60_006_003);
         _wrap(alice, NETUID1);
 
         // Inject large reward to inflate share price
@@ -487,6 +488,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_RebalanceSkipsMoveBelowMinStake() public {
+        _setDustThreshold(0);
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(5000, 5000));
 
         // Bootstrap with a deposit that clears the min-stake floor, then overwrite balances
@@ -507,6 +509,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_RebalanceMovesAtOrAboveMinStake() public {
+        _setDustThreshold(0);
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(5000, 5000));
 
         // Override balances to total 8e6 / 0 with target 4e6 / 4e6, so the move amount of 4e6
@@ -1713,13 +1716,15 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.wrap(NETUID1, hotkey1);
     }
 
-    function test_WrapAcceptsExactlyMinStakeCount1() public {
+    function test_RevertWhen_WrapAtOperationMinimumLeavesPositionBelowSweepFloor() public {
         _registerSubnet(99, hotkey4);
 
         _simulateAlphaDepositHotkey(alice, 99, 2e6, hotkey4);
-        _wrapHotkey(alice, 99, hotkey4);
+        vm.prank(alice);
+        vm.expectRevert(PositionTooSmall.selector);
+        vault.wrap(99, hotkey4);
 
-        assertEq(_getVaultStake(hotkey4, 99), 2e6);
+        assertEq(_getVaultStake(hotkey4, 99), 0);
     }
 
     function test_RevertWhen_WrapWhenChosenHasZeroStakeEvenIfOtherHotkeyFunded() public {
@@ -1987,9 +1992,9 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function testFuzz_WrapUnwrapRoundTripPreservesAlpha(uint256 d) public {
-        // Lower: CHAIN_MIN_STAKE (below this the deposit reverts and the property is moot).
+        // Lower: DUST_THRESHOLD (below this the resulting position reverts and the property is moot).
         // Upper: u64 max (on-chain AlphaBalance ceiling; the mailbox holds a single u64 stake entry).
-        d = bound(d, CHAIN_MIN_STAKE, type(uint64).max);
+        d = bound(d, DUST_THRESHOLD, type(uint64).max);
 
         _simulateAlphaDeposit(alice, NETUID1, d);
         _wrap(alice, NETUID1);
@@ -2033,9 +2038,9 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function testFuzz_UnwrapConservesAlpha(uint256 b1, uint256 b2, uint256 b3, uint256 burnPct) public {
-        uint256 minAmt = CHAIN_MIN_STAKE;
+        uint256 minAmt = DUST_THRESHOLD;
         // Each component bounded so the aggregated deposit b1+b2+b3 stays within the u64 ceiling
-        // of a single on-chain stake entry. Lower: CHAIN_MIN_STAKE (else deposit reverts).
+        // of a single on-chain stake entry. Lower: DUST_THRESHOLD keeps every seeded slice safe.
         uint256 perHotkeyMax = type(uint64).max / 3;
         b1 = bound(b1, minAmt, perHotkeyMax);
         b2 = bound(b2, minAmt, perHotkeyMax);
@@ -2056,11 +2061,18 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         bytes32 aliceSub = _toSubstrate(alice);
 
-        // At price 1 the alpha floor equals CHAIN_MIN_STAKE; a request below it has no
+        // At price 1 the operation floor equals CHAIN_MIN_STAKE; a request below it has no
         // transferable slice and reverts rather than burning shares for nothing.
-        if (expectedAssets < minAmt) {
+        if (expectedAssets < CHAIN_MIN_STAKE) {
             vm.prank(alice);
             vm.expectRevert(WithdrawTooSmall.selector);
+            vault.unwrap(TOKEN1, burnShares, aliceSub);
+            return;
+        }
+        uint256 remaining = d - expectedAssets;
+        if (remaining != 0 && remaining < DUST_THRESHOLD) {
+            vm.prank(alice);
+            vm.expectRevert(PositionTooSmall.selector);
             vault.unwrap(TOKEN1, burnShares, aliceSub);
             return;
         }
@@ -2078,8 +2090,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function testFuzz_WrapLandsExactlyOnTargets(uint256 d) public {
-        uint256 minAmt = CHAIN_MIN_STAKE;
-        // Smallest d such that the smallest weight slice clears the min-rebalance floor:
+        uint256 minAmt = DUST_THRESHOLD;
+        // Smallest d such that the smallest weight slice clears the nominator sweep floor:
         //   d * smallestBps / BPS_BASE >= minAmt  =>  d >= ceil(minAmt * BPS_BASE / smallestBps).
         uint16 smallestBps = NETUID1_BPS_HK3;
         uint256 minD = (minAmt * BPS_BASE + (smallestBps - 1)) / smallestBps;
@@ -2147,6 +2159,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
+        _setDustThreshold(0);
 
         _setVaultStakes(NETUID1, b1, b2, b3);
 

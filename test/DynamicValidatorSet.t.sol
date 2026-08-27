@@ -69,7 +69,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
 
         uint256 dropped = _getVaultStake(wide[MAX_VALIDATORS - 1], NETUID1);
         assertGt(dropped, CHAIN_MIN_STAKE, "the dropped balance must be worth moving");
-        assertLt(dropped / (MAX_VALIDATORS - 1), CHAIN_MIN_STAKE, "and impossible to spread");
+        assertLt(dropped / (MAX_VALIDATORS - 1), DUST_THRESHOLD, "and impossible to spread safely");
 
         _setValidatorCount(NETUID1, MAX_VALIDATORS - 1);
         vault.rebalance(NETUID1);
@@ -134,17 +134,17 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         assertEq(lens.totalStake(TOKEN1), 10 ether);
     }
 
-    /// @dev At 64 validators an even split of a small position puts every target under the chain's
-    ///      floor, so no move is legal. The position must stay whole and fully priced rather than
-    ///      the call failing - the spread is best-effort, the accounting is not.
-    function test_Wrap_KeepsSmallPositionWholeWhenTargetsFallBelowFloor() public {
+    /// @dev At 64 validators an even split of a small but valid position puts every target under
+    ///      the nominator threshold, so the vault deliberately keeps one safe slice on the
+    ///      highest-weight validator.
+    function test_Wrap_ConcentratesSmallPositionWhenTargetsFallBelowSweepFloor() public {
         bytes32[] memory hks = _setValidatorCount(NETUID1, MAX_VALIDATORS);
-        uint256 deposit = 4 * CHAIN_MIN_STAKE;
-        assertLt(deposit / MAX_VALIDATORS, CHAIN_MIN_STAKE, "no per-slot target may be movable");
+        uint256 deposit = DUST_THRESHOLD + 1;
+        assertLt(deposit / MAX_VALIDATORS, DUST_THRESHOLD, "no per-slot target may be sweep-safe");
 
         _depositAndWrap(alice, NETUID1, deposit);
 
-        assertEq(_getVaultStake(hks[0], NETUID1), deposit, "position stays where it landed");
+        assertEq(_getVaultStake(hks[MAX_VALIDATORS - 1], NETUID1), deposit, "position lands on the highest weight");
         assertEq(lens.totalStake(TOKEN1), deposit, "and is fully priced");
     }
 

@@ -75,8 +75,9 @@ over several sales.
 - The netuid-scoped dissolution blackout can temporarily freeze an old
   position while a successor subnet on the same netuid dissolves
   ([edge-cases.md](edge-cases.md)).
-- Amounts below the chain's minimum stake size can leave the stake split
-  drifted from target weights; share value is unaffected.
+- The vault deliberately drifts from target weights when an exact split
+  would create a sweepable validator slice or require a move below the
+  chain's operation minimum; share value is unaffected.
 - A partial `unwrapForTao` can fill short and refund the unsold part as
   shares instead of reverting; callers bound the damage with
   `minTaoOut`.

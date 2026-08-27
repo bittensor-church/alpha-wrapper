@@ -17,6 +17,7 @@ error SubnetDissolved();
 error NothingToUnwrap();
 error NoSharesOutstanding();
 error DepositTooSmall();
+error PositionTooSmall();
 error WithdrawTooSmall();
 error ClaimBelowNativePrecision();
 error SupplyCapExceeded();

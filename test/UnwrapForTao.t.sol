@@ -234,6 +234,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     // Single-validator set so the minimum-stake deposit isn't split across slots, then burn
     // one share to trigger the rounding-to-zero edge inherent to the share-price cushion.
     function test_RevertWhen_ProRataAssetsRoundsToZero() public {
+        _setDustThreshold(0);
         _setValidators(NETUID1, _hotkeys(hotkey1), _weights(10000));
         _setRemoveStakeRate(1, 1);
         uint256 depositAmount = CHAIN_MIN_STAKE;

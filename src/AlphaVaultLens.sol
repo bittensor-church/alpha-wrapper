@@ -109,7 +109,7 @@ contract AlphaVaultLens {
 
         (,, uint256 totalAlpha) =
             VaultReads.unionStake(vault.lastSeenHotkeys(tokenId), current, VaultReads.coldkeyOf(clone), netuid);
-        return (VaultMath.assetsFor(totalAlpha, supply, shares), 0);
+        return (shares == supply ? totalAlpha : VaultMath.assetsFor(totalAlpha, supply, shares), 0);
     }
 
     /// @notice TAO withdrawable by `account` for `tokenId` right now: exactly what `claimTao`

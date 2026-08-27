@@ -7,6 +7,12 @@ import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 /// @dev Rounding-to-zero and empty-state guards for the share math, split out of AlphaVault.t.sol.
 ///      Shares its setup/helpers with the other suites via the common AlphaVaultTestBase.
 contract AlphaVaultRoundingTest is AlphaVaultTestBase {
+    function setUp() public override {
+        super.setUp();
+        // This suite isolates share rounding below the independently tested nominator threshold.
+        _setDustThreshold(0);
+    }
+
     // Inflate the pool so the share price sits far above 1 asset/share: alice seeds 2e6 (supply 2e15),
     // then 1e22 of emissions accrue. The rounding boundary for a fresh deposit becomes
     // ~ preStake / supply = 1e22 / 2e15 ~ 5e6 assets, well above the 2e6 minimum-stake floor.

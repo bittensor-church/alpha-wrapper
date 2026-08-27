@@ -63,9 +63,11 @@ in basis points. Deposits and alpha exits rebalance the clone's stake
 toward those weights as a side effect, and anyone may call
 `rebalance(netuid)` to realign immediately, for example right after the
 registry changes; the TAO exit sells from wherever the stake sits.
-Moves the chain would reject as too small are skipped; a
-drifted split is harmless because share value depends on the total stake
-alone.
+Targets below the chain's nominator sweep threshold are folded into the
+highest-weight safe target, so small positions use fewer validator slices.
+Moves the chain would reject as too small, or that would create a sweepable
+tail, are skipped; a drifted split is harmless because share value depends
+on the total stake alone.
 
 When the registry drops a validator, the next deposit, alpha exit or
 `rebalance` first rolls the stake off it onto the current set. The vault

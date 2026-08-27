@@ -11,6 +11,12 @@ import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 contract MinStakeFloorTest is AlphaVaultTestBase {
     uint256 private constant PRICE_HALF = 0.5e18;
 
+    function setUp() public override {
+        super.setUp();
+        // This suite isolates the operation minimum. Nominator-sweep behavior has its own suite.
+        _setDustThreshold(0);
+    }
+
     function _setChainMinStake(uint256 minStakeTao) private {
         MockStaking(STAKING_PRECOMPILE).setChainMinStake(minStakeTao);
     }

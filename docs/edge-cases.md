@@ -55,6 +55,8 @@ fails there at full gas. The checks:
 
 - A deposit under the floor reverts `DepositTooSmall`; top the mailbox
   up and wrap once.
+- A wrap or partial alpha exit that cannot leave every non-zero validator
+  slice above the nominator sweep threshold reverts `PositionTooSmall`.
 - An alpha-exit request under the floor reverts `WithdrawTooSmall`,
   and the related guards (`GatherBelowFloor`, `ConsolidationBelowFloor`)
   refuse internal moves that are provably below it.
@@ -71,13 +73,17 @@ deposit first, then exits the same way.
 ## The chain's dust sweep
 
 After a partial unstake, the chain force-sells any stake entry left below
-a dust threshold, folding the proceeds into that unstake's payout. A
-partial `unwrapForTao` is sized to keep the remaining holders' backing
+a dust threshold, folding the proceeds into that unstake's payout. Weight
+alignment never deliberately leaves a non-zero target below that threshold:
+small positions use fewer, larger validator slices, and a corrective move
+is skipped if it would create a sweepable destination. A partial alpha exit
+gathers first when direct delivery would leave a sweepable tail.
+
+A partial `unwrapForTao` is sized to keep the remaining holders' backing
 whole: the vault will not sell a chunk whose leftover the chain would
-sweep, and sells less, or nothing, from that slot instead. Whatever
-stays staked comes back to the caller as shares, except
-on a burn of the entire supply, which drops a leftover below the chain's
-minimum.
+sweep, and sells less, or nothing, from that slot instead. Whatever stays
+staked comes back to the caller as shares, except on a burn of the entire
+supply, which drops a leftover below the chain's minimum.
 
 ## Stray TAO
 
