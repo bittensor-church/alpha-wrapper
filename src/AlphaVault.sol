@@ -414,39 +414,30 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
 
         _burn(msg.sender, tokenId, shares);
-        uint256 alphaOut = _deliverAndAlign(
-            tokenId,
-            clone,
-            hotkeys,
-            weights,
-            balances,
-            coldkey,
-            userSubstrateColdkey,
-            assets,
-            alphaPriceE18,
-            dustThresholdTao
+        uint256 alphaOut = _deliver(
+            clone, hotkeys, balances, coldkey, userSubstrateColdkey, netuid, assets, alphaPriceE18, dustThresholdTao
         );
+        (, bool sweepSafe) = _rebalance(tokenId, clone, hotkeys, weights, coldkey, alphaPriceE18, dustThresholdTao);
+        if (!sweepSafe) revert PositionTooSmall();
 
         emit Unwrapped(msg.sender, tokenId, shares, alphaOut);
     }
 
     /// @dev Delivers `assets` to `userColdkey` in one transfer - gathering the position onto a
     ///      single hotkey first when no slot covers the request or a direct delivery would leave a
-    ///      sweepable tail - then re-splits what remains toward `weights`. Reverts
-    ///      `GatherBelowFloor` when the gather's largest slot provably cannot clear the stake floor.
-    function _deliverAndAlign(
-        uint256 tokenId,
+    ///      sweepable tail. Reverts `GatherBelowFloor` when the gather's largest slot provably
+    ///      cannot clear the stake floor. The caller re-splits the remainder after delivery.
+    function _deliver(
         address clone,
         bytes32[] memory hotkeys,
-        uint16[] memory weights,
         uint256[] memory balances,
         bytes32 coldkey,
         bytes32 userColdkey,
+        uint16 netuid,
         uint256 assets,
         uint256 alphaPriceE18,
         uint256 dustThresholdTao
     ) private returns (uint256 alphaOut) {
-        uint16 netuid = VaultMath.netuidOf(tokenId);
         uint256 minSliceAlpha = _minSliceAlpha(dustThresholdTao, alphaPriceE18);
         uint256 deliveryIndex;
         for (uint256 i = 1; i < balances.length;) {
@@ -488,11 +479,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // Deliver the entitlement, capped at what the gathered slot holds after the gather's rounding.
         alphaOut = assets < deliverable ? assets : deliverable;
         SubnetClone(payable(clone)).flush(userColdkey, hotkeys[deliveryIndex], netuid, alphaOut);
-        // Re-read live balances so the weight re-split never moves more than a slot holds.
-        uint256[] memory postBalances = VaultReads.fetchBalances(hotkeys, coldkey, netuid);
-        (, bool sweepSafe) =
-            _alignToWeights(tokenId, clone, hotkeys, weights, postBalances, alphaPriceE18, dustThresholdTao);
-        if (!sweepSafe) revert PositionTooSmall();
     }
 
     function _unwrapFromDissolvedSubnet(uint256 tokenId, uint256 shares, address clone) private {
@@ -684,7 +670,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // skip instead: a later sub-operation-floor correction is not guaranteed to run.
         uint256 sourceLeftover = balances[overIndex] - moveAmount;
         if (sourceLeftover != 0 && sourceLeftover < minSliceAlpha) moveAmount = balances[overIndex];
-        if (moveAmount > type(uint64).max - balances[underIndex]) return false;
         uint256 destinationBalance = balances[underIndex] + moveAmount;
         if (destinationBalance != 0 && destinationBalance < minSliceAlpha) return false;
 

@@ -52,6 +52,8 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     }
 
     function test_FullBurnAfterEmissionGrowth_DrainsSubFloorDust() public {
+        // The position is safe when opened, then becomes sub-floor after the price drop below.
+        _setAlphaPrice(NETUID1, 10e18);
         uint256 supply = _depositForAlice(3_000_000);
         // Emission growth prices the rounded-down full burn one RAO below the slot, and the
         // price drop leaves the position sub-floor, so a partial sell of it can never clear
@@ -74,6 +76,8 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function testFuzz_FullBurn_DrainsWholePosition(uint256 growth, uint256 chainPriceE18) public {
         growth = bound(growth, 0, 1e12);
         chainPriceE18 = bound(chainPriceE18, 1e15, 100e18);
+        // Open above the live sweep floor; the fuzzed price may make it undersized afterward.
+        _setAlphaPrice(NETUID1, 10e18);
         uint256 supply = _depositForAlice(3_000_000);
         _setVaultStakes(NETUID1, 3_000_000 + growth, 0, 0);
         _setAlphaPrice(NETUID1, chainPriceE18);

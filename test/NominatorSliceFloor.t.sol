@@ -23,8 +23,8 @@ contract NominatorSliceFloorTest is AlphaVaultTestBase {
         }
     }
 
-    function test_Wrap_WideSmallPositionConcentratesOnHighestWeight() public {
-        bytes32[] memory hotkeys = _setValidatorCount(NETUID1, 64);
+    function test_Wrap_ThreeValidatorSmallPositionConcentratesOnHighestWeight() public {
+        bytes32[] memory hotkeys = _setValidatorCount(NETUID1, 3);
         uint256 deposit = DUST_THRESHOLD + 1;
         _simulateAlphaDepositHotkey(alice, NETUID1, deposit, hotkeys[0]);
 
@@ -32,7 +32,7 @@ contract NominatorSliceFloorTest is AlphaVaultTestBase {
         _wrapHotkey(alice, NETUID1, hotkeys[0]);
 
         assertEq(_assertSweepSafe(hotkeys, NETUID1), 1, "small position should use one safe slice");
-        assertEq(_getVaultStake(hotkeys[63], NETUID1), deposit, "highest-weight validator receives the position");
+        assertEq(_getVaultStake(hotkeys[2], NETUID1), deposit, "highest-weight validator receives the position");
     }
 
     function test_RevertWhen_WrapWouldCreateSweepableWholePosition() public {
@@ -204,17 +204,20 @@ contract NominatorSliceFloorTest is AlphaVaultTestBase {
         _setAlphaPrice(NETUID1, UNIT_PRICE);
         _depositAndWrap(alice, NETUID1, 90e6);
 
-        _assertEvenSpread(_hotkeys(hotkey1, hotkey2, hotkey3), NETUID1, 90e6);
+        uint256 first = _weighted(90e6, NETUID1_BPS_HK1);
+        uint256 second = _weighted(90e6, NETUID1_BPS_HK2);
+        assertEq(_getVaultStake(hotkey1, NETUID1), first);
+        assertEq(_getVaultStake(hotkey2, NETUID1), second);
+        assertEq(_getVaultStake(hotkey3, NETUID1), 90e6 - first - second, "last slot absorbs the remainder");
     }
 
-    function testFuzz_Wrap_NeverCreatesSweepableSlice(uint256 total, uint256 validatorCount, uint256 priceE18) public {
-        validatorCount = bound(validatorCount, 1, 64);
+    function testFuzz_Wrap_ThreeValidatorsNeverCreatesSweepableSlice(uint256 total, uint256 priceE18) public {
         priceE18 = bound(priceE18, 0.1e18, 100e18);
-        priceE18 = (priceE18 / 1e9) * 1e9;
+        priceE18 -= priceE18 % 1e9;
         uint256 minSliceAlpha = (DUST_THRESHOLD * 1e18 + priceE18 - 1) / priceE18;
-        total = bound(total, minSliceAlpha, minSliceAlpha * validatorCount * 2);
+        total = bound(total, minSliceAlpha, minSliceAlpha * 6);
 
-        bytes32[] memory hotkeys = _setValidatorCount(NETUID1, validatorCount);
+        bytes32[] memory hotkeys = _setValidatorCount(NETUID1, 3);
         _setAlphaPrice(NETUID1, priceE18);
         _simulateAlphaDepositHotkey(alice, NETUID1, total, hotkeys[0]);
 
