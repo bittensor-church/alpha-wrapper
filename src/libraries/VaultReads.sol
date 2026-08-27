@@ -194,13 +194,6 @@ library VaultReads {
         }
     }
 
-    /// @dev Which key a slot should point at once its balance is known: a slot holding nothing has
-    ///      nothing to keep the record pointed away from its attested validator, and a key the
-    ///      chain has since retired would only refuse the next move aimed at it.
-    function anchorKey(bytes32 attested, bytes32 holding, uint256 balance) internal pure returns (bytes32) {
-        return balance == 0 ? attested : holding;
-    }
-
     /// @dev Whether `stake` accounts for a slot owed `tracked`, with the give the chain's own
     ///      crediting requires.
     function coversTracked(uint256 stake, uint256 tracked) internal pure returns (bool) {

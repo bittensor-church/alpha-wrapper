@@ -1043,7 +1043,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                 changed = true;
             } else if (!VaultReads.isWindowStanding(slot.shortSince)) {
                 emit BackingWrittenOff(tokenId, slot.active, slot.tracked, backing.balances[i]);
-                slot.active = VaultReads.anchorKey(slot.logical, backing.keys[i], backing.balances[i]);
                 slot.tracked = backing.balances[i];
                 slot.shortSince = 0;
                 changed = true;
@@ -1139,7 +1138,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
         for (uint256 i; i < currentSet.length;) {
             uint256 tracked = IStaking(STAKING_PRECOMPILE).getStake(actives[i], coldkey, netuid);
-            bytes32 active = VaultReads.anchorKey(currentSet[i], actives[i], tracked);
+            // A slot holding nothing has nothing to keep the record pointed away from its attested
+            // validator, and a key the chain has since retired would only refuse the next move
+            // aimed at it. Safe here and only here: every carried key is one the attesters do not
+            // list, so falling an emptied slot back onto its own name cannot land on another
+            // slot's key, and no two slots can come out of this leaning on one balance.
+            bytes32 active = tracked == 0 ? currentSet[i] : actives[i];
             if (i < tokenSlots.length) {
                 // Each field is compared before it is written: at the validator ceiling the record
                 // is hundreds of words wide and most of it is unchanged on an ordinary call.
@@ -1161,13 +1165,17 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     }
 
     /// @dev Takes what each slot's key holds now as its new expectation, for a call that changed
-    ///      balances without moving the position between validators.
+    ///      balances without moving the position between validators. Every slot keeps the key the
+    ///      resolver put it on, emptied or not: those are distinct by construction, while an
+    ///      attested name is not - a swap can carry one validator's alpha onto another validator's
+    ///      name, and falling an emptied slot back onto its own name here would leave two slots
+    ///      leaning on one balance. The next settle picks the name back up, where the attested set
+    ///      makes that safe.
     function _reanchor(uint256 tokenId, bytes32[] memory keys, uint256[] memory balances) private {
         VaultReads.Slot[] storage tokenSlots = _slots[tokenId];
         for (uint256 i; i < tokenSlots.length;) {
             VaultReads.Slot storage slot = tokenSlots[i];
-            bytes32 active = VaultReads.anchorKey(slot.logical, keys[i], balances[i]);
-            if (slot.active != active) slot.active = active;
+            if (slot.active != keys[i]) slot.active = keys[i];
             if (slot.tracked != balances[i]) slot.tracked = balances[i];
             if (slot.shortSince != 0) slot.shortSince = 0;
             unchecked {

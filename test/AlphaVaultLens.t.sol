@@ -86,4 +86,18 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
     function test_Constructor_ResolvesTheVaultsRegistry() public view {
         assertEq(address(lens.validatorRegistry()), address(vault.validatorRegistry()));
     }
+
+    /// @dev A dissolved position's alpha legitimately became TAO, so no record holds it to
+    ///      anything: the reading answers plainly and reports nothing missing.
+    function test_DissolvedToken_ReadsWithoutARecordToAnswerTo() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        uint256 staked = _totalVaultStakeAcrossHotkeys(NETUID1);
+
+        // A new subnet on the same netuid retires the token id while its alpha stays staked.
+        _setRegBlock(NETUID1, 999);
+
+        assertEq(lens.locatedStake(TOKEN1), staked, "the reading counts what the record names");
+        assertTrue(lens.isBackingIntact(TOKEN1), "with nothing to be short against");
+        assertEq(lens.frozenUntil(TOKEN1), 0, "and nothing holding it shut");
+    }
 }

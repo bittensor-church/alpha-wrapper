@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
+import { VaultReads } from "src/libraries/VaultReads.sol";
 import { BackingShortfall } from "src/VaultErrors.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
@@ -138,6 +139,35 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         uint256 quarter = vault.balanceOf(alice, TOKEN1) / 4;
         vm.prank(alice);
         vault.unwrap(TOKEN1, quarter, _toSubstrate(alice));
+    }
+
+    /// @dev A swap can leave one validator's alpha sitting under another validator's attested
+    ///      name. If an emptied slot then fell back onto its own name, that name could be the key
+    ///      another slot already answers for, and the position would report the same balance twice
+    ///      - pricing exits against backing that is not there.
+    function test_TaoExitEmptyingASwappedSlot_LeavesNoBalanceAnsweringTwice() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        vault.rebalance(NETUID1);
+        // hotkey2's alpha lands on hotkey1 - a name the attesters still list, whose own slot has
+        // moved on to hotkey4.
+        _simulateFollowedSwap(NETUID1, hotkey2, hotkey1);
+
+        // Sell enough to empty the hotkey4 slot outright.
+        uint256 burn = (shares * (_getVaultStake(hotkey4, NETUID1) + 1e15)) / lens.locatedStake(TOKEN1);
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, burn, 0);
+
+        uint256 held =
+            _getVaultStake(hotkey1, NETUID1) + _getVaultStake(hotkey3, NETUID1) + _getVaultStake(hotkey4, NETUID1);
+        assertEq(lens.locatedStake(TOKEN1), held, "the position counts what it holds, once");
+
+        VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
+        for (uint256 i; i < slots.length; ++i) {
+            for (uint256 j = i + 1; j < slots.length; ++j) {
+                assertTrue(slots[i].active != slots[j].active, "no two slots answer for one key");
+            }
+        }
     }
 
     // -------------------- Emptyings the chain does not explain -------------------

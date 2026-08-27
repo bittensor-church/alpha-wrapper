@@ -9,6 +9,7 @@ import {
     BackingUnchanged,
     NothingToRecover,
     NothingToUnwrap,
+    RecoveryBelowFloor,
     SubnetInDissolutionBlackoutPeriod
 } from "src/VaultErrors.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
@@ -301,6 +302,37 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
         assertGe(_getVaultStake(hotkey2, NETUID1), vault.recordedSlots(TOKEN1)[1].tracked, "the source kept its own");
         assertEq(_getVaultStake(hotkey1, NETUID1), surplus, "and gave up only its surplus");
+    }
+
+    /// @dev Alpha the chain would refuse to move is not recovered and is socialized with the rest
+    ///      of the loss. The refusal is cheap: a chain-side rejection would burn the whole call.
+    function test_RevertWhen_TheStrayIsTooSmallForTheChainToMove() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        bytes32 coldkey = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, coldkey, NETUID1, 1);
+        vault.syncBacking(TOKEN1);
+
+        vm.expectRevert(RecoveryBelowFloor.selector);
+        vm.prank(bob);
+        vault.recoverStray(TOKEN1, 0, hotkey4);
+    }
+
+    /// @dev Putting one slot's loss on file must not drop the swap another slot resolved on the way
+    ///      past, or the record would keep pointing at the key that validator's alpha departed.
+    function test_SyncBacking_KeepsAFollowedSwapInTheRecord() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        uint256 moved = _getVaultStake(hotkey1, NETUID1);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        _buildSwapTrail(NETUID1, hotkey2, 2);
+
+        vault.syncBacking(TOKEN1);
+
+        VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
+        assertEq(slots[0].active, hotkey4, "the record kept the key the swap reached");
+        assertEq(slots[0].shortSince, 0, "which is not a loss and needs no clock");
+        assertEq(_getVaultStake(hotkey4, NETUID1), moved, "and that is where the alpha is");
+        assertGt(slots[1].shortSince, 0, "while the loss beside it got its own");
     }
 
     function test_RevertWhen_RecoveringFromAKeyHoldingNothing() public {
