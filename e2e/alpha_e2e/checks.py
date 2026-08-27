@@ -107,6 +107,23 @@ def assert_payout_near_quote(
     )
 
 
+def assert_payout_at_least_quote_floor(
+    balance_before_wei: int, balance_after_wei: int, receipt: dict,
+    quote_rao: int, message: str,
+) -> None:
+    """Require a full-drain payout to clear the same quote floor used for
+    ``minTaoOut``. Full drains burn every stake share under each hotkey, so they
+    can realize value hidden by the rounded per-hotkey stake reads used to build
+    an aggregate quote. There is no meaningful aggregate-read upper bound for a
+    last-holder drain; its exact payout, zero residue, and closing ledger are
+    asserted separately at the call site."""
+    payout = reconstructed_payout(balance_before_wei, balance_after_wei, receipt, message)
+    quote_wei = quote_rao * 10**9
+    assert payout >= quote_wei // 2, (
+        f"{message} (payout {payout} wei vs quote {quote_rao} RAO)"
+    )
+
+
 def assert_csv(
     csv_text: str, *, rows: Optional[int] = None,
     column_sets: Optional[Dict[str, Iterable[str]]] = None,

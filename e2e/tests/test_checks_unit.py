@@ -96,6 +96,21 @@ def test_assert_payout_near_quote_reconstructs_gas():
         checks.assert_payout_near_quote(0, quote_wei, {}, quote_rao, "ctx")
 
 
+def test_assert_payout_at_least_quote_floor_allows_full_drain_surplus():
+    quote_rao = 1_000
+    quote_wei = quote_rao * 10**9
+    receipt = {"gasUsed": hex(21_000)}
+    gas_cost_wei = 21_000 * config.LOCALNET_GAS_PRICE_WEI
+
+    checks.assert_payout_at_least_quote_floor(
+        0, quote_wei * 3 - gas_cost_wei, receipt, quote_rao, "ctx",
+    )
+    with pytest.raises(AssertionError, match="payout"):
+        checks.assert_payout_at_least_quote_floor(
+            0, quote_wei // 2 - gas_cost_wei - 1, receipt, quote_rao, "ctx",
+        )
+
+
 def _tao_exit_receipt(gas_used: int, emitted_wei: int) -> dict:
     topic = chain.cast_sig_event(checks.UNWRAPPED_FOR_TAO)
     data = "0x" + "".join(f"{word:064x}" for word in (0, 0, emitted_wei))

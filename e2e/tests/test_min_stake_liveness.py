@@ -11,7 +11,8 @@ import pytest
 
 from alpha_e2e import bootstrap, config
 from alpha_e2e.checks import (
-    assert_gas_within, assert_payout_matches_emitted, assert_payout_near_quote, min_tao_out_for,
+    assert_gas_within, assert_payout_at_least_quote_floor, assert_payout_matches_emitted,
+    assert_payout_near_quote, min_tao_out_for,
 )
 
 
@@ -89,10 +90,16 @@ class ChurnLedger:
         )
         assert_gas_within(receipt, config.UNWRAP_GAS_BOUND, f"{label}: TAO exit")
         balance_after = self.env.user_tao_wei()
-        assert_payout_near_quote(
-            balance_before, balance_after, receipt, quote,
-            f"{label}: TAO exit payout off quote",
-        )
+        if percent == 100:
+            assert_payout_at_least_quote_floor(
+                balance_before, balance_after, receipt, quote,
+                f"{label}: TAO exit payout below quote floor",
+            )
+        else:
+            assert_payout_near_quote(
+                balance_before, balance_after, receipt, quote,
+                f"{label}: TAO exit payout off quote",
+            )
         assert_payout_matches_emitted(
             balance_before, balance_after, receipt,
             f"{label}: TAO exit paid less than it reported",

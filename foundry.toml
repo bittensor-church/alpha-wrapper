@@ -12,6 +12,9 @@ fuzz = { runs = 256 }
 
 [profile.ci]
 gas_snapshot_check = true
+# A fixed fuzz seed is only deterministic when test workers do not race for the
+# shared input stream. Keep CI snapshots reproducible across runners.
+threads = 1
 
 # Pin the fuzz seed in CI so the gas snapshot is stable across runs.
 # Locally we let fuzz pick a random seed for broader exploration.
