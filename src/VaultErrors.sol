@@ -25,3 +25,10 @@ error ChosenHotkeyNotInSet();
 error SlippageExceeded(uint256 amountOut);
 error ConsolidationBelowFloor();
 error GatherBelowFloor();
+/// @dev Raised while the vault cannot account for backing a slot is owed and that slot's recovery
+///      window is still running; `tracked` is what the named key was expected to hold.
+error BackingShortfall(uint16 netuid, bytes32 hotkey, uint256 tracked);
+error BackingUnchanged();
+error NothingToRecover();
+error RecoveryBelowFloor();
+error SourceSlotUncovered();

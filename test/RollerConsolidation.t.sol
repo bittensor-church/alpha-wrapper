@@ -37,7 +37,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey2, NETUID1), 0, "first rotated-out slot consolidated");
         assertEq(_getVaultStake(hotkey3, NETUID1), 0, "second rotated-out slot consolidated");
         assertEq(lens.totalStake(TOKEN1), totalBefore, "total conserved across the chained roll");
-        bytes32[] memory seen = vault.lastSeenHotkeys(TOKEN1);
+        bytes32[] memory seen = _lastSeen(TOKEN1);
         assertEq(seen.length, 2, "remembered set refreshed to the 2-validator current set");
         assertEq(seen[0], hotkey1);
         assertEq(seen[1], hotkey4);
@@ -58,7 +58,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(vault.balanceOf(bob, tokenId), previewedShares, "mint parity with the union-priced preview");
         assertEq(_getVaultStake(hotkey4, 99), 0, "rotated-out dust consolidated by the roll");
         assertEq(lens.totalStake(tokenId), bobDeposit + dust, "rotated-out stake folded into the current-set backing");
-        bytes32[] memory seen = vault.lastSeenHotkeys(tokenId);
+        bytes32[] memory seen = _lastSeen(tokenId);
         assertEq(seen[0], hotkey1, "remembered set refreshed to the current set");
     }
 
@@ -123,7 +123,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey1, 99), 0, "drained validator emptied");
         assertEq(_getVaultStake(hotkey2, 99), 0, "dust folded off the second dropped validator");
         assertEq(lens.totalStake(tokenId), _getVaultStake(hotkey4, 99), "backing all sits on the current set");
-        assertEq(vault.lastSeenHotkeys(tokenId).length, 1, "nothing left to remember");
+        assertEq(_lastSeen(tokenId).length, 1, "nothing left to remember");
     }
 
     function test_Unwrap_SucceedsWhenPriceReadsZero() public {
@@ -234,7 +234,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
 
         assertEq(lens.totalStake(TOKEN1), totalBefore, "backing unchanged after the reverted roll");
         assertGt(_getVaultStake(hotkey3, NETUID1), 0, "rotated-out stake not dropped");
-        bytes32[] memory seen = vault.lastSeenHotkeys(TOKEN1);
+        bytes32[] memory seen = _lastSeen(TOKEN1);
         assertEq(seen[2], hotkey3, "remembered set still references the pre-rotation set");
     }
 

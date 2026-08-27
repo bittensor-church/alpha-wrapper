@@ -5,7 +5,13 @@ import { AlphaVault } from "./AlphaVault.sol";
 import { IValidatorRegistry } from "./interfaces/IValidatorRegistry.sol";
 import { VaultMath } from "./libraries/VaultMath.sol";
 import { VaultReads } from "./libraries/VaultReads.sol";
-import { NetuidOutOfRange, NoSharesOutstanding, SubnetDissolved, ZeroAddress } from "./VaultErrors.sol";
+import {
+    BackingShortfall,
+    NetuidOutOfRange,
+    NoSharesOutstanding,
+    SubnetDissolved,
+    ZeroAddress
+} from "./VaultErrors.sol";
 
 /// @title AlphaVaultLens
 /// @notice Every quote an `AlphaVault` integrator needs: backing, share price, deposit and exit
@@ -33,18 +39,95 @@ contract AlphaVaultLens {
     }
 
     /// @notice Total alpha backing this token's shares. Returns 0 before the clone exists.
-    /// @dev    While subtensor dissolution cleanup runs for the netuid the backing alpha is in
+    /// @dev    Reverts `BackingShortfall` while the vault holds backing it cannot account for and
+    ///         that loss's recovery window is still running. What it would otherwise report counts
+    ///         only what the vault can locate, so it understates the holding and steps back up the
+    ///         moment the alpha is found; anything valuing the token off it would be right by
+    ///         accident. `locatedStake` reports that figure regardless, and `isBackingIntact` and
+    ///         `frozenUntil` report the state without reverting.
+    ///
+    ///         While subtensor dissolution cleanup runs for the netuid the backing alpha is in
     ///         flux; treat the value as unstable whenever `isSubnetDissolving(netuid)` is true.
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @return Alpha staked under the clone for this token.
     function totalStake(uint256 tokenId) public view returns (uint256) {
+        (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _readBacking(tokenId);
+        if (backing.standing != type(uint256).max) {
+            revert BackingShortfall(
+                VaultMath.netuidOf(tokenId), slots[backing.standing].active, slots[backing.standing].tracked
+            );
+        }
+        return backing.total;
+    }
+
+    /// @notice Alpha the vault can find for this token right now, whether or not that is all of it.
+    /// @dev    The figure behind `totalStake`, answering where that one refuses. Read it to see
+    ///         what the position holds while a loss is being chased - never to value a holding,
+    ///         which is what `totalStake` is for and why that one would rather revert than answer.
+    function locatedStake(uint256 tokenId) external view returns (uint256) {
+        (, VaultReads.Backing memory backing) = _readBacking(tokenId);
+        return backing.total;
+    }
+
+    /// @notice The keys the position's backing is currently expected under, one per attested
+    ///         validator.
+    function lastSeenHotkeys(uint256 tokenId) external view returns (bytes32[] memory) {
+        return VaultReads.activesOf(vault.recordedSlots(tokenId));
+    }
+
+    /// @notice Whether the vault can account for the alpha it expects under every validator it
+    ///         records. A hotkey swap the vault can follow on its own reads true.
+    /// @dev    False reports a visible gap, which is not by itself a refusal: the rails refuse
+    ///         while some missing slot's recovery window is still running, and answer again from
+    ///         the moment it runs out - this still reads false until a settling call re-anchors
+    ///         the record. Gate on `frozenUntil` to refuse on the vault's own terms.
+    function isBackingIntact(uint256 tokenId) external view returns (bool) {
+        (, VaultReads.Backing memory backing) = _readBacking(tokenId);
+        return !VaultReads.isShort(backing);
+    }
+
+    /// @notice When the losses on file stop holding the token shut, as a unix timestamp; zero when
+    ///         nothing is missing.
+    /// @dev    The latest deadline across the slots the vault cannot account for. A visible loss
+    ///         nobody has recorded yet reads `type(uint256).max`: no deadline exists until a call
+    ///         to `syncBacking` or a settling rail starts one, and reporting zero there would read
+    ///         as open now while every rail refuses. A timestamp already past means every window
+    ///         has run and the token answers again.
+    function frozenUntil(uint256 tokenId) external view returns (uint256 deadline) {
+        (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _readBacking(tokenId);
+        for (uint256 i; i < backing.short.length;) {
+            if (backing.short[i]) {
+                uint64 shortSince = slots[i].shortSince;
+                if (shortSince == 0) return type(uint256).max;
+                uint256 slotDeadline = shortSince + VaultReads.RECOVERY_WINDOW;
+                if (slotDeadline > deadline) deadline = slotDeadline;
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @dev The same reading the vault's own rails take, through the same library and never
+    ///      applied. A dissolved token's alpha legitimately became TAO, so nothing is held to the
+    ///      record there and the reading is empty.
+    function _readBacking(uint256 tokenId)
+        private
+        view
+        returns (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing)
+    {
+        backing.standing = type(uint256).max;
         address clone = vault.subnetClone(tokenId);
-        if (clone == address(0)) return 0;
+        if (clone == address(0)) return (slots, backing);
         uint16 netuid = VaultMath.netuidOf(tokenId);
-        (,, uint256 total) = VaultReads.backingStake(
-            validatorRegistry, vault.lastSeenHotkeys(tokenId), VaultReads.coldkeyOf(clone), netuid
-        );
-        return total;
+        bytes32 coldkey = VaultReads.coldkeyOf(clone);
+        if (VaultReads.isIssuedForDissolvedSubnet(tokenId)) {
+            bytes32[] memory keys = VaultReads.activesOf(vault.recordedSlots(tokenId));
+            backing.total = VaultMath.sumBalances(VaultReads.fetchBalances(keys, coldkey, netuid));
+            return (slots, backing);
+        }
+        slots = vault.recordedSlots(tokenId);
+        backing = VaultReads.resolveBacking(slots, coldkey, netuid);
     }
 
     /// @notice Price of one share in 1e18 precision, expressed in alpha.
@@ -105,11 +188,9 @@ contract AlphaVaultLens {
         }
 
         // Reverts NoValidatorFound when the registry has no set for this subnet.
-        (bytes32[] memory current,) = VaultReads.resolveValidators(validatorRegistry, netuid);
+        VaultReads.resolveValidators(validatorRegistry, netuid);
 
-        (,, uint256 totalAlpha) =
-            VaultReads.unionStake(vault.lastSeenHotkeys(tokenId), current, VaultReads.coldkeyOf(clone), netuid);
-        return (VaultMath.assetsFor(totalAlpha, supply, shares), 0);
+        return (VaultMath.assetsFor(totalStake(tokenId), supply, shares), 0);
     }
 
     /// @notice TAO withdrawable by `account` for `tokenId` right now: exactly what `claimTao`

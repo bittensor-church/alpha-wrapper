@@ -142,8 +142,8 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         vm.snapshotGasLastCall("AlphaVault", "unwrapForTao: full (64 validators)");
     }
 
-    // The widest the position can ever be: a full rotation leaves 64 dropped validators funded
-    // alongside 64 attested ones, so the sale spans 128 slots.
+    // The TAO rail sells across the keys the record names and never consults the registry, so a
+    // full rotation must not widen it: this entry is expected to track the one above.
     function test_gas_unwrapForTao_fullyRotated_64Validators() public {
         _setRemoveStakeRate(1, 1);
         _setValidatorCount(NETUID1, MAX_VALIDATORS);
@@ -155,7 +155,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
 
         vm.prank(alice);
         vault.unwrapForTao(TOKEN1, shares, 0);
-        vm.snapshotGasLastCall("AlphaVault", "unwrapForTao: fully rotated (128 slots)");
+        vm.snapshotGasLastCall("AlphaVault", "unwrapForTao: full after a rotation (64 validators)");
     }
 
     // The most consolidation work one call can do: the roll drains 64 dropped slots into a pile,
@@ -169,6 +169,30 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
 
         vault.rebalance(NETUID1);
         vm.snapshotGasLastCall("AlphaVault", "rebalance: fully rotated (64 validators)");
+    }
+
+    // The two rails a watcher drives, priced at full width: the cost of putting a loss on file and
+    // of carrying the alpha home once it is found.
+    function test_gas_syncBacking_64Validators() public {
+        _setValidatorCount(NETUID1, MAX_VALIDATORS);
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        _buildSwapTrail(NETUID1, lens.getCurrentValidators(NETUID1)[0], 2);
+
+        vault.syncBacking(TOKEN1);
+        vm.snapshotGasLastCall("AlphaVault", "syncBacking: loss on file (64 validators)");
+    }
+
+    function test_gas_recoverStray_64Validators() public {
+        _setValidatorCount(NETUID1, MAX_VALIDATORS);
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        bytes32 lost = lens.getCurrentValidators(NETUID1)[0];
+        bytes32 tip = _buildSwapTrail(NETUID1, lost, 2);
+        vault.syncBacking(TOKEN1);
+
+        vault.recoverStray(TOKEN1, 0, tip);
+        vm.snapshotGasLastCall("AlphaVault", "recoverStray: whole slot (64 validators)");
     }
 
     function test_gas_previewUnwrap_64Validators() public {

@@ -47,33 +47,6 @@ library VaultReads {
         }
     }
 
-    /// @dev The whole stake behind a position. The registry read is deliberately unchecked: a
-    ///      position whose validator set was withdrawn still holds the alpha its remembered slots
-    ///      name, and reporting no backing for it would be wrong. Callers that must instead refuse
-    ///      an unconfigured subnet resolve the set themselves and pass it to `unionStake`.
-    function backingStake(IValidatorRegistry registry, bytes32[] memory lastSeen, bytes32 coldkey, uint16 netuid)
-        internal
-        view
-        returns (bytes32[] memory hotkeys, uint256[] memory balances, uint256 total)
-    {
-        (bytes32[] memory current,) = registry.getValidators(netuid);
-        return unionStake(lastSeen, current, coldkey, netuid);
-    }
-
-    /// @dev Per-hotkey stake across the remembered and current validator sets, with its total. A view
-    ///      has no chance to consolidate first, so it must count stake wherever it sits: between a
-    ///      registry commit and the next vault call the whole position is on validators the set no
-    ///      longer names, and reading only the current set would report no backing at all.
-    function unionStake(bytes32[] memory lastSeen, bytes32[] memory current, bytes32 coldkey, uint16 netuid)
-        internal
-        view
-        returns (bytes32[] memory hotkeys, uint256[] memory balances, uint256 total)
-    {
-        hotkeys = VaultMath.unionSlots(lastSeen, current);
-        balances = fetchBalances(hotkeys, coldkey, netuid);
-        total = VaultMath.sumBalances(balances);
-    }
-
     function isIssuedForDissolvedSubnet(uint256 tokenId) internal view returns (bool) {
         uint64 currentRegistrationBlock =
             ISubnet(SUBNET_PRECOMPILE).getNetworkRegistrationBlock(VaultMath.netuidOf(tokenId));
@@ -103,5 +76,153 @@ library VaultReads {
         if (isDissolving(VaultMath.netuidOf(tokenId))) return 0;
         if (isIssuedForDissolvedSubnet(tokenId)) return 0;
         return newTao;
+    }
+
+    // -------------------- Backing record ----------------------------------------
+
+    /// @dev One record per validator the position is spread across. `logical` is the attested
+    ///      identity the registry assigns weight to; `active` is the key expected to be holding
+    ///      that identity's alpha. They start equal and diverge only when a hotkey swap moves the
+    ///      stake before the attesters catch up. `tracked` is the exact balance the last settle
+    ///      read at `active`, and `shortSince` is when a call first found that balance missing -
+    ///      zero while the slot accounts for itself.
+    struct Slot {
+        bytes32 logical;
+        bytes32 active;
+        uint256 tracked;
+        uint64 shortSince;
+    }
+
+    /// @dev One reading of a record against the chain: the physical key each slot resolves to, what
+    ///      sits there, which slots cannot account for themselves, the located total, and the first
+    ///      slot whose loss still holds the position shut. Carried as a struct because the coverage
+    ///      build compiles at minimum optimization, where returning the parts separately runs the
+    ///      stack out.
+    struct Backing {
+        bytes32[] keys;
+        uint256[] balances;
+        bool[] short;
+        uint256 total;
+        uint256 standing;
+    }
+
+    /// @dev The chain credits its own transfers, moves and swap migrations a few RAO short of the
+    ///      amount asked for, so expectations are compared with this much give rather than for
+    ///      equality. It is an accepted ceiling on accounting dust the vault will never chase, not
+    ///      a claim that the chain preserves exact equality.
+    uint256 internal constant TRACKED_SLACK_RAO = 1e3;
+
+    /// @dev How long a watcher has to point the vault at missing alpha before the record gives up
+    ///      on it and the remainder is written off across everyone still holding shares. Each
+    ///      slot's loss runs its own window from the call that first recorded it.
+    uint256 internal constant RECOVERY_WINDOW = 3 hours;
+
+    /// @dev Reads the record against the chain without writing anything, resolving at most one
+    ///      hotkey swap per slot. Shared by the vault's rails and the lens's quotes, so a quote and
+    ///      the call it quotes can never disagree about what the position holds.
+    function resolveBacking(Slot[] memory slots, bytes32 coldkey, uint16 netuid)
+        internal
+        view
+        returns (Backing memory backing)
+    {
+        uint256 count = slots.length;
+        backing.keys = activesOf(slots);
+        backing.balances = new uint256[](count);
+        backing.short = new bool[](count);
+        backing.standing = type(uint256).max;
+        for (uint256 i; i < count;) {
+            uint256 tracked = slots[i].tracked;
+            uint256 balance = IStaking(STAKING_PRECOMPILE).getStake(backing.keys[i], coldkey, netuid);
+            if (!coversTracked(balance, tracked)) {
+                (bool followed, bytes32 successor, uint256 successorBalance) =
+                    _followSwap(backing.keys, i, balance, tracked, coldkey, netuid);
+                if (followed) {
+                    backing.keys[i] = successor;
+                    balance = successorBalance;
+                } else {
+                    backing.short[i] = true;
+                    if (backing.standing == type(uint256).max && isWindowStanding(slots[i].shortSince)) {
+                        backing.standing = i;
+                    }
+                }
+            }
+            backing.balances[i] = balance;
+            backing.total += balance;
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @dev The one shortfall that resolves itself: an ordinary validator hotkey swap, read off the
+    ///      chain's own successor edge and accepted only when it explains the whole slot.
+    ///
+    ///      A residual left on the old key is refused rather than followed, because a slot spread
+    ///      across two physical keys is more than the record can carry; a watcher consolidates it
+    ///      with `recoverStray` instead. A successor another slot already answers for is refused
+    ///      too - one balance may never back two expectations. Exactly one edge is read and the
+    ///      successor's own successor never is: a deeper trail, an erased edge, an ambiguous or a
+    ///      partial case is a shortfall for the watcher to resolve.
+    ///
+    ///      Deliberately no price and no threshold: judging a past event by today's valuation gets
+    ///      it wrong in both directions as the market moves.
+    function _followSwap(
+        bytes32[] memory keys,
+        uint256 index,
+        uint256 balance,
+        uint256 tracked,
+        bytes32 coldkey,
+        uint16 netuid
+    ) private view returns (bool, bytes32, uint256) {
+        if (balance != 0) return (false, bytes32(0), 0);
+        bytes32 active = keys[index];
+        (bool exists, bytes32 successor) = IStaking(STAKING_PRECOMPILE).getHotkeySuccessor(active, netuid);
+        if (!exists || successor == active) return (false, bytes32(0), 0);
+        if (VaultMath.contains(keys, successor)) return (false, bytes32(0), 0);
+        uint256 successorBalance = IStaking(STAKING_PRECOMPILE).getStake(successor, coldkey, netuid);
+        if (!coversTracked(successorBalance, tracked)) return (false, bytes32(0), 0);
+        return (true, successor, successorBalance);
+    }
+
+    function activesOf(Slot[] memory slots) internal pure returns (bytes32[] memory keys) {
+        keys = new bytes32[](slots.length);
+        for (uint256 i; i < keys.length;) {
+            keys[i] = slots[i].active;
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @dev Which key a slot should point at once its balance is known: a slot holding nothing has
+    ///      nothing to keep the record pointed away from its attested validator, and a key the
+    ///      chain has since retired would only refuse the next move aimed at it.
+    function anchorKey(bytes32 attested, bytes32 holding, uint256 balance) internal pure returns (bytes32) {
+        return balance == 0 ? attested : holding;
+    }
+
+    /// @dev Whether `stake` accounts for a slot owed `tracked`, with the give the chain's own
+    ///      crediting requires.
+    function coversTracked(uint256 stake, uint256 tracked) internal pure returns (bool) {
+        return stake + TRACKED_SLACK_RAO >= tracked;
+    }
+
+    /// @dev Whether a loss recorded at `shortSince` still holds the position shut. A loss nobody
+    ///      has recorded yet counts: a deadline cannot pass before it exists, so an unrecorded loss
+    ///      blocks until someone calls `syncBacking` to start its clock.
+    function isWindowStanding(uint64 shortSince) internal view returns (bool) {
+        // forge-lint: disable-next-line(block-timestamp)
+        return shortSince == 0 || block.timestamp < shortSince + RECOVERY_WINDOW;
+    }
+
+    /// @dev Whether any slot in this reading fails to account for itself, whatever its clock says.
+    function isShort(Backing memory backing) internal pure returns (bool) {
+        for (uint256 i; i < backing.short.length;) {
+            if (backing.short[i]) return true;
+            unchecked {
+                ++i;
+            }
+        }
+        return false;
     }
 }
