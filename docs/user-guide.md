@@ -103,6 +103,25 @@ dissolution timeline.
 and the TAO payout on a dissolved one; the TAO market order is priced
 only at execution, bounded by your `minTaoOut`.
 
+## When the vault refuses to quote
+
+Every quote and every alpha-moving call can revert `BackingShortfall`.
+That means the vault is holding alpha it cannot currently account for -
+usually a validator hotkey swap it could not follow - and it will not
+value or move the position until the alpha is found or a three-hour
+recovery window runs out. Your shares still transfer and your claimable
+TAO still pays out throughout.
+
+`isBackingIntact(tokenId)` and `frozenUntil(tokenId)` on the lens report
+the state without reverting, and `locatedStake(tokenId)` reports what the
+vault can currently find. `frozenUntil` returns zero when nothing is
+missing, the maximum uint256 when a loss is visible but nobody has started
+its clock yet - in which case anyone can, with `syncBacking(tokenId)` on
+the vault - and otherwise the unix time from which the token answers
+again. Anything still missing then is a loss shared by everyone holding
+shares at that moment. See
+[edge-cases.md](edge-cases.md).
+
 ## Claimable TAO
 
 The vault's clone can receive native TAO outside any exit - the chain

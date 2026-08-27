@@ -79,6 +79,51 @@ stays staked comes back to the caller as shares, except
 on a burn of the entire supply, which drops a leftover below the chain's
 minimum.
 
+## A validator swaps its hotkey
+
+A validator can move its identity to a new hotkey at any time, carrying
+the vault's alpha with it. The vault reads the chain's own successor
+edge and follows it one hop, so the ordinary swap resolves itself on the
+next call and holders never notice.
+
+One hop is all it reads. A validator that swapped twice before the vault
+looked, an edge the chain has since dropped, two swaps converging on one
+key, or a partial move all leave backing the vault cannot account for.
+So does the chain's dust sweep, which records nothing at all - and a
+swap looks exactly like it once the old key is registered again and the
+edge disappears, so the vault does not guess between them.
+
+Backing that cannot be accounted for shuts the token for **three hours**
+from the moment a call records it. During that window `wrap`,
+`rebalance`, `unwrap` and `unwrapForTao` revert `BackingShortfall`, and
+every lens quote refuses with it. Share transfers, `claimTao` and the
+mailbox reclaims stay open throughout.
+
+Anyone can act inside the window. `syncBacking(tokenId)` starts the
+clock and moves no alpha; `recoverStray(tokenId, slotIndex, sourceHotkey)`
+carries found alpha back under the key its slot expects, one fragment at
+a time if need be. Neither needs a signature or a quorum, because the
+alpha in question already sits under the vault's own coldkey.
+
+Whatever is still missing at the deadline is written off: the token
+reopens valued at what it can find, and the loss falls across everyone
+holding shares at that moment. Alpha found afterwards is new backing for
+whoever holds shares then. Both halves of that are deliberate - the
+alternative is a token that stays shut indefinitely. The full account is
+in [design/backing-resolution.md](design/backing-resolution.md).
+
+## A hotkey nobody owns
+
+A hotkey swap that keeps its stake leaves the vault's alpha under a key
+the chain no longer records an owner for. The record still finds it, so
+nothing is missing and no window opens - but the chain refuses every
+stake operation naming that key, so the alpha cannot move.
+
+Taking ownership of an abandoned hotkey is open to anyone, costs nothing
+beyond the transaction fee, and gives the claimant no claim on the stake
+delegated under it. Once someone claims it, exits go through again. The
+vault never owns a hotkey itself.
+
 ## Stray TAO
 
 Native TAO can arrive on a clone outside any exit: the chain force-sold

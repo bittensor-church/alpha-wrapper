@@ -78,6 +78,34 @@ class Environment:
             self.lens_address, "totalStake(uint256)(uint256)", token_id,
         ))
 
+    def vault_located_stake(self, token_id: int) -> int:
+        """Alpha (RAO) the vault can find for a token id, whether or not that is all of it.
+        Answers where `vault_total_stake` refuses."""
+        return int(chain.cast_call(
+            self.lens_address, "locatedStake(uint256)(uint256)", token_id,
+        ))
+
+    def backing_intact(self, token_id: int) -> bool:
+        """Whether the vault can account for the alpha it expects under every validator
+        it records."""
+        return chain.cast_call(
+            self.lens_address, "isBackingIntact(uint256)(bool)", token_id,
+        ).strip() == "true"
+
+    def frozen_until(self, token_id: int) -> int:
+        """Unix time at which the losses on file stop holding the token shut; 0 when none
+        is on file."""
+        return int(chain.cast_call(
+            self.lens_address, "frozenUntil(uint256)(uint256)", token_id,
+        ))
+
+    def sync_backing(self, token_id: int) -> None:
+        """Put `token_id`'s unaccounted loss on file, starting the window after which the
+        record gives up on it. Anyone may call it."""
+        self.vault_send(
+            1_500_000, "syncBacking failed", "syncBacking(uint256)", token_id,
+        )
+
     def share_price(self, token_id: int) -> int:
         return int(chain.cast_call(
             self.lens_address, "sharePrice(uint256)(uint256)", token_id,
@@ -117,7 +145,7 @@ class Environment:
     def hotkey_in_last_seen(self, token_id: int, hotkey_pubkey: str) -> bool:
         """Whether the vault's remembered validator set still references `hotkey_pubkey`."""
         remembered = chain.run(
-            ["cast", "call", self.vault_address, "lastSeenHotkeys(uint256)(bytes32[])",
+            ["cast", "call", self.lens_address, "lastSeenHotkeys(uint256)(bytes32[])",
              str(token_id), "--rpc-url", config.RPC_URL],
         ).stdout
         return hotkey_pubkey.removeprefix("0x").lower() in remembered.lower()

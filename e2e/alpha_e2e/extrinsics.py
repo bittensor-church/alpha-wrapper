@@ -45,10 +45,12 @@ def _failure(result) -> str:
     return f"{error.name}: {error.message}"
 
 
-def _submit(client, call) -> str:
-    """Sign `call` as Alice, wait for inclusion, and return the block hash."""
-    alice = _sdk().sp_core.Keypair.create_from_uri("//Alice")
-    result = client.submit_call(call, alice, wait_for_finalization=False)
+def _submit(client, call, signer_uri: str = "//Alice") -> str:
+    """Sign `call`, wait for inclusion, and return the block hash. Defaults to
+    Alice, who owns the registered validator hotkeys; pass another dev URI to
+    show a call is open to signers with no relationship to its subject."""
+    signer = _sdk().sp_core.Keypair.create_from_uri(signer_uri)
+    result = client.submit_call(call, signer, wait_for_finalization=False)
     if not result.success:
         raise ExtrinsicError(_failure(result))
     return result.block_hash
@@ -242,3 +244,62 @@ def dissolve_network(
     if still_registered:
         raise ExtrinsicError(f"dissolve_network netuid={netuid} left the subnet registered")
     return block_hash
+
+
+def keypair_ss58(uri: str) -> str:
+    """The ss58 address behind a dev key URI, for keys that only need an identity."""
+    return _sdk().sp_core.Keypair.create_from_uri(uri).ss58_address
+
+
+def fund_account(
+    dest_ss58: str, amount_rao: int, *, chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Send TAO from Alice so `dest_ss58` can pay its own transaction fees, rather
+    than the test resting on whatever the chainspec happened to endow."""
+    with _connect(chain_endpoint) as client:
+        return _submit(client, _sdk().calls.Balances.transfer_keep_alive(
+            dest=dest_ss58, value=amount_rao,
+        ))
+
+
+def swap_hotkey_keep_stake(
+    hotkey_ss58: str, new_hotkey_ss58: str,
+    *, chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Move a hotkey's identity across every subnet while its stake stays behind.
+
+    The old hotkey is left with no recorded owner, which is the state the chain
+    refuses to move stake out of. Signed by Alice, who owns the registered
+    validator hotkeys."""
+    with _connect(chain_endpoint) as client:
+        return _submit(client, _sdk().calls.SubtensorModule.swap_hotkey_v2(
+            hotkey=hotkey_ss58, new_hotkey=new_hotkey_ss58, netuid=None, keep_stake=True,
+        ))
+
+
+def associate_hotkey(
+    hotkey_ss58: str, *, signer_uri: str = "//Alice",
+    chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Take ownership of a hotkey nobody owns. Open to any signer and free beyond
+    the fee; a hotkey that already has an owner is left alone."""
+    with _connect(chain_endpoint) as client:
+        return _submit(client, _sdk().calls.SubtensorModule.try_associate_hotkey(
+            hotkey=hotkey_ss58,
+        ), signer_uri=signer_uri)
+
+
+# The ownership map answers for every hotkey, so "nobody owns this" arrives as the
+# all-zero account rather than as an absent entry.
+UNOWNED_ACCOUNT = "5C4hrfjw9DjXZTzV3MwzrrAr9P1MJhSrvWGWqi1eSuyUpnhM"
+
+
+def hotkey_owner(
+    hotkey_ss58: str, *, chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """The coldkey recorded as owning `hotkey_ss58`, or "" when nobody does. This
+    record is what every stake operation checks the hotkey against."""
+    with _connect(chain_endpoint) as client:
+        value = client.query(_sdk().storage.SubtensorModule.Owner, [hotkey_ss58])
+    owner = "" if value is None else str(value)
+    return "" if owner == UNOWNED_ACCOUNT else owner
