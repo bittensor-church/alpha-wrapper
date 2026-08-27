@@ -96,13 +96,13 @@ library VaultReads {
     /// @param balances What sits under each of them.
     /// @param short    Which slots cannot account for themselves.
     /// @param total    What the reading located in all.
-    /// @param standing First slot whose loss still holds the position shut; max when none does.
+    /// @param firstShort First slot that cannot account for itself; max when none.
     struct Backing {
         bytes32[] keys;
         uint256[] balances;
         bool[] short;
         uint256 total;
-        uint256 standing;
+        uint256 firstShort;
     }
 
     /// @dev Expectations are compared with this much give, never for equality. An accepted ceiling
@@ -125,7 +125,7 @@ library VaultReads {
         backing.keys = activesOf(slots);
         backing.balances = new uint256[](count);
         backing.short = new bool[](count);
-        backing.standing = type(uint256).max;
+        backing.firstShort = type(uint256).max;
         for (uint256 i; i < count;) {
             uint256 tracked = slots[i].tracked;
             uint256 balance = IStaking(STAKING_PRECOMPILE).getStake(backing.keys[i], coldkey, netuid);
@@ -137,9 +137,7 @@ library VaultReads {
                     balance = successorBalance;
                 } else {
                     backing.short[i] = true;
-                    if (backing.standing == type(uint256).max && isWindowStanding(slots[i].shortSince)) {
-                        backing.standing = i;
-                    }
+                    if (backing.firstShort == type(uint256).max) backing.firstShort = i;
                 }
             }
             backing.balances[i] = balance;
@@ -194,16 +192,5 @@ library VaultReads {
     function isWindowStanding(uint64 shortSince) internal view returns (bool) {
         // forge-lint: disable-next-line(block-timestamp)
         return shortSince == 0 || block.timestamp < shortSince + RECOVERY_WINDOW;
-    }
-
-    /// @dev Whether any slot fails to account for itself, whatever its clock says.
-    function isShort(Backing memory backing) internal pure returns (bool) {
-        for (uint256 i; i < backing.short.length;) {
-            if (backing.short[i]) return true;
-            unchecked {
-                ++i;
-            }
-        }
-        return false;
     }
 }

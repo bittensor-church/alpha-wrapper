@@ -39,9 +39,9 @@ contract AlphaVaultLens {
     }
 
     /// @notice Total alpha backing this token's shares. Returns 0 before the clone exists.
-    /// @dev    Reverts `BackingShortfall` while a loss's recovery window is still running: the
-    ///         figure it would otherwise give counts only what the vault can locate, so it
-    ///         understates the holding and steps back up the moment the alpha is found.
+    /// @dev    Reverts `BackingShortfall` while any backing is unaccounted for: the figure it
+    ///         would otherwise give counts only what the vault can locate, so it understates the
+    ///         holding and steps back up the moment the alpha is found.
     ///         `locatedStake` gives that figure regardless, and `isBackingIntact` and
     ///         `frozenUntil` report the state without reverting.
     ///
@@ -51,9 +51,9 @@ contract AlphaVaultLens {
     /// @return Alpha staked under the clone for this token.
     function totalStake(uint256 tokenId) public view returns (uint256) {
         (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _readBacking(tokenId);
-        if (backing.standing != type(uint256).max) {
+        if (backing.firstShort != type(uint256).max) {
             revert BackingShortfall(
-                VaultMath.netuidOf(tokenId), slots[backing.standing].active, slots[backing.standing].tracked
+                VaultMath.netuidOf(tokenId), slots[backing.firstShort].active, slots[backing.firstShort].tracked
             );
         }
         return backing.total;
@@ -75,20 +75,19 @@ contract AlphaVaultLens {
 
     /// @notice Whether the vault can account for the alpha it expects under every validator it
     ///         records. A hotkey swap it can follow on its own reads true.
-    /// @dev    A visible gap is not by itself a refusal: the rails answer again from the moment a
-    ///         window runs out, while this still reads false until a settling call re-anchors the
-    ///         record. Gate on `frozenUntil` to refuse on the vault's own terms.
+    /// @dev    False means every rail refuses, and keeps refusing past the deadline until
+    ///         `syncBacking` books the loss.
     function isBackingIntact(uint256 tokenId) external view returns (bool) {
         (, VaultReads.Backing memory backing) = _readBacking(tokenId);
-        return !VaultReads.isShort(backing);
+        return backing.firstShort == type(uint256).max;
     }
 
-    /// @notice When the losses on file stop holding the token shut, as a unix timestamp; zero when
-    ///         nothing is missing.
+    /// @notice When the losses on file become writable off, as a unix timestamp; zero when nothing
+    ///         is missing.
     /// @dev    The latest deadline across the slots the vault cannot account for. A loss nobody
-    ///         has recorded yet reads `type(uint256).max`, since no deadline exists until
-    ///         `syncBacking` or a settling rail starts one. A timestamp already past means every
-    ///         window has run and the token answers again.
+    ///         has recorded yet reads `type(uint256).max`, since no deadline exists until someone
+    ///         calls `syncBacking` to start one. Past the timestamp the token stays shut until a
+    ///         further `syncBacking` books the loss.
     function frozenUntil(uint256 tokenId) external view returns (uint256 deadline) {
         (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _readBacking(tokenId);
         for (uint256 i; i < backing.short.length;) {
@@ -111,7 +110,7 @@ contract AlphaVaultLens {
         view
         returns (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing)
     {
-        backing.standing = type(uint256).max;
+        backing.firstShort = type(uint256).max;
         address clone = vault.subnetClone(tokenId);
         if (clone == address(0)) return (slots, backing);
         uint16 netuid = VaultMath.netuidOf(tokenId);

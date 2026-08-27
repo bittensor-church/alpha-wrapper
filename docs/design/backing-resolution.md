@@ -68,7 +68,7 @@ that reverts leaves no record behind - only a successful call can write
 one. Anyone may call `syncBacking(tokenId)`, which moves no alpha and
 stamps the moment the vault first saw the loss.
 
-From that stamp the slot has **three hours**. While the window stands:
+From that stamp the slot has **three hours**. Until the loss is booked:
 
 - `wrap`, `rebalance`, `unwrap` and `unwrapForTao` revert
   `BackingShortfall`.
@@ -85,10 +85,12 @@ own clock, so a second loss neither restarts the first nor rides it out.
 A slot that accounts for itself again gives its clock up, so a later
 identical loss starts from no clock at all.
 
-At the deadline the expectation lapses. Quotes answer again on what the
-vault can locate, and the next successful call that moves the position
-takes that figure as the new expectation. There is no separate
-finalizer.
+At the deadline the expectation may be given up on - by another call to
+`syncBacking`, and only by that. Nothing else books a loss: an ordinary
+deposit, exit or rebalance keeps refusing past the deadline, so no user
+operation ever writes value off as a side effect, and a watcher's
+transaction is what reopens the token. From then on quotes answer on what
+the vault can locate.
 
 ## Recovering the alpha
 
@@ -103,9 +105,10 @@ keys cannot take anything out.
   the slot is whole only once its key covers what it was owed.
 - No call moves a deadline, in either direction. Finding the whole
   expectation ends the window; finding part of it does not extend one.
-- Drawing on a key another slot answers for is allowed only above that
-  slot's own expectation, re-read after the move. One slot's backing can
-  never be drained to make another look whole.
+- A key any slot already resolves to is refused, whatever it holds above
+  that slot's expectation. Backing that is already accounted for is not
+  stray: one slot is never recapitalized out of another, and a surplus
+  counts toward the total where it sits.
 - It keeps working after the deadline. Until a settling call anchors the
   record, the slot still knows what it was owed.
 
@@ -139,7 +142,8 @@ rounds away, may stay unrecovered and be socialized the same way.
 The design assumes someone is watching every vault. Their job:
 
 1. Call `syncBacking` promptly on any token reporting itself short, so
-   the clock starts.
+   the clock starts - and again once the deadline passes, since that call
+   is the only thing that books the loss and reopens the token.
 2. Take ownership of any funded hotkey the chain has abandoned, so the
    alpha under it can move again.
 3. Find where the alpha went - deeper swap trails and erased lineage are

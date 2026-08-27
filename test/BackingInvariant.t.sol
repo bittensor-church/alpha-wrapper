@@ -110,7 +110,13 @@ contract BackingHandler is Test {
         uint256 slots = vault.recordedSlots(tokenId).length;
         if (slots == 0) return;
         bytes32 source = touchedHotkeys[bound(sourceSeed, 0, touchedHotkeys.length - 1)];
-        try vault.recoverStray(tokenId, bound(slotSeed, 0, slots - 1), source) { } catch { }
+        bool[] memory coveredBefore = harness.coveredSlots();
+        try vault.recoverStray(tokenId, bound(slotSeed, 0, slots - 1), source) {
+            bool[] memory coveredAfter = harness.coveredSlots();
+            for (uint256 i; i < coveredBefore.length; ++i) {
+                assertTrue(!coveredBefore[i] || coveredAfter[i], "recovery left a covered slot short");
+            }
+        } catch { }
     }
 
     function rotateValidators(uint256 seed) external {
@@ -150,6 +156,17 @@ contract BackingInvariantTest is AlphaVaultTestBase {
 
     function attestedSet() external view returns (bytes32[] memory) {
         return currentSet;
+    }
+
+    /// @dev Which slots the resolver can currently account for.
+    function coveredSlots() external view returns (bool[] memory covered) {
+        VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
+        covered = new bool[](slots.length);
+        bytes32 coldkey = _subnetColdkey(NETUID1);
+        VaultReads.Backing memory backing = VaultReads.resolveBacking(slots, coldkey, uint16(NETUID1));
+        for (uint256 i; i < slots.length; ++i) {
+            covered[i] = !backing.short[i];
+        }
     }
 
     function wrapFor(address user, uint256 amount, bytes32 hotkey) external {

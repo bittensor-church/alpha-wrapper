@@ -105,9 +105,10 @@ carries found alpha back under the key its slot expects, one fragment at
 a time if need be. Neither needs a signature or a quorum, because the
 alpha in question already sits under the vault's own coldkey.
 
-Whatever is still missing at the deadline is written off: the token
-reopens valued at what it can find, and the loss falls across everyone
-holding shares at that moment. Alpha found afterwards is new backing for
+Whatever is still missing at the deadline is written off by a further
+`syncBacking` call - nothing else books it, so no deposit or exit gives up
+on backing as a side effect. The token then reopens valued at what it can
+find, and the loss falls across everyone holding shares at that moment. Alpha found afterwards is new backing for
 whoever holds shares then. Both halves of that are deliberate - the
 alternative is a token that stays shut indefinitely. The full account is
 in [design/backing-resolution.md](design/backing-resolution.md).

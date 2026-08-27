@@ -268,9 +268,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     function _catchRecordUpFor(uint256 tokenId) internal {
         if (lens.isBackingIntact(tokenId)) return;
-        vault.syncBacking(tokenId);
-        vm.warp(block.timestamp + VaultReads.RECOVERY_WINDOW);
-        vault.syncBacking(tokenId);
+        _runOutRecoveryWindow(tokenId);
     }
 
     // Smallest share count whose pro-rata assets equal `targetAssets` under the share-price cushion.
@@ -456,10 +454,11 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         _simulateOffVaultSwap(netuid, fromHotkey, tip);
     }
 
-    /// @dev Records the loss and lets its recovery window run out, leaving the token where the next
-    ///      settling call writes it off.
+    /// @dev Puts the loss on file, runs its window out, and books it - the three steps that reopen
+    ///      a token, all of them through the one permissionless entry point.
     function _runOutRecoveryWindow(uint256 tokenId) internal {
         vault.syncBacking(tokenId);
         vm.warp(lens.frozenUntil(tokenId));
+        vault.syncBacking(tokenId);
     }
 }

@@ -31,4 +31,3 @@ error BackingShortfall(uint16 netuid, bytes32 hotkey, uint256 tracked);
 error BackingUnchanged();
 error NothingToRecover();
 error RecoveryBelowFloor();
-error SourceSlotUncovered();

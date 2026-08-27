@@ -7,7 +7,6 @@ import { VaultReads } from "src/libraries/VaultReads.sol";
 import {
     BackingShortfall,
     BackingUnchanged,
-    BackingUnchanged,
     NothingToRecover,
     NothingToUnwrap,
     RecoveryBelowFloor,
@@ -53,84 +52,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vm.expectRevert(BackingUnchanged.selector);
         vault.syncBacking(TOKEN1);
         assertEq(lens.frozenUntil(TOKEN1), deadline, "the deadline did not move");
-    }
-
-    /// @dev A loss deepening on the same key rides the window its slot already has: the clock
-    ///      answers for the slot's whole expectation, fixed at the last settle, so nothing about the
-    ///      gap's size can move a deadline in either direction.
-    function test_DeepeningLoss_KeepsTheOriginalDeadline() public {
-        _depositAndWrap(alice, NETUID1, 30 ether);
-        bytes32 coldkey = _subnetColdkey(NETUID1);
-        uint256 owed = _getVaultStake(hotkey1, NETUID1);
-
-        // Short by a hair: just past the slack the record forgives.
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, owed - 2e3);
-        vault.syncBacking(TOKEN1);
-        uint256 deadline = lens.frozenUntil(TOKEN1);
-
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
-        assertEq(lens.frozenUntil(TOKEN1), deadline, "the deadline did not move");
-
-        vm.warp(deadline - 1);
-        vm.expectPartialRevert(BackingShortfall.selector);
-        vault.rebalance(NETUID1);
-
-        vm.warp(deadline);
-        vm.expectEmit(true, true, false, true, address(vault));
-        emit BackingWrittenOff(TOKEN1, hotkey1, owed, 0);
-        vault.rebalance(NETUID1);
-        assertTrue(lens.isBackingIntact(TOKEN1), "the whole slot settled with the window it had");
-    }
-
-    /// @dev Each slot's loss runs its own clock: a second loss neither restarts the first slot's
-    ///      window nor rides it out.
-    function test_SecondLoss_GetsItsOwnClock() public {
-        _depositAndWrap(alice, NETUID1, 30 ether);
-        _buildSwapTrail(NETUID1, hotkey1, 2);
-        vault.syncBacking(TOKEN1);
-        uint256 firstDeadline = lens.frozenUntil(TOKEN1);
-
-        vm.warp(block.timestamp + 1 hours);
-        _buildSwapTrail(NETUID1, hotkey2, 2);
-        vault.syncBacking(TOKEN1);
-
-        assertEq(
-            vault.recordedSlots(TOKEN1)[0].shortSince + VaultReads.RECOVERY_WINDOW,
-            firstDeadline,
-            "the first clock did not move"
-        );
-        assertEq(lens.frozenUntil(TOKEN1), firstDeadline + 1 hours, "and the second got its own");
-
-        vm.warp(firstDeadline);
-        vm.expectPartialRevert(BackingShortfall.selector);
-        vault.rebalance(NETUID1);
-
-        vm.warp(firstDeadline + 1 hours);
-        vault.rebalance(NETUID1);
-        assertTrue(lens.isBackingIntact(TOKEN1), "both settle once the later window is out");
-    }
-
-    /// @dev The deadline is the whole mechanism, so it is worth pinning either side of rather than
-    ///      only at the boundary every other test warps to.
-    function testFuzz_WriteOff_FallsDueOnlyOnceTheWindowIsOut(uint256 offset) public {
-        _depositAndWrap(alice, NETUID1, 30 ether);
-        _buildSwapTrail(NETUID1, hotkey1, 2);
-        vault.syncBacking(TOKEN1);
-        uint256 deadline = lens.frozenUntil(TOKEN1);
-
-        uint256 at = bound(offset, deadline - VaultReads.RECOVERY_WINDOW, deadline + VaultReads.RECOVERY_WINDOW);
-        vm.warp(at);
-
-        if (at < deadline) {
-            vm.expectPartialRevert(BackingShortfall.selector);
-            vault.rebalance(NETUID1);
-            vm.expectPartialRevert(BackingShortfall.selector);
-            lens.totalStake(TOKEN1);
-        } else {
-            assertGt(lens.totalStake(TOKEN1), 0, "the reduced holding is publishable from the deadline");
-            vault.rebalance(NETUID1);
-            assertTrue(lens.isBackingIntact(TOKEN1), "and the next write anchors it");
-        }
     }
 
     function test_RevertWhen_SyncingATokenThatAccountsForItself() public {
@@ -300,46 +221,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey1, NETUID1), owed, "with everything under the key the slot expects");
     }
 
-    /// @dev A key another slot answers for may only give up what it holds above that slot's own
-    ///      expectation, or one checkpoint could be drained to make another look whole.
-    function test_RecoverStray_TakesOnlyASourceSlotsSurplus() public {
-        _depositAndWrap(alice, NETUID1, 30 ether);
-        bytes32 coldkey = _subnetColdkey(NETUID1);
-        uint256 owedByTwo = _getVaultStake(hotkey2, NETUID1);
-        uint256 surplus = 4 ether;
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, coldkey, NETUID1, owedByTwo + surplus);
-        vault.syncBacking(TOKEN1);
-
-        vm.prank(bob);
-        vault.recoverStray(TOKEN1, 0, hotkey2);
-
-        assertEq(_getVaultStake(hotkey2, NETUID1), owedByTwo, "the source kept exactly what it owed");
-        assertEq(_getVaultStake(hotkey1, NETUID1), surplus, "and only its surplus moved");
-
-        vm.expectRevert(NothingToRecover.selector);
-        vm.prank(bob);
-        vault.recoverStray(TOKEN1, 0, hotkey2);
-    }
-
-    /// @dev Whatever the chain makes of the move, a source slot the recovery drew on has to come
-    ///      out of it still covering its own expectation.
-    function testFuzz_RecoverStray_LeavesEverySourceSlotCovered(uint256 rawSurplus) public {
-        _depositAndWrap(alice, NETUID1, 30 ether);
-        bytes32 coldkey = _subnetColdkey(NETUID1);
-        uint256 owedByTwo = _getVaultStake(hotkey2, NETUID1);
-        uint256 surplus = bound(rawSurplus, 1e7, 40 ether);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, coldkey, NETUID1, owedByTwo + surplus);
-        vault.syncBacking(TOKEN1);
-
-        vm.prank(bob);
-        vault.recoverStray(TOKEN1, 0, hotkey2);
-
-        assertGe(_getVaultStake(hotkey2, NETUID1), vault.recordedSlots(TOKEN1)[1].tracked, "the source kept its own");
-        assertEq(_getVaultStake(hotkey1, NETUID1), surplus, "and gave up only its surplus");
-    }
-
     /// @dev Alpha the chain would refuse to move is not recovered and is socialized with the rest
     ///      of the loss. The refusal is cheap: a chain-side rejection would burn the whole call.
     function test_RevertWhen_TheStrayIsTooSmallForTheChainToMove() public {
@@ -395,30 +276,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
     }
 
     // -------------------- Running out the window ---------------------------------
-
-    /// @dev From the deadline the quote answers again on what the vault can locate, and the next
-    ///      call that moves the position anchors the record to it. Nothing else has to be called.
-    function test_AtTheDeadline_TheReducedHoldingBecomesPublishable() public {
-        uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
-        uint256 owed = _getVaultStake(hotkey1, NETUID1);
-        _buildSwapTrail(NETUID1, hotkey1, 2);
-        vault.syncBacking(TOKEN1);
-
-        vm.expectPartialRevert(BackingShortfall.selector);
-        lens.totalStake(TOKEN1);
-        uint256 located = lens.locatedStake(TOKEN1);
-
-        vm.warp(lens.frozenUntil(TOKEN1));
-        assertEq(lens.totalStake(TOKEN1), located, "the quote answers on what is there");
-
-        vm.expectEmit(true, true, false, true, address(vault));
-        emit BackingWrittenOff(TOKEN1, hotkey1, owed, 0);
-        vm.prank(alice);
-        vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice));
-
-        assertTrue(lens.isBackingIntact(TOKEN1), "the write anchored the record with no finalizer");
-        assertEq(lens.frozenUntil(TOKEN1), 0, "and left no clock running");
-    }
 
     /// @dev The permissionless maintenance rail takes the write-off too, so a token nobody is
     ///      depositing into or exiting from still comes back on its own.
@@ -527,5 +384,167 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertGt(vault.balanceOf(bob, TOKEN1), 0, "the deposit landed off the chosen name");
         assertEq(_getVaultStake(hotkey1, NETUID1), 0, "nothing was aimed at the retired key");
         assertTrue(lens.isBackingIntact(TOKEN1), "and the record accounts for all of it");
+    }
+
+    /// @dev A loss deepening on the same key rides the window its slot already has: the clock
+    ///      answers for the slot's whole expectation, so the size of the gap moves no deadline.
+    function test_DeepeningLoss_KeepsTheOriginalDeadline() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        bytes32 coldkey = _subnetColdkey(NETUID1);
+        uint256 owed = _getVaultStake(hotkey1, NETUID1);
+
+        // Short by a hair: just past the slack the record forgives.
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, owed - 2e3);
+        vault.syncBacking(TOKEN1);
+        uint256 deadline = lens.frozenUntil(TOKEN1);
+
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
+        assertEq(lens.frozenUntil(TOKEN1), deadline, "the deadline did not move");
+
+        vm.warp(deadline - 1);
+        vm.expectRevert(BackingUnchanged.selector);
+        vault.syncBacking(TOKEN1);
+
+        vm.warp(deadline);
+        vm.expectEmit(true, true, false, true, address(vault));
+        emit BackingWrittenOff(TOKEN1, hotkey1, owed, 0);
+        vault.syncBacking(TOKEN1);
+        assertTrue(lens.isBackingIntact(TOKEN1), "the whole slot settled with the window it had");
+    }
+
+    /// @dev Each slot's loss runs its own clock: a second loss neither restarts the first slot's
+    ///      window nor rides it out.
+    function test_SecondLoss_GetsItsOwnClock() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _buildSwapTrail(NETUID1, hotkey1, 2);
+        vault.syncBacking(TOKEN1);
+        uint256 firstDeadline = lens.frozenUntil(TOKEN1);
+
+        vm.warp(block.timestamp + 1 hours);
+        _buildSwapTrail(NETUID1, hotkey2, 2);
+        vault.syncBacking(TOKEN1);
+
+        assertEq(
+            vault.recordedSlots(TOKEN1)[0].shortSince + VaultReads.RECOVERY_WINDOW,
+            firstDeadline,
+            "the first clock did not move"
+        );
+        assertEq(lens.frozenUntil(TOKEN1), firstDeadline + 1 hours, "and the second got its own");
+
+        // The first slot's window is out, the second's is not: booking one leaves the other shut.
+        vm.warp(firstDeadline);
+        vault.syncBacking(TOKEN1);
+        vm.expectPartialRevert(BackingShortfall.selector);
+        vault.rebalance(NETUID1);
+
+        vm.warp(firstDeadline + 1 hours);
+        vault.syncBacking(TOKEN1);
+        assertTrue(lens.isBackingIntact(TOKEN1), "both settle once the later window is out");
+    }
+
+    /// @dev The deadline is the whole mechanism, so it is worth pinning either side of.
+    function testFuzz_WriteOff_FallsDueOnlyOnceTheWindowIsOut(uint256 offset) public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _buildSwapTrail(NETUID1, hotkey1, 2);
+        vault.syncBacking(TOKEN1);
+        uint256 deadline = lens.frozenUntil(TOKEN1);
+
+        uint256 at = bound(offset, deadline - VaultReads.RECOVERY_WINDOW, deadline + VaultReads.RECOVERY_WINDOW);
+        vm.warp(at);
+
+        if (at < deadline) {
+            vm.expectRevert(BackingUnchanged.selector);
+            vault.syncBacking(TOKEN1);
+            vm.expectPartialRevert(BackingShortfall.selector);
+            lens.totalStake(TOKEN1);
+        } else {
+            vault.syncBacking(TOKEN1);
+            assertTrue(lens.isBackingIntact(TOKEN1), "the loss is booked from the deadline on");
+            assertGt(lens.totalStake(TOKEN1), 0, "and the quote answers on what is left");
+        }
+    }
+
+    /// @dev Only the finalizer gives up on a loss. A rail keeps refusing past the deadline, so a
+    ///      deposit or an exit can never book a write-off as a side effect.
+    function test_PastTheDeadline_OnlySyncBackingBooksTheLoss() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
+        uint256 owed = _getVaultStake(hotkey1, NETUID1);
+        _buildSwapTrail(NETUID1, hotkey1, 2);
+        vault.syncBacking(TOKEN1);
+        uint256 located = lens.locatedStake(TOKEN1);
+
+        vm.warp(lens.frozenUntil(TOKEN1));
+        vm.expectPartialRevert(BackingShortfall.selector);
+        lens.totalStake(TOKEN1);
+        vm.expectPartialRevert(BackingShortfall.selector);
+        vault.rebalance(NETUID1);
+        vm.prank(alice);
+        vm.expectPartialRevert(BackingShortfall.selector);
+        vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice));
+
+        vm.expectEmit(true, true, false, true, address(vault));
+        emit BackingWrittenOff(TOKEN1, hotkey1, owed, 0);
+        vm.prank(bob);
+        vault.syncBacking(TOKEN1);
+
+        assertEq(lens.totalStake(TOKEN1), located, "the quote answers on what is there");
+        assertEq(lens.frozenUntil(TOKEN1), 0, "and no clock is left running");
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice));
+    }
+
+    /// @dev A balance the resolver already answers for is not stray. Left shufflable, anyone could
+    ///      move a swapped-to key's alpha onto another slot and leave the first one short.
+    function test_RevertWhen_RecoveringFromAKeyASlotResolvesTo() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        uint256 owed = _getVaultStake(hotkey1, NETUID1);
+        // A direct swap the resolver follows, with no call yet to persist it.
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+
+        vm.expectRevert(NothingToRecover.selector);
+        vm.prank(bob);
+        vault.recoverStray(TOKEN1, 1, hotkey4);
+
+        assertEq(_getVaultStake(hotkey4, NETUID1), owed, "the swapped-to key kept its alpha");
+        assertTrue(lens.isBackingIntact(TOKEN1), "and the slot it answers for stayed covered");
+    }
+
+    /// @dev A surplus on a covered slot is not stray either: it already counts where it sits, and
+    ///      one slot is never recapitalized out of another.
+    function test_RevertWhen_RecoveringFromACoveredSlotsSurplus() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        bytes32 coldkey = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, coldkey, NETUID1, _getVaultStake(hotkey2, NETUID1) + 4 ether);
+        vault.syncBacking(TOKEN1);
+
+        vm.expectRevert(NothingToRecover.selector);
+        vm.prank(bob);
+        vault.recoverStray(TOKEN1, 0, hotkey2);
+    }
+
+    /// @dev Booking a loss must leave the record pointing somewhere the next call can use. A slot
+    ///      finalized at zero keeps its old physical key, so the settle has to take the attested
+    ///      validator instead - otherwise the rails aim at a key that refuses them.
+    function test_BookedLoss_LeavesTheRailsAimingAtAnAttestedKey() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        vault.rebalance(NETUID1);
+        assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey4, "the record persisted the swap");
+
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, _subnetColdkey(NETUID1), NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey4, true);
+        _runOutRecoveryWindow(TOKEN1);
+        assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey4, "the booking left the key alone");
+
+        // The other slots are still funded, so the rebalance has stake to aim somewhere.
+        vault.rebalance(NETUID1);
+        assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey1, "the settle anchored the attested validator");
+        assertEq(_getVaultStake(hotkey4, NETUID1), 0, "and nothing was aimed at the dead key");
+
+        _simulateAlphaDepositHotkey(bob, NETUID1, 5 ether, hotkey2);
+        vm.prank(bob);
+        vault.wrap(NETUID1, hotkey2);
+        assertGt(vault.balanceOf(bob, TOKEN1), 0, "deposits work again");
     }
 }
