@@ -38,10 +38,14 @@ jobs:
           restore-keys: forge-${{ runner.os }}-cov-
 
       - name: Run forge coverage
+        # Invariant suites are excluded: they run thousands of calls each and coverage builds
+        # unoptimized, so they dominate the runtime while adding no source lines the unit tests
+        # do not already reach. The CI workflow runs them at full depth.
         run: |
           forge coverage \
             --ir-minimum \
             --no-match-coverage "(test|script)/" \
+            --no-match-contract Invariant \
             --report summary \
             | tee /tmp/coverage.txt
           echo '## Coverage' >> "$GITHUB_STEP_SUMMARY"
