@@ -96,8 +96,11 @@ edge disappears, so the vault does not guess between them.
 Backing that cannot be accounted for shuts the token for **three hours**
 from the moment a call records it. During that window `wrap`,
 `rebalance`, `unwrap` and `unwrapForTao` revert `BackingShortfall`, and
-every lens quote refuses with it. Share transfers, `claimTao` and the
-mailbox reclaims stay open throughout.
+so does every quote that values the position - `totalStake`,
+`sharePrice`, `previewWrap`, `previewUnwrap`. The watch surface -
+`locatedStake`, `isBackingIntact`, `frozenUntil` - and `claimableTaoOf`
+keep answering, and share transfers, `claimTao` and the mailbox reclaims
+stay open throughout.
 
 Anyone can act inside the window. `syncBacking(tokenId)` starts the
 clock and moves no alpha; `recoverStray(tokenId, slotIndex, sourceHotkey)`

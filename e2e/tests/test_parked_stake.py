@@ -46,9 +46,12 @@ def test_stranded_holder_exits_after_anyone_claims_the_hotkey(env):
     assert parked > 0, "the setup left no stake on the hotkey about to be stranded"
 
     successor_ss58 = extrinsics.keypair_ss58("//ParkedSuccessor")
+    # Only a runtime without the call at all may skip; a dispatch failure on a runtime that
+    # knows it (a rate limit, a funding gap) must fail the scenario, or the suite's one test
+    # goes green with no coverage.
     try:
         extrinsics.swap_hotkey_keep_stake(hotkey_ss58, successor_ss58)
-    except (extrinsics.ExtrinsicError, AttributeError) as error:
+    except AttributeError as error:
         pytest.skip(f"this runtime cannot strand stake under an unowned hotkey: {error}")
 
     # The identity moved and the owner went with it; the alpha stayed put.

@@ -106,7 +106,10 @@ Recovering lost backing needs no signature at all. `syncBacking` and
 When a validator swaps its hotkey, attesting the new key is the tidy-up,
 not the fix: the vault follows the chain's own successor edge one hop
 and keeps the stake with that validator on its next call. Attest the new
-key when convenient, and drop the old one rather than listing both.
+key when convenient, and drop the old one rather than listing both: a
+set naming a swapped-away key alongside its successor makes deposits,
+alpha exits and rebalances refuse with `SwappedHotkeyStillAttested`
+until the old name is dropped, while the TAO exit stays open.
 
 ## Signer set changes
 

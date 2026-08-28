@@ -6,7 +6,12 @@ import { IValidatorRegistry } from "../interfaces/IValidatorRegistry.sol";
 import { IAddressMapping, ADDRESS_MAPPING_PRECOMPILE } from "../interfaces/IAddressMapping.sol";
 import { ISubnet, SUBNET_PRECOMPILE } from "../interfaces/ISubnet.sol";
 import { VaultMath } from "./VaultMath.sol";
-import { NoValidatorFound, SubnetInDissolutionBlackoutPeriod, ValidatorSetMalformed } from "../VaultErrors.sol";
+import {
+    BackingShortfall,
+    NoValidatorFound,
+    SubnetInDissolutionBlackoutPeriod,
+    ValidatorSetMalformed
+} from "../VaultErrors.sol";
 
 /// @title VaultReads
 /// @notice The chain reads behind a vault position - validator set, per-hotkey stake, subnet
@@ -96,13 +101,11 @@ library VaultReads {
     /// @param balances What sits under each of them.
     /// @param short    Which slots cannot account for themselves.
     /// @param total    What the reading located in all.
-    /// @param firstShort First slot that cannot account for itself; max when none.
     struct Backing {
         bytes32[] keys;
         uint256[] balances;
         bool[] short;
         uint256 total;
-        uint256 firstShort;
     }
 
     /// @dev Expectations are compared with this much give, never for equality. An accepted ceiling
@@ -125,7 +128,6 @@ library VaultReads {
         backing.keys = activesOf(slots);
         backing.balances = new uint256[](count);
         backing.short = new bool[](count);
-        backing.firstShort = type(uint256).max;
         for (uint256 i; i < count;) {
             uint256 tracked = slots[i].tracked;
             uint256 balance = IStaking(STAKING_PRECOMPILE).getStake(backing.keys[i], coldkey, netuid);
@@ -137,7 +139,6 @@ library VaultReads {
                     balance = successorBalance;
                 } else {
                     backing.short[i] = true;
-                    if (backing.firstShort == type(uint256).max) backing.firstShort = i;
                 }
             }
             backing.balances[i] = balance;
@@ -163,13 +164,21 @@ library VaultReads {
         uint16 netuid
     ) private view returns (bool, bytes32, uint256) {
         if (balance != 0) return (false, bytes32(0), 0);
-        bytes32 active = keys[index];
-        (bool exists, bytes32 successor) = IStaking(STAKING_PRECOMPILE).getHotkeySuccessor(active, netuid);
-        if (!exists || successor == active) return (false, bytes32(0), 0);
+        bytes32 successor = hotkeySuccessor(keys[index], netuid);
+        if (successor == bytes32(0)) return (false, bytes32(0), 0);
         if (VaultMath.contains(keys, successor)) return (false, bytes32(0), 0);
         uint256 successorBalance = IStaking(STAKING_PRECOMPILE).getStake(successor, coldkey, netuid);
         if (!coversTracked(successorBalance, tracked)) return (false, bytes32(0), 0);
         return (true, successor, successorBalance);
+    }
+
+    /// @dev The chain's one-hop successor edge for `hotkey`, folded to zero when there is none.
+    ///      Every path that reads the edge goes through here, so a deposit lookup and the record's
+    ///      own swap-following cannot interpret it differently.
+    function hotkeySuccessor(bytes32 hotkey, uint16 netuid) internal view returns (bytes32) {
+        (bool exists, bytes32 successor) = IStaking(STAKING_PRECOMPILE).getHotkeySuccessor(hotkey, netuid);
+        if (!exists || successor == hotkey) return bytes32(0);
+        return successor;
     }
 
     function activesOf(Slot[] memory slots) internal pure returns (bytes32[] memory keys) {
@@ -182,15 +191,41 @@ library VaultReads {
         }
     }
 
+    /// @dev First slot of a reading that cannot account for itself; max when the record is whole.
+    function firstShortOf(bool[] memory short) internal pure returns (uint256) {
+        for (uint256 i; i < short.length;) {
+            if (short[i]) return i;
+            unchecked {
+                ++i;
+            }
+        }
+        return type(uint256).max;
+    }
+
+    /// @dev The one refusal every share-pricing and alpha-moving surface gives while backing is
+    ///      unaccounted for. The vault's rails and the lens's quotes share it, so they cannot
+    ///      raise different errors for the same reading.
+    function requireIntact(Slot[] memory slots, Backing memory backing, uint16 netuid) internal pure {
+        uint256 shortIndex = firstShortOf(backing.short);
+        if (shortIndex != type(uint256).max) {
+            revert BackingShortfall(netuid, slots[shortIndex].active, slots[shortIndex].tracked);
+        }
+    }
+
     /// @dev Whether `stake` accounts for a slot owed `tracked`.
     function coversTracked(uint256 stake, uint256 tracked) internal pure returns (bool) {
         return stake + TRACKED_SLACK_RAO >= tracked;
+    }
+
+    /// @dev When the loss recorded at `shortSince` becomes writable off.
+    function recoveryDeadline(uint64 shortSince) internal pure returns (uint256) {
+        return shortSince + RECOVERY_WINDOW;
     }
 
     /// @dev Whether a loss recorded at `shortSince` still holds the position shut. An unrecorded
     ///      loss counts: a deadline cannot pass before it exists.
     function isWindowStanding(uint64 shortSince) internal view returns (bool) {
         // forge-lint: disable-next-line(block-timestamp)
-        return shortSince == 0 || block.timestamp < shortSince + RECOVERY_WINDOW;
+        return shortSince == 0 || block.timestamp < recoveryDeadline(shortSince);
     }
 }

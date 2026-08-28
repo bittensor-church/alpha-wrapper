@@ -117,9 +117,10 @@ the state without reverting, and `locatedStake(tokenId)` reports what the
 vault can currently find. `frozenUntil` returns zero when nothing is
 missing, the maximum uint256 when a loss is visible but nobody has started
 its clock yet - in which case anyone can, with `syncBacking(tokenId)` on
-the vault - and otherwise the unix time from which the token answers
-again. Anything still missing then is a loss shared by everyone holding
-shares at that moment. See
+the vault - and otherwise the unix time from which the loss can be given
+up on. Giving up takes one more `syncBacking` call; the token answers
+again once it runs, and anything still missing is a loss shared by
+everyone holding shares at that moment. See
 [edge-cases.md](edge-cases.md).
 
 ## Claimable TAO

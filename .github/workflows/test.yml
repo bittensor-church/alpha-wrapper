@@ -54,7 +54,10 @@ jobs:
         # Invariant tests are excluded from the gas snapshot: their gas is not
         # deterministic across runs, so it is not a meaningful regression signal.
         # They still run in the dedicated invariant step below.
-        run: forge snapshot --check --tolerance 1 --no-match-contract Invariant -vvv
+        # The thread count shapes the shared fuzz dictionary and so the snapshot numbers;
+        # pinned to the same --threads 4 the README mandates for regeneration, rather than
+        # left to the runner's core count.
+        run: forge snapshot --check --tolerance 1 --no-match-contract Invariant --threads 4 -vvv
 
       - name: Run invariant tests
         run: forge test --match-contract Invariant -vvv

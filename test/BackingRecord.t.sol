@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { VaultReads } from "src/libraries/VaultReads.sol";
+import { SwappedHotkeyStillAttested } from "src/VaultErrors.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
@@ -140,6 +141,37 @@ contract BackingRecordTest is AlphaVaultTestBase {
         assertEq(slots[0].logical, hotkey4, "the attested name took over the slot");
         assertEq(slots[0].active, hotkey4, "answering for its own key");
         assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "and nothing is counted twice");
+    }
+
+    /// @dev A set naming both a swapped-away key and the successor its alpha moved to cannot be
+    ///      served: the old name refuses every stake operation at full gas, so the rails refuse
+    ///      cheaply instead until the attesters drop it. The TAO exit reads no attested set and
+    ///      stays open throughout.
+    function test_SetNamingASwappedKeyAndItsSuccessor_RefusesCheaply() public {
+        _setAlphaPrice(NETUID1, 1e18);
+        uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        vault.rebalance(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
+
+        _setValidators(
+            NETUID1, _hotkeys(hotkey1, hotkey4, hotkey2), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
+        );
+
+        vm.expectRevert(SwappedHotkeyStillAttested.selector);
+        vault.rebalance(NETUID1);
+        vm.expectRevert(SwappedHotkeyStillAttested.selector);
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice));
+
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares / 4, 0);
+
+        _setValidators(
+            NETUID1, _hotkeys(hotkey4, hotkey2, hotkey3), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
+        );
+        vault.rebalance(NETUID1);
+        assertTrue(lens.isBackingIntact(TOKEN1), "dropping the stale name resumes service");
     }
 
     // -------------------- Quiet changes never trip -------------------------------

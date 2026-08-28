@@ -170,6 +170,32 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         }
     }
 
+    /// @dev The settle after such an exit faces the same trap: the emptied slot's attested name
+    ///      carries another validator's alpha, so the slot keeps its own resolved key instead of
+    ///      falling back onto the name.
+    function test_SettleAfterAnEmptyingExit_KeepsSlotsOnDistinctKeys() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        vault.rebalance(NETUID1);
+        _simulateFollowedSwap(NETUID1, hotkey2, hotkey1);
+        uint256 burn = (shares * (_getVaultStake(hotkey4, NETUID1) + 1e15)) / lens.locatedStake(TOKEN1);
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, burn, 0);
+        uint256 held = lens.locatedStake(TOKEN1);
+
+        vault.rebalance(NETUID1);
+
+        VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
+        for (uint256 i; i < slots.length; ++i) {
+            for (uint256 j = i + 1; j < slots.length; ++j) {
+                assertTrue(slots[i].active != slots[j].active, "no two slots answer for one key");
+            }
+        }
+        assertEq(slots[0].active, hotkey4, "the emptied slot kept its resolved key");
+        assertEq(slots[1].active, hotkey1, "beside the slot whose alpha its name carries");
+        assertApproxEqAbs(lens.totalStake(TOKEN1), held, 0.01 ether, "and the total counts each balance once");
+    }
+
     // -------------------- Emptyings the chain does not explain -------------------
 
     /// @dev A dust sweep records nothing at all, and a swap leaves the same silence once its edge

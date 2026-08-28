@@ -10,6 +10,7 @@ import {
     NothingToRecover,
     NothingToUnwrap,
     RecoveryBelowFloor,
+    RecoveryMisdirected,
     SubnetInDissolutionBlackoutPeriod
 } from "src/VaultErrors.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
@@ -352,6 +353,24 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertTrue(lens.isBackingIntact(TOKEN1), "with the record naming where it went");
     }
 
+    /// @dev The successor edge that finds a deposit also proves the chosen name is swapped away
+    ///      and refuses every operation naming it, so the record adopts the key that actually
+    ///      holds the deposit rather than move it toward the dead name.
+    function test_Wrap_AdoptsTheSuccessorOfADeletedChosenKey() public {
+        address mailbox = vault.getDepositAddress(bob, NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey4);
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, _toSubstrate(mailbox), NETUID1, 1 ether);
+
+        vm.prank(bob);
+        vault.wrap(NETUID1, hotkey1);
+
+        assertGt(vault.balanceOf(bob, TOKEN1), 0, "the deposit landed without naming the dead key");
+        assertEq(_getVaultStake(hotkey1, NETUID1), 0, "nothing was aimed at it");
+        assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey4, "the record adopted the key holding the deposit");
+        assertTrue(lens.isBackingIntact(TOKEN1), "and accounts for all of it");
+    }
+
     /// @dev No path reads a second edge, so a deposit two swaps deep is not found here; it comes
     ///      back through the mailbox reclaim rail and is staked again.
     function test_Wrap_DoesNotWalkPastOneEdge() public {
@@ -507,6 +526,25 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
         assertEq(_getVaultStake(hotkey4, NETUID1), owed, "the swapped-to key kept its alpha");
         assertTrue(lens.isBackingIntact(TOKEN1), "and the slot it answers for stayed covered");
+    }
+
+    /// @dev While a loss is chasing its alpha, a found stray may only be aimed at a slot that is
+    ///      missing something. Parked under a healthy slot's key it would stop answering as stray,
+    ///      and the slot that lost it could never reach it again - a one-transaction way to bury
+    ///      an honest recovery and force the write-off.
+    function test_RecoverStray_RefusesAHealthySlotWhileALossStands() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+        vault.syncBacking(TOKEN1);
+
+        vm.expectRevert(RecoveryMisdirected.selector);
+        vm.prank(bob);
+        vault.recoverStray(TOKEN1, 1, hotkey4);
+
+        // The stray stayed reachable, so the slot that lost it still recovers in full.
+        vm.prank(bob);
+        vault.recoverStray(TOKEN1, 0, hotkey4);
+        assertTrue(lens.isBackingIntact(TOKEN1), "the honest recovery still lands");
     }
 
     /// @dev A surplus on a covered slot is not stray either: it already counts where it sits, and

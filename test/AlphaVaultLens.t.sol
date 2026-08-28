@@ -11,6 +11,8 @@ import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { AlphaVaultLens } from "src/AlphaVaultLens.sol";
 import { ZeroAddress } from "src/VaultErrors.sol";
+import { MockStaking } from "./mocks/MockStaking.sol";
+import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 contract AlphaVaultLensTest is AlphaVaultTestBase {
     function test_RevertWhen_ConstructedWithoutAVault() public {
@@ -149,5 +151,20 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
         assertEq(lens.locatedStake(TOKEN1), staked, "the reading counts what the record names");
         assertTrue(lens.isBackingIntact(TOKEN1), "with nothing to be short against");
         assertEq(lens.frozenUntil(TOKEN1), 0, "and nothing holding it shut");
+    }
+
+    /// @dev Subtensor drains balances progressively while a subnet dissolves, and the record's
+    ///      expectations date from before the drain, so the gap is the chain's doing rather than
+    ///      a loss. The watch surface keeps answering with the in-flux reading and starts no
+    ///      clock, so no watcher is steered into recovery calls nothing can act on.
+    function test_DissolvingSubnet_ReadsTheDrainAsNoLoss() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateDissolutionStarted(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(NETUID1), NETUID1, 0);
+
+        assertTrue(lens.isBackingIntact(TOKEN1), "the drain is not a shortfall");
+        assertEq(lens.frozenUntil(TOKEN1), 0, "and starts no clock");
+        assertEq(lens.totalStake(TOKEN1), lens.locatedStake(TOKEN1), "the total is the in-flux reading");
+        assertLt(lens.totalStake(TOKEN1), 30 ether, "which reflects the drain so far");
     }
 }
