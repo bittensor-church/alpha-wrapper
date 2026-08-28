@@ -7,9 +7,12 @@ at that moment, let them withdraw it, and give none of it to later
 depositors.
 
 The threshold raise clears sub-threshold nominations on EVERY subnet and
-force-sells the vault's whole (deliberately tiny) position. The test restores
-the threshold it found and then retires the swept position's shares, so
-sibling suites sharing the session localnet see the subnet in a normal state.
+force-sells the vault's whole (deliberately tiny) position. Nothing on chain
+records that as the cause, and a hotkey swap whose edge the chain has since
+dropped looks identical, so the vault will not guess: it holds the expectation
+and shuts the alpha rails for a recovery window. The test restores the threshold
+it found, puts the loss on file with no quorum involved, and leaves the token to
+its window rather than pretending the position can be retired inside it.
 """
 import pytest
 
@@ -82,18 +85,31 @@ def test_root_sweep_tao_becomes_claimable(env):
         except Exception as restore_error:  # noqa: BLE001
             print(f"  WARNING: dust threshold not restored to {previous_factor}: {restore_error}")
 
-    # The clearing pass empties the vault's position but its shares remain outstanding. How
-    # empty depends on the runtime build: an exactly-zero position retires shares through the
-    # zero-backing unwrap, while a sub-floor residue exits through the TAO rail's full-drain sale.
+    # How empty the clearing pass leaves the position depends on the runtime build. A position it
+    # emptied can no longer account for itself, and the vault holds that open rather than writing
+    # it off on the spot; one it left whole retires its shares the ordinary way.
     all_shares = env.vault_shares(token_id)
-    if env.vault_total_stake(token_id) == 0:
-        env.vault_send(
-            2_500_000, "Sweep: cleanup unwrap failed",
-            "unwrap(uint256,uint256,bytes32)", token_id, all_shares, env.wrapper_substrate_coldkey,
-        )
-    else:
-        env.vault_send(
-            2_500_000, "Sweep: cleanup unwrap failed",
+    if not env.backing_intact(token_id):
+        located = env.vault_located_stake(token_id)
+        print(f"  Position reads short by design; {located} alpha RAO still located")
+
+        # Putting the loss on file needs no quorum, no registry and no signature - only the one
+        # fact the chain cannot work out for itself, which is when the vault first saw it.
+        env.sync_backing(token_id)
+        opens_from = env.frozen_until(token_id)
+        assert opens_from > 0, "syncBacking did not start the recovery window"
+        print(f"  Loss on file with nobody's permission; the record settles from {opens_from}")
+
+        # Until then the alpha rails are shut. Three hours is not a thing a test can wait out, so
+        # the assertion is the refusal itself, not the reopening.
+        env.vault_send_expect_revert(
+            2_500_000, "Sweep: the exit should be refused while the recovery window runs",
             "unwrapForTao(uint256,uint256,uint256)", token_id, all_shares, 0,
         )
+        return
+
+    env.vault_send(
+        2_500_000, "Sweep: cleanup unwrap failed",
+        "unwrapForTao(uint256,uint256,uint256)", token_id, all_shares, 0,
+    )
     assert env.vault_total_supply(token_id) == 0, "cleanup left outstanding shares"

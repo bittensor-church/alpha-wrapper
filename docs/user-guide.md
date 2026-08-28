@@ -103,6 +103,26 @@ dissolution timeline.
 and the TAO payout on a dissolved one; the TAO market order is priced
 only at execution, bounded by your `minTaoOut`.
 
+## When the vault refuses to quote
+
+Every quote and every alpha-moving call can revert `BackingShortfall`.
+That means the vault is holding alpha it cannot currently account for -
+usually a validator hotkey swap it could not follow - and it will not
+value or move the position until the alpha is found or a recovery
+window runs out (its length is fixed at deployment; the vault's
+`recoveryWindow` reports it). Your shares still transfer and your claimable
+TAO still pays out throughout.
+
+`isBackingIntact(tokenId)` and `frozenUntil(tokenId)` on the lens report
+the state without reverting, and `locatedStake(tokenId)` reports what the
+vault can currently find. `frozenUntil` returns zero when nothing is
+missing, the maximum uint256 when the loss has no clock yet - anyone can
+start one with `syncBacking(tokenId)` on the vault - and otherwise the
+unix time from which a further `syncBacking` can write the loss off.
+That call reopens the token, and whatever is still missing falls on
+everyone holding shares at that moment. See
+[edge-cases.md](edge-cases.md).
+
 ## Claimable TAO
 
 The vault's clone can receive native TAO outside any exit - the chain
@@ -128,3 +148,12 @@ on request:
 - `reclaimTaoFromMailbox(netuid)` recovers native TAO sitting on the
   mailbox address, such as a dissolution refund that arrived before you
   wrapped.
+
+If your `wrap` reverts `ZeroAmount` even though you deposited, the
+validator likely swapped its hotkey after your deposit arrived - the
+swap carries mailbox stake to the new key along with everything else.
+Retry in three steps: find the key holding your deposit (the chain
+records the swap, and any block explorer shows where your mailbox's
+stake sits), call `reclaimAlphaFromMailbox(netuid, thatKey, yourColdkey)`
+to take it back, then stake it toward a validator currently in the
+attested set and `wrap` again.

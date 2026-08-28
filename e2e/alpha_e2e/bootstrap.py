@@ -291,6 +291,7 @@ def _deploy_contracts(netuids: List[int], hotkey_pubkeys: List[str]):
         constructor_args=[
             "https://api.tao20.io/{id}.json", mailbox_implementation_address,
             subnet_clone_implementation_address, validator_registry_address,
+            str(3 * 60 * 60),
         ],
     )
     print(f"  AlphaVault: {vault_address}")

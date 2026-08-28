@@ -42,7 +42,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
             assertEq(_getVaultStake(wide[i], NETUID1), 0, "dropped validator still funded");
         }
         assertEq(lens.totalStake(TOKEN1), 10 ether, "total conserved across the shrink");
-        assertEq(vault.lastSeenHotkeys(TOKEN1).length, 3, "remembered set carries no stale tail");
+        assertEq(_lastSeen(TOKEN1).length, 3, "remembered set carries no stale tail");
 
         _assertEvenSpread(narrow, NETUID1, 10 ether);
     }
@@ -56,7 +56,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
 
         _assertEvenSpread(wide, NETUID1, 10 ether);
         assertEq(lens.totalStake(TOKEN1), 10 ether);
-        assertEq(vault.lastSeenHotkeys(TOKEN1).length, MAX_VALIDATORS);
+        assertEq(_lastSeen(TOKEN1).length, MAX_VALIDATORS);
     }
 
     /// @dev The case weight alignment cannot serve: alignment moves only the smaller of a surplus and
@@ -76,7 +76,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
 
         assertEq(_getVaultStake(wide[MAX_VALIDATORS - 1], NETUID1), 0, "dropped validator swept");
         assertEq(lens.totalStake(TOKEN1), UNSPREADABLE_DEPOSIT, "total conserved");
-        assertEq(vault.lastSeenHotkeys(TOKEN1).length, MAX_VALIDATORS - 1, "nothing left to remember");
+        assertEq(_lastSeen(TOKEN1).length, MAX_VALIDATORS - 1, "nothing left to remember");
     }
 
     /// @dev The widest case there is: a full rotation at the cap leaves 64 dropped validators funded
@@ -96,7 +96,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
             assertEq(_getVaultStake(first[i], NETUID1), 0, "old set fully swept");
         }
         assertEq(_vaultStakeAcross(second, NETUID1), 10 ether, "whole position landed on the new set");
-        assertEq(vault.lastSeenHotkeys(TOKEN1).length, MAX_VALIDATORS);
+        assertEq(_lastSeen(TOKEN1).length, MAX_VALIDATORS);
     }
 
     /// @dev Between a registry commit and the next vault call the whole position sits on validators
@@ -181,7 +181,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
 
         assertEq(_vaultStakeAcross(rotated, NETUID1), amount, "whole position moved to the new set");
         assertEq(lens.totalStake(TOKEN1), amount);
-        assertEq(vault.lastSeenHotkeys(TOKEN1).length, toCount, "the remembered set follows the new one");
+        assertEq(_lastSeen(TOKEN1).length, toCount, "the remembered set follows the new one");
     }
 
     function testFuzz_Unwrap_DeliversPreviewAtAnyValidatorCount(uint256 count, uint256 amount, uint256 burnBps) public {

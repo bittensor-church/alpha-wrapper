@@ -69,6 +69,12 @@ over several sales.
   and assets (the ERC-4626 pattern), and a share-supply cap keeps the
   TAO claim index exact.
 - Market-order exits are slippage-bounded by the caller's `minTaoOut`.
+- Backing the vault cannot account for shuts every share-pricing and
+  alpha-moving path rather than being priced around, so an understated
+  total can never be minted or redeemed against. Recovery is open to
+  anyone and can only move alpha between the vault's own keys, so it
+  needs no permission and grants none
+  ([design/backing-resolution.md](design/backing-resolution.md)).
 
 ## Known tradeoffs
 
@@ -77,6 +83,14 @@ over several sales.
   ([edge-cases.md](edge-cases.md)).
 - Amounts below the chain's minimum stake size can leave the stake split
   drifted from target weights; share value is unaffected.
+- `wrap` reads the caller's mailbox only under the chosen key. A hotkey
+  swap landing between deposit and wrap carries the deposit to the new
+  key, and the wrap reverts until the owner reclaims and retries
+  ([user-guide.md](user-guide.md)). The deposit stays the owner's
+  throughout; the manual retry is the accepted price of a wrap that
+  never guesses where a deposit went. When every attested key has
+  swapped away at once, deposits wait for the next attestation to name
+  a live key; exits and quotes keep working through the record.
 - A partial `unwrapForTao` can fill short and refund the unsold part as
   shares instead of reverting; callers bound the damage with
   `minTaoOut`.
@@ -84,3 +98,16 @@ over several sales.
   subnet, so a list the signers have moved away from can still be
   installed by anyone holding its signatures. Landing a replacement is
   what retires it.
+- Backing that goes missing shuts the token - exits included - for up to
+  the recovery window fixed at deployment (`recoveryWindow`), and holders
+  wait that out. The design buys a watcher time to preserve the backing
+  and then chooses liveness over waiting longer.
+- Backing nobody recovers inside that window is written off across the
+  holders of the moment, and alpha found afterwards accrues to whoever
+  holds shares then. Whoever knows where that alpha sits can deposit at
+  the written-down price first and recover it second, taking most of it
+  from the holders who bore the loss. Accepted policy rather than an
+  accident; the vault has no recapitalization mechanism.
+- The vault relies on someone watching it. Nothing is lost if no one
+  does - the window still runs and the token still reopens - but the
+  missing alpha is then socialized rather than recovered.

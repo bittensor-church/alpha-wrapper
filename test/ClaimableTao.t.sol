@@ -303,6 +303,9 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
         uint256 proceeds = 7 ether;
         _simulateTaoAwardedOnDissolution(TOKEN1, proceeds);
+        // Nothing on chain says where the swept alpha went, so the vault holds the expectation for
+        // its window before giving up on it and letting the shares retire.
+        _catchRecordUpFor(TOKEN1);
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         (uint256 previewAlpha, uint256 previewTao) = lens.previewUnwrap(TOKEN1, shares);
@@ -327,6 +330,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         uint256 seed = 1e10;
         _depositAndWrap(alice, NETUID1, seed);
         _simulateTaoAwardedOnDissolution(TOKEN1, 5 ether);
+        _catchRecordUpFor(TOKEN1);
         _depositAndWrap(bob, NETUID1, seed);
         assertLe(vault.totalSupply(TOKEN1), 1e45);
 
@@ -340,6 +344,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
     function test_RevertWhen_RecapitalizationWouldBreachClaimIndexBound() public {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
         _simulateTaoAwardedOnDissolution(TOKEN1, 5 ether);
+        _catchRecordUpFor(TOKEN1);
 
         bytes32 chosen = lens.getCurrentValidators(NETUID1)[0];
         _simulateAlphaDeposit(bob, NETUID1, DEPOSIT);

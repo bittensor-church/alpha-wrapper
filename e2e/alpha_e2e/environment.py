@@ -78,6 +78,34 @@ class Environment:
             self.lens_address, "totalStake(uint256)(uint256)", token_id,
         ))
 
+    def vault_located_stake(self, token_id: int) -> int:
+        """Alpha (RAO) the vault can find for a token id, whether or not that is all of it.
+        Answers where `vault_total_stake` refuses."""
+        return int(chain.cast_call(
+            self.lens_address, "locatedStake(uint256)(uint256)", token_id,
+        ))
+
+    def backing_intact(self, token_id: int) -> bool:
+        """Whether the vault can account for the alpha it expects under every validator
+        it records."""
+        return chain.cast_call(
+            self.lens_address, "isBackingIntact(uint256)(bool)", token_id,
+        ).strip() == "true"
+
+    def frozen_until(self, token_id: int) -> int:
+        """Unix time at which the losses on file stop holding the token shut; 0 when none
+        is on file."""
+        return int(chain.cast_call(
+            self.lens_address, "frozenUntil(uint256)(uint256)", token_id,
+        ))
+
+    def sync_backing(self, token_id: int, label: Optional[str] = None) -> None:
+        """Put `token_id`'s unaccounted loss on file, starting the window after which the
+        record gives up on it. Anyone may call it."""
+        self.vault_send(
+            1_500_000, "syncBacking failed", "syncBacking(uint256)", token_id, label=label,
+        )
+
     def share_price(self, token_id: int) -> int:
         return int(chain.cast_call(
             self.lens_address, "sharePrice(uint256)(uint256)", token_id,
@@ -117,7 +145,7 @@ class Environment:
     def hotkey_in_last_seen(self, token_id: int, hotkey_pubkey: str) -> bool:
         """Whether the vault's remembered validator set still references `hotkey_pubkey`."""
         remembered = chain.run(
-            ["cast", "call", self.vault_address, "lastSeenHotkeys(uint256)(bytes32[])",
+            ["cast", "call", self.lens_address, "lastSeenHotkeys(uint256)(bytes32[])",
              str(token_id), "--rpc-url", config.RPC_URL],
         ).stdout
         return hotkey_pubkey.removeprefix("0x").lower() in remembered.lower()
@@ -195,34 +223,53 @@ class Environment:
         return chain.cast_balance_wei(config.WRAPPER_USER_ADDRESS)
 
     # --- Vault transactions -----------------------------------------------------
+    @staticmethod
+    def _gas_label(signature: str, message: str, label: Optional[str]) -> str:
+        """What a call's gas is reported under: an explicit label, else the function
+        name tagged with the scenario the assertion message names."""
+        if label:
+            return label
+        name = signature.split("(")[0]
+        tag = message.split(":")[0].strip() if ":" in message else ""
+        return f"{name} [{tag}]" if 0 < len(tag) <= 28 else name
+
     def vault_broadcast(
         self, gas_limit: int, signature: str, *args,
-        private_key: Optional[str] = None,
+        private_key: Optional[str] = None, label: Optional[str] = None,
     ) -> dict:
         """Broadcast a vault transaction and return its receipt (a failed send
-        surfaces as a receipt without a success status)."""
-        return chain.cast_send(
+        surfaces as a receipt without a success status). Every call reports its gas
+        under `label`, defaulting to the function name being called."""
+        receipt = chain.cast_send(
             self.vault_address, signature, *args,
             private_key=private_key or config.WRAPPER_USER_PRIVATE_KEY,
             gas_limit=gas_limit,
         )
+        chain.report_gas(label or signature.split("(")[0], receipt, reverted=not chain.receipt_ok(receipt))
+        return receipt
 
     def vault_send(
         self, gas_limit: int, message: str, signature: str, *args,
-        private_key: Optional[str] = None,
+        private_key: Optional[str] = None, label: Optional[str] = None,
     ) -> dict:
         """Broadcast a vault transaction and assert it succeeded."""
-        receipt = self.vault_broadcast(gas_limit, signature, *args, private_key=private_key)
+        receipt = self.vault_broadcast(
+            gas_limit, signature, *args,
+            private_key=private_key, label=self._gas_label(signature, message, label),
+        )
         assert chain.receipt_ok(receipt), f"{message}: {receipt}"
         return receipt
 
     def vault_send_expect_revert(
         self, gas_limit: int, message: str, signature: str, *args,
-        private_key: Optional[str] = None,
+        private_key: Optional[str] = None, label: Optional[str] = None,
     ) -> dict:
         """Broadcast a vault transaction that is EXPECTED to revert; assert it did
         not succeed."""
-        receipt = self.vault_broadcast(gas_limit, signature, *args, private_key=private_key)
+        receipt = self.vault_broadcast(
+            gas_limit, signature, *args,
+            private_key=private_key, label=self._gas_label(signature, message, label),
+        )
         assert not chain.receipt_ok(receipt), message
         return receipt
 
@@ -230,6 +277,7 @@ class Environment:
         self, error_signature: str, gas_limit: int, message: str,
         signature: str, *args,
         private_key: Optional[str] = None, sender: Optional[str] = None,
+        label: Optional[str] = None,
     ) -> dict:
         """Assert a vault call reverts with a SPECIFIC custom error: an eth_call
         must surface the error (decoded name, or its selector in the revert
@@ -247,7 +295,10 @@ class Environment:
         assert error_name.lower() in probe_output or selector.lower() in probe_output, (
             f"{message} (missing {error_signature} in: {probe.stdout + probe.stderr})"
         )
-        receipt = self.vault_broadcast(gas_limit, signature, *args, private_key=private_key)
+        receipt = self.vault_broadcast(
+            gas_limit, signature, *args,
+            private_key=private_key, label=self._gas_label(signature, message, label),
+        )
         assert not chain.receipt_ok(receipt), message
         return receipt
 
@@ -261,13 +312,14 @@ class Environment:
         return self.vault_send(
             300_000, message, "safeTransferFrom(address,address,uint256,uint256,bytes)",
             sender, recipient, token_id, shares, "0x",
-            private_key=private_key,
+            private_key=private_key, label="safeTransferFrom (shares)",
         )
 
     def deposit_and_wrap(
         self, netuid: int, hotkey_pubkey: str, hotkey_ss58: str,
         amount_rao: int, gas_limit: int, message: str,
         user: Optional[str] = None, private_key: Optional[str] = None,
+        label: Optional[str] = None,
     ) -> dict:
         """Transfer alpha from Alice into a user's mailbox under a hotkey, then
         wrap it into the vault. Defaults to the wrapper user; pass `user` and
@@ -280,7 +332,7 @@ class Environment:
         )
         return self.vault_send(
             gas_limit, message, "wrap(uint256,bytes32)", netuid, hotkey_pubkey,
-            private_key=private_key or config.WRAPPER_USER_PRIVATE_KEY,
+            private_key=private_key or config.WRAPPER_USER_PRIVATE_KEY, label=label,
         )
 
     def set_validators(self, netuid: int, hotkey_pubkeys: List[str], weights: List[int]) -> None:

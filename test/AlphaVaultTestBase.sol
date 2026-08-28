@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import { Vm } from "forge-std/Test.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
+import { VaultReads } from "src/libraries/VaultReads.sol";
 import { AlphaVaultLens } from "src/AlphaVaultLens.sol";
 import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
@@ -21,6 +22,9 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
+    event BackingShortfallDeclared(uint256 indexed tokenId, bytes32 indexed hotkey, uint256 expected, uint256 located);
+    event BackingWrittenOff(uint256 indexed tokenId, bytes32 indexed hotkey, uint256 expected, uint256 located);
+    event BackingRecovered(uint256 indexed tokenId, bytes32 indexed hotkey, uint256 amount);
 
     AlphaVault public vault;
     AlphaVaultLens public lens;
@@ -35,12 +39,14 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     bytes32 public hotkey2 = keccak256("hotkey2");
     bytes32 public hotkey3 = keccak256("hotkey3");
     bytes32 public hotkey4 = keccak256("hotkey4");
+    bytes32 public hotkey5 = keccak256("hotkey5");
 
     uint256 internal constant SIGNER_PK_1 = 0xA11CE;
     uint256 internal constant SIGNER_PK_2 = 0xB0B;
     uint256[] internal signerPks;
 
     string internal constant VAULT_URI = "https://api.tao20.io/{id}.json";
+    uint256 internal constant RECOVERY_WINDOW = 3 hours;
 
     uint256 public constant NETUID1 = 1;
     uint256 public constant NETUID2 = 2;
@@ -106,7 +112,14 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     ///      with it: reading a fresh vault's quotes off the shared lens is the mismatched pair the
     ///      user guide warns integrators about.
     function _deployVaultAndLens(address _registry) internal returns (AlphaVault freshVault, AlphaVaultLens freshLens) {
-        freshVault = new AlphaVault(VAULT_URI, address(mailboxLogic), address(subnetLogic), _registry);
+        return _deployVaultAndLens(_registry, RECOVERY_WINDOW);
+    }
+
+    function _deployVaultAndLens(address _registry, uint256 recoveryWindow)
+        internal
+        returns (AlphaVault freshVault, AlphaVaultLens freshLens)
+    {
+        freshVault = new AlphaVault(VAULT_URI, address(mailboxLogic), address(subnetLogic), _registry, recoveryWindow);
         freshLens = new AlphaVaultLens(freshVault);
     }
 
@@ -239,6 +252,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     function _setVaultStake(bytes32 hotkey, uint256 netuid, uint256 amount) internal {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey, _subnetColdkey(netuid), netuid, amount);
+        _catchRecordUp(netuid);
     }
 
     function _setVaultStakes(uint256 netuid, uint256 a, uint256 b, uint256 c) internal returns (uint256 total) {
@@ -247,6 +261,22 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneColdkey, netuid, b);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, cloneColdkey, netuid, c);
         total = a + b + c;
+        _catchRecordUp(netuid);
+    }
+
+    /// @dev Sculpting balances through the mock is a test convenience with no on-chain
+    ///      counterpart: the vault's alpha moves only when the vault itself moves it. A drop the
+    ///      vault did not make reads as backing gone missing, which is what this walks the token
+    ///      through - put the loss on file, let its window run, take the write-off - so the record
+    ///      agrees with the balances the test asked for. Tests about losses skip this and write to
+    ///      the mock directly.
+    function _catchRecordUp(uint256 netuid) internal {
+        _catchRecordUpFor(vault.currentTokenId(netuid));
+    }
+
+    function _catchRecordUpFor(uint256 tokenId) internal {
+        if (lens.isBackingIntact(tokenId)) return;
+        _runOutRecoveryWindow(tokenId);
     }
 
     // Smallest share count whose pro-rata assets equal `targetAssets` under the share-price cushion.
@@ -397,5 +427,46 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     function _weighted(uint256 total, uint16 bps) internal pure returns (uint256) {
         return (total * bps) / BPS_BASE;
+    }
+
+    /// @dev The keys the record expects the position's alpha under.
+    function _lastSeen(uint256 tokenId) internal view returns (bytes32[] memory) {
+        return VaultReads.activesOf(vault.recordedSlots(tokenId));
+    }
+
+    /// @dev Moves the clone's backing between hotkeys with no vault call and no lineage, standing
+    ///      in for a swap this subnet recorded nothing for.
+    function _simulateOffVaultSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
+        bytes32 coldkey = _subnetColdkey(netuid);
+        uint256 amount = _getStakeForColdkey(fromHotkey, coldkey, netuid);
+        uint256 alreadyThere = _getStakeForColdkey(toHotkey, coldkey, netuid);
+        MockStaking(STAKING_PRECOMPILE).setStake(fromHotkey, coldkey, netuid, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(toHotkey, coldkey, netuid, alreadyThere + amount);
+    }
+
+    /// @dev A swap as the chain records it: the stake moves and the successor edge points at it.
+    function _simulateFollowedSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
+        _simulateOffVaultSwap(netuid, fromHotkey, toHotkey);
+        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(fromHotkey, netuid, toHotkey);
+    }
+
+    /// @dev Chains `hops` swaps, leaving the backing at the far tip with the vault able to read
+    ///      only the first edge.
+    function _buildSwapTrail(uint256 netuid, bytes32 fromHotkey, uint256 hops) internal returns (bytes32 tip) {
+        bytes32 previous = fromHotkey;
+        for (uint256 i; i < hops; ++i) {
+            tip = keccak256(abi.encode("trail-hop", fromHotkey, i));
+            MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(previous, netuid, tip);
+            previous = tip;
+        }
+        _simulateOffVaultSwap(netuid, fromHotkey, tip);
+    }
+
+    /// @dev Puts the loss on file, runs its window out, and books it - the three steps that reopen
+    ///      a token, all of them through the one permissionless entry point.
+    function _runOutRecoveryWindow(uint256 tokenId) internal {
+        vault.syncBacking(tokenId);
+        vm.warp(lens.frozenUntil(tokenId));
+        vault.syncBacking(tokenId);
     }
 }

@@ -37,6 +37,7 @@ jobs:
           - tests/test_hostile_dust.py
           - tests/test_min_stake_liveness.py
           - tests/test_claimable_tao.py
+          - tests/test_parked_stake.py
 
     services:
       subtensor:
@@ -44,7 +45,7 @@ jobs:
         # RaoFoundation package (431+ for isSubnetDissolving) and the vault's chain-read
         # min stake needs 438+ for getDefaultMinStake.
         # Pinned by digest: devnet is a moving target; bump deliberately.
-        image: ghcr.io/raofoundation/subtensor-localnet:devnet@sha256:d971edc17e291400d4b85ad4ed5c2b7f2497ef5b4094d732322526f6a548e567
+        image: ghcr.io/raofoundation/subtensor-localnet:devnet@sha256:f68b9a1744401fca244a25ec579f461926944c6addac252a89af88a9e9271510
         ports:
           - 9944:9944
           - 9945:9945
@@ -96,7 +97,24 @@ jobs:
 
       - name: Run E2E test
         working-directory: e2e
-        run: python -m pytest ${{ matrix.scenario }} -v -m scenario --tb=short
+        # -s so the scenarios' own output, the per-call gas lines included, reaches the log;
+        # pipefail so a failing run still fails the step through the tee.
+        run: |
+          set -o pipefail
+          python -m pytest ${{ matrix.scenario }} -v -s -m scenario --tb=short | tee /tmp/e2e.log
+
+      - name: Report on-chain gas per call
+        if: always()
+        # Real precompile costs, which no local run can measure. One row per broadcast call.
+        run: |
+          if grep -q 'GAS |' /tmp/e2e.log; then
+            {
+              echo "## On-chain gas: ${{ matrix.scenario }}"
+              echo '```'
+              grep 'GAS |' /tmp/e2e.log | sed 's/^ *GAS | *//'
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Collect subtensor logs
         if: failure()

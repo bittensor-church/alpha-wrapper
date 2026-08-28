@@ -89,6 +89,13 @@ Deposits parked under a dropped hotkey stay recoverable: `wrap` refuses
 out-of-set hotkeys up front, and stake already sitting in a mailbox
 under one stays reclaimable by its owner.
 
+When a validator swaps its hotkey, the vault follows the chain's own
+successor edge one hop and keeps the stake with that validator on its
+next call. Attest the new key when convenient, and drop the old name in
+the same update: a set naming a swapped-away key beside its successor
+makes deposits, alpha exits and rebalances refuse with
+`SwappedHotkeyStillAttested`; only the TAO exit stays open.
+
 ## Signer set changes
 
 The registry admin replaces the signer set with

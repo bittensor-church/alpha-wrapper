@@ -11,6 +11,8 @@ import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { AlphaVaultLens } from "src/AlphaVaultLens.sol";
 import { ZeroAddress } from "src/VaultErrors.sol";
+import { MockStaking } from "./mocks/MockStaking.sol";
+import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 contract AlphaVaultLensTest is AlphaVaultTestBase {
     function test_RevertWhen_ConstructedWithoutAVault() public {
@@ -135,5 +137,33 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
         assertEq(batch[0], batch[3], "the same id quoted twice must agree");
         assertEq(batch[1], lens.claimableTaoOf(alice, TOKEN1), "TOKEN1");
         assertEq(batch[0], lens.claimableTaoOf(alice, TOKEN2), "TOKEN2");
+    }
+
+    /// @dev A dissolved position's alpha legitimately became TAO, so no record holds it to
+    ///      anything: the reading answers plainly and reports nothing missing.
+    function test_DissolvedToken_ReadsWithoutARecordToAnswerTo() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        uint256 staked = _totalVaultStakeAcrossHotkeys(NETUID1);
+
+        // A new subnet on the same netuid retires the token id while its alpha stays staked.
+        _setRegBlock(NETUID1, 999);
+
+        assertEq(lens.locatedStake(TOKEN1), staked, "the reading counts what the record names");
+        assertTrue(lens.isBackingIntact(TOKEN1), "with nothing to be short against");
+        assertEq(lens.frozenUntil(TOKEN1), 0, "and nothing holding it shut");
+    }
+
+    /// @dev The chain drains balances while a subnet dissolves, so the gap against the record is
+    ///      the drain rather than a loss. The watch surface keeps answering with the in-flux
+    ///      reading and starts no clock.
+    function test_DissolvingSubnet_ReadsTheDrainAsNoLoss() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateDissolutionStarted(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(NETUID1), NETUID1, 0);
+
+        assertTrue(lens.isBackingIntact(TOKEN1), "the drain is not a shortfall");
+        assertEq(lens.frozenUntil(TOKEN1), 0, "and starts no clock");
+        assertEq(lens.totalStake(TOKEN1), lens.locatedStake(TOKEN1), "the total is the in-flux reading");
+        assertLt(lens.totalStake(TOKEN1), 30 ether, "which reflects the drain so far");
     }
 }

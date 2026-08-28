@@ -43,40 +43,15 @@ library VaultMath {
         return false;
     }
 
-    /// @dev Every slot the position may hold alpha on: the remembered set, then any current
-    ///      validator not already in it.
-    function unionSlots(bytes32[] memory lastSeen, bytes32[] memory current)
-        internal
-        pure
-        returns (bytes32[] memory slots)
-    {
-        slots = new bytes32[](lastSeen.length + current.length);
-        uint256 size = lastSeen.length;
-        for (uint256 i; i < size;) {
-            slots[i] = lastSeen[i];
+    /// @dev Position of `hotkey` in `set`, or `type(uint256).max` when it holds none.
+    function indexOf(bytes32[] memory set, bytes32 hotkey) internal pure returns (uint256) {
+        for (uint256 i; i < set.length;) {
+            if (set[i] == hotkey) return i;
             unchecked {
                 ++i;
             }
         }
-        // Both lists are individually duplicate-free: the registry rejects duplicate hotkeys within
-        // a validator set, and the remembered set is a past copy of such a set. Only the overlap
-        // between the two lists needs removing.
-        for (uint256 i; i < current.length;) {
-            if (!contains(lastSeen, current[i])) {
-                slots[size] = current[i];
-                unchecked {
-                    ++size;
-                }
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        // Only the length word of an array this function allocated is written, so no memory outside
-        // it is touched.
-        assembly ("memory-safe") {
-            mstore(slots, size)
-        }
+        return type(uint256).max;
     }
 
     function netuidOf(uint256 tokenId) internal pure returns (uint16) {

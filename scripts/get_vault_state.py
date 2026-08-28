@@ -73,10 +73,21 @@ def main() -> None:
         share_price = ""
         share_price_error = extract_error_name(e, lens.abi)
 
+    # A token holding backing it cannot account for refuses to be valued; what it can locate is
+    # still readable, and the error names why the two are not the same number.
+    try:
+        total_stake = lens.functions.totalStake(token_id).call()
+        total_stake_error = ""
+    except ContractLogicError as e:
+        total_stake = lens.functions.locatedStake(token_id).call()
+        total_stake_error = extract_error_name(e, lens.abi)
+
     row = {
         "token_id": token_id,
         "total_supply": vault.functions.totalSupply(token_id).call(),
-        "total_stake": lens.functions.totalStake(token_id).call(),
+        "total_stake": total_stake,
+        "total_stake_error": total_stake_error,
+        "frozen_until": lens.functions.frozenUntil(token_id).call(),
         "share_price": share_price,
         "share_price_error": share_price_error,
         "subnet_clone": vault.functions.subnetClone(token_id).call(),

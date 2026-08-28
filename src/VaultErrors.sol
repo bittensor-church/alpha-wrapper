@@ -25,3 +25,15 @@ error ChosenHotkeyNotInSet();
 error SlippageExceeded(uint256 amountOut);
 error ConsolidationBelowFloor();
 error GatherBelowFloor();
+/// @dev The vault cannot account for backing a slot is owed; `tracked` is what the named key was
+///      expected to hold. Clears when the alpha is found or the loss is written off.
+error BackingShortfall(uint16 netuid, bytes32 hotkey, uint256 tracked);
+error BackingUnchanged();
+error NothingToRecover();
+error RecoveryBelowFloor();
+/// @dev The chain moves stake entries whole, so a slot's loss sits under one key; a source that
+///      cannot cover the whole expectation is not where the backing went.
+error RecoveryIncomplete();
+/// @dev The attested set lists a swapped-away hotkey beside its successor; the vault cannot
+///      serve it until the attesters drop the old name.
+error SwappedHotkeyStillAttested();

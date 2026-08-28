@@ -6,7 +6,12 @@ import { IValidatorRegistry } from "../interfaces/IValidatorRegistry.sol";
 import { IAddressMapping, ADDRESS_MAPPING_PRECOMPILE } from "../interfaces/IAddressMapping.sol";
 import { ISubnet, SUBNET_PRECOMPILE } from "../interfaces/ISubnet.sol";
 import { VaultMath } from "./VaultMath.sol";
-import { NoValidatorFound, SubnetInDissolutionBlackoutPeriod, ValidatorSetMalformed } from "../VaultErrors.sol";
+import {
+    BackingShortfall,
+    NoValidatorFound,
+    SubnetInDissolutionBlackoutPeriod,
+    ValidatorSetMalformed
+} from "../VaultErrors.sol";
 
 /// @title VaultReads
 /// @notice The chain reads behind a vault position - validator set, per-hotkey stake, subnet
@@ -27,8 +32,7 @@ library VaultReads {
     {
         (hotkeys, weights) = registry.getValidators(netuid);
         if (hotkeys.length == 0) revert NoValidatorFound();
-        // The registry interface guarantees matching lengths; a registry that breaks it would
-        // otherwise surface as a panic deep inside weight alignment, after stake has moved.
+        // The registry interface guarantees matching lengths; a broken registry fails fast here.
         if (hotkeys.length != weights.length) revert ValidatorSetMalformed();
     }
 
@@ -45,33 +49,6 @@ library VaultReads {
                 ++i;
             }
         }
-    }
-
-    /// @dev The whole stake behind a position. The registry read is deliberately unchecked: a
-    ///      position whose validator set was withdrawn still holds the alpha its remembered slots
-    ///      name, and reporting no backing for it would be wrong. Callers that must instead refuse
-    ///      an unconfigured subnet resolve the set themselves and pass it to `unionStake`.
-    function backingStake(IValidatorRegistry registry, bytes32[] memory lastSeen, bytes32 coldkey, uint16 netuid)
-        internal
-        view
-        returns (bytes32[] memory hotkeys, uint256[] memory balances, uint256 total)
-    {
-        (bytes32[] memory current,) = registry.getValidators(netuid);
-        return unionStake(lastSeen, current, coldkey, netuid);
-    }
-
-    /// @dev Per-hotkey stake across the remembered and current validator sets, with its total. A view
-    ///      has no chance to consolidate first, so it must count stake wherever it sits: between a
-    ///      registry commit and the next vault call the whole position is on validators the set no
-    ///      longer names, and reading only the current set would report no backing at all.
-    function unionStake(bytes32[] memory lastSeen, bytes32[] memory current, bytes32 coldkey, uint16 netuid)
-        internal
-        view
-        returns (bytes32[] memory hotkeys, uint256[] memory balances, uint256 total)
-    {
-        hotkeys = VaultMath.unionSlots(lastSeen, current);
-        balances = fetchBalances(hotkeys, coldkey, netuid);
-        total = VaultMath.sumBalances(balances);
     }
 
     function isIssuedForDissolvedSubnet(uint256 tokenId) internal view returns (bool) {
@@ -103,5 +80,132 @@ library VaultReads {
         if (isDissolving(VaultMath.netuidOf(tokenId))) return 0;
         if (isIssuedForDissolvedSubnet(tokenId)) return 0;
         return newTao;
+    }
+
+    // -------------------- Backing record ----------------------------------------
+
+    /// @dev One record per validator the position is spread across. `logical` and `active` differ
+    ///      only while a hotkey swap has moved the stake and the attesters have not caught up.
+    struct Slot {
+        bytes32 logical;
+        bytes32 active;
+        uint256 tracked;
+        uint64 shortSince;
+    }
+
+    /// @dev One reading of a record against the chain. A struct because the coverage build
+    ///      compiles at minimum optimization, where returning the parts separately runs the stack
+    ///      out.
+    /// @param keys     The key each slot resolves to.
+    /// @param balances What sits under each of them.
+    /// @param short    Which slots cannot account for themselves.
+    /// @param total    What the reading located in all.
+    struct Backing {
+        bytes32[] keys;
+        uint256[] balances;
+        bool[] short;
+        uint256 total;
+    }
+
+    /// @dev Expectations are compared with this much give, never for equality. An accepted ceiling
+    ///      on accounting dust the vault will not chase.
+    uint256 internal constant TRACKED_SLACK_RAO = 1e3;
+
+    /// @dev Reads the record against the chain, writing nothing and resolving at most one hotkey
+    ///      swap per slot. The vault's rails and the lens's quotes share it, so they cannot
+    ///      disagree about what the position holds.
+    function resolveBacking(Slot[] memory slots, bytes32 coldkey, uint16 netuid)
+        internal
+        view
+        returns (Backing memory backing)
+    {
+        uint256 count = slots.length;
+        backing.keys = activesOf(slots);
+        backing.balances = new uint256[](count);
+        backing.short = new bool[](count);
+        for (uint256 i; i < count;) {
+            uint256 tracked = slots[i].tracked;
+            uint256 balance = IStaking(STAKING_PRECOMPILE).getStake(backing.keys[i], coldkey, netuid);
+            if (!coversTracked(balance, tracked)) {
+                (bool followed, bytes32 successor, uint256 successorBalance) =
+                    _followSwap(backing.keys, i, balance, tracked, coldkey, netuid);
+                if (followed) {
+                    backing.keys[i] = successor;
+                    balance = successorBalance;
+                } else {
+                    backing.short[i] = true;
+                }
+            }
+            backing.balances[i] = balance;
+            backing.total += balance;
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @dev The one shortfall that resolves itself: a validator hotkey swap, accepted only when the
+    ///      successor explains the whole slot. A residual left behind is refused because a slot
+    ///      spread across two keys is more than the record can carry, and a successor another slot
+    ///      answers for is refused because one balance may never back two expectations. Exactly one
+    ///      edge is read, and no price: judging a past event by today's valuation gets it wrong in
+    ///      both directions.
+    function _followSwap(
+        bytes32[] memory keys,
+        uint256 index,
+        uint256 balance,
+        uint256 tracked,
+        bytes32 coldkey,
+        uint16 netuid
+    ) private view returns (bool, bytes32, uint256) {
+        if (balance != 0) return (false, bytes32(0), 0);
+        bytes32 successor = hotkeySuccessor(keys[index], netuid);
+        if (successor == bytes32(0)) return (false, bytes32(0), 0);
+        if (VaultMath.contains(keys, successor)) return (false, bytes32(0), 0);
+        uint256 successorBalance = IStaking(STAKING_PRECOMPILE).getStake(successor, coldkey, netuid);
+        if (!coversTracked(successorBalance, tracked)) return (false, bytes32(0), 0);
+        return (true, successor, successorBalance);
+    }
+
+    /// @dev The hotkey's one-hop successor, or zero when the chain records none.
+    function hotkeySuccessor(bytes32 hotkey, uint16 netuid) internal view returns (bytes32) {
+        (bool exists, bytes32 successor) = IStaking(STAKING_PRECOMPILE).getHotkeySuccessor(hotkey, netuid);
+        if (!exists || successor == hotkey) return bytes32(0);
+        return successor;
+    }
+
+    function activesOf(Slot[] memory slots) internal pure returns (bytes32[] memory keys) {
+        keys = new bytes32[](slots.length);
+        for (uint256 i; i < keys.length;) {
+            keys[i] = slots[i].active;
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @dev First short slot of a reading; max when none are.
+    function firstShortOf(bool[] memory short) internal pure returns (uint256) {
+        for (uint256 i; i < short.length;) {
+            if (short[i]) return i;
+            unchecked {
+                ++i;
+            }
+        }
+        return type(uint256).max;
+    }
+
+    /// @dev The one refusal for unaccounted backing, shared so the vault's rails and the lens's
+    ///      quotes cannot disagree about it.
+    function requireIntact(Slot[] memory slots, Backing memory backing, uint16 netuid) internal pure {
+        uint256 shortIndex = firstShortOf(backing.short);
+        if (shortIndex != type(uint256).max) {
+            revert BackingShortfall(netuid, slots[shortIndex].active, slots[shortIndex].tracked);
+        }
+    }
+
+    /// @dev Whether `stake` accounts for a slot owed `tracked`.
+    function coversTracked(uint256 stake, uint256 tracked) internal pure returns (bool) {
+        return stake + TRACKED_SLACK_RAO >= tracked;
     }
 }
