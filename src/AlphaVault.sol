@@ -233,7 +233,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _openBacking(tokenId, destColdkey, nid);
         bytes32[] memory actives = _assignActives(slots, backing, hotkeys);
 
-        uint256 totalDeposit = IStaking(STAKING_PRECOMPILE).getStake(chosenHotkey, VaultReads.coldkeyOf(userClone), nid);
+        uint256 totalDeposit = _mailboxBalance(userClone, chosenHotkey, nid);
         if (totalDeposit == 0) revert ZeroAmount();
 
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
@@ -1179,6 +1179,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                 ++i;
             }
         }
+    }
+
+    function _mailboxBalance(address userClone, bytes32 chosenHotkey, uint16 netuid) private view returns (uint256) {
+        return IStaking(STAKING_PRECOMPILE).getStake(chosenHotkey, VaultReads.coldkeyOf(userClone), netuid);
     }
 
     function _ensureMailboxClone(address user, uint256 netuid) private returns (address userClone) {

@@ -11,8 +11,8 @@
   "unwrapForTao: full after a rotation (64 validators)": "2034085",
   "unwrapForTao: partial tail above floor": "204238",
   "unwrapForTao: sub-floor tail refunded": "178786",
-  "wrap: first": "682514",
-  "wrap: first (64 validators)": "9637395",
-  "wrap: subsequent": "335196",
-  "wrap: subsequent (64 validators)": "5561584"
+  "wrap: first": "682486",
+  "wrap: first (64 validators)": "9637367",
+  "wrap: subsequent": "335168",
+  "wrap: subsequent (64 validators)": "5561556"
 }
