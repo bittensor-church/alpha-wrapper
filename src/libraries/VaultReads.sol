@@ -32,8 +32,7 @@ library VaultReads {
     {
         (hotkeys, weights) = registry.getValidators(netuid);
         if (hotkeys.length == 0) revert NoValidatorFound();
-        // The registry interface guarantees matching lengths; a registry that breaks it would
-        // otherwise surface as a panic deep inside weight alignment, after stake has moved.
+        // The registry interface guarantees matching lengths; a broken registry fails fast here.
         if (hotkeys.length != weights.length) revert ValidatorSetMalformed();
     }
 

@@ -75,8 +75,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     address public immutable subnetLogic;
     IValidatorRegistry public immutable validatorRegistry;
     /// @notice How long anyone has to point the vault at missing alpha before the remainder is
-    ///         written off across the holders of the moment; fixed at deployment. Each slot's
-    ///         loss runs its own window.
+    ///         written off across the holders of the moment. Each slot's loss runs its own window.
     uint256 public immutable recoveryWindow;
 
     // -------------------- State -------------------------------------------------
@@ -156,8 +155,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         if (_mailboxLogic == address(0) || _subnetLogic == address(0) || _validatorRegistry == address(0)) {
             revert ZeroAddress();
         }
-        // A zero window would make every recorded loss writable off in the same block, leaving
-        // watchers no time to recover anything.
         if (_recoveryWindow == 0) revert ZeroAmount();
         mailboxLogic = _mailboxLogic;
         subnetLogic = _subnetLogic;
@@ -249,16 +246,14 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
         // Flush before the consolidation so the roll can start from the fresh deposit.
         DepositMailbox(payable(userClone)).flush(destColdkey, sourceKey, netuid, totalDeposit);
-        // A deposit that arrived under a key no slot answers for is put on the chosen validator's
-        // before anything prices it, so the record can see it.
+        // Pricing reads only the active keys, so the deposit must sit under one before the mint.
         if (!VaultMath.contains(actives, sourceKey)) {
             if (
                 sourceKey != chosenHotkey && actives[chosenIndex] == chosenHotkey
                     && IStaking(STAKING_PRECOMPILE).getStake(chosenHotkey, destColdkey, netuid) == 0
             ) {
-                // A deposit found through the successor edge, with nothing of the vault's under
-                // the chosen name, means that name is swapped away and refuses every move; the
-                // record adopts the key that actually holds the deposit.
+                // A swapped-away hotkey refuses every stake operation naming it, so the record
+                // adopts the key holding the deposit instead of moving toward the dead name.
                 actives[chosenIndex] = sourceKey;
             } else {
                 SubnetClone(payable(clone))
@@ -346,8 +341,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint16 netuid = VaultMath.netuidOf(tokenId);
         VaultReads.requireNotDissolving(netuid);
 
-        // A dissolved position's alpha legitimately became TAO, so no record answers for it and
-        // `unwrap` is the rail that pays the refund out.
         if (VaultReads.isIssuedForDissolvedSubnet(tokenId)) revert NothingToUnwrap();
 
         bytes32 vaultColdkey = VaultReads.coldkeyOf(clone);
@@ -603,7 +596,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ) private {
         uint256 total = VaultMath.sumBalances(balances);
 
-        // A single validator holds everything by definition; there is nothing to move against.
         if (weights.length == 1 || total == 0) return;
 
         uint256 lastIndex = weights.length - 1;
@@ -968,27 +960,15 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     // -------------------- Backing record ----------------------------------------
 
     /// @notice Move alpha of the vault's own back under the key a slot expects it at.
-    /// @dev    Open to anyone, safe by construction rather than by permission: only the subnet
-    ///         clone can stake under its own coldkey, so a balance found there is already holders'
-    ///         backing and shifting it between the clone's keys can only bring it into view.
-    ///         The chain moves stake entries whole - a hotkey swap migrates the full balance and
-    ///         the dust sweep removes an entire entry - so what a slot lost sits under one key.
-    ///         A successful recovery makes the slot whole and ends its window; a source that
-    ///         cannot cover the expectation is not where the backing went and is refused
-    ///         (`RecoveryIncomplete`). No call moves a deadline.
-    ///         A key any slot resolves to is not stray and is refused, whatever it holds above
-    ///         that slot's expectation: one slot is never recapitalized out of another, and a
-    ///         surplus already counts toward the total where it sits.
-    ///
-    ///         While any slot is short the recovery must name a short slot (`RecoveryMisdirected`
-    ///         otherwise): alpha parked under a healthy key stops answering as stray, out of
-    ///         reach of the slot that lost it. A whole record accepts a late find on any slot.
-    ///
-    ///         Both keys have to be usable: an unowned hotkey refuses every operation naming it,
-    ///         and claiming one is open to anyone, so a watcher does that first and the move here
-    ///         reverts if they have not. Reverts `NothingToRecover` when the source holds nothing
-    ///         the vault may take and `RecoveryBelowFloor` when that is too small to move; either
-    ///         way the alpha stays put and is socialized when the window runs out.
+    /// @dev    Safe to leave permissionless: only the subnet clone can stake under its own
+    ///         coldkey, so a balance found there is already holders' backing, and moving it
+    ///         between the clone's keys can only bring it into view.
+    ///         The chain moves stake entries whole - a swap migrates the full balance, the dust
+    ///         sweep removes an entire entry - so a slot's loss sits under exactly one key and a
+    ///         source that cannot cover the whole expectation is not where the backing went.
+    ///         A key some slot resolves to is refused as source because one slot is never
+    ///         recapitalized out of another, and a healthy slot is refused as target while a loss
+    ///         stands because a find parked there would stop answering as stray.
     /// @param  tokenId      ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @param  slotIndex    The recorded slot the alpha belongs under.
     /// @param  sourceHotkey The key currently holding it.
@@ -1014,7 +994,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
 
         SubnetClone(payable(clone)).moveStake(sourceHotkey, target, netuid, amount);
-        // The alpha lands on the key the slot resolves to, so the record names it from here.
         if (slot.active != target) slot.active = target;
 
         uint256 recovered = IStaking(STAKING_PRECOMPILE).getStake(target, coldkey, netuid);
@@ -1026,18 +1005,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @notice Bring the record in line with the chain without moving any alpha: start a recovery
     ///         window on backing that has gone missing, end one on backing that came back, and
     ///         write off what nobody recovered before its window ran out.
-    /// @dev    Open to anyone and grants nothing. It records when the vault first saw a loss,
-    ///         which no reverting quote or deposit can leave behind, so a watcher has to submit it;
-    ///         every rail that moves alpha does the same in passing. Asking again moves no
-    ///         deadline. Reverts `BackingUnchanged` when the record already agrees with the chain.
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     function syncBacking(uint256 tokenId) external nonReentrant {
         address clone = subnetClone[tokenId];
         if (clone == address(0)) revert NothingToUnwrap();
         uint16 netuid = VaultMath.netuidOf(tokenId);
         VaultReads.requireNotDissolving(netuid);
-        // A dissolved position's alpha became TAO; filing that as a loss would report one that
-        // never happened.
         if (VaultReads.isIssuedForDissolvedSubnet(tokenId)) revert BackingUnchanged();
 
         bytes32 coldkey = VaultReads.coldkeyOf(clone);
@@ -1088,8 +1061,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     {
         slots = _slots[tokenId];
         backing = VaultReads.resolveBacking(slots, coldkey, netuid);
-        // Deliberately regardless of the clock: a rail neither starts a loss nor gives up on one,
-        // so an elapsed deadline reopens the token only once `syncBacking` books it.
+        // Deliberately regardless of the clock: only `syncBacking` books a loss.
         VaultReads.requireIntact(slots, backing, netuid);
     }
 

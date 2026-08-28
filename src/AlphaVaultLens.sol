@@ -57,8 +57,7 @@ contract AlphaVaultLens {
     }
 
     /// @notice Alpha the vault can find for this token, whether or not that is all of it.
-    /// @dev    The figure behind `totalStake`, answering where that one refuses. For watching a
-    ///         position while a loss is chased, never for valuing a holding.
+    /// @dev    The figure behind `totalStake`, answering where that one refuses.
     function locatedStake(uint256 tokenId) external view returns (uint256) {
         (, VaultReads.Backing memory backing) = _readBacking(tokenId);
         return backing.total;
@@ -182,7 +181,6 @@ contract AlphaVaultLens {
             return (0, VaultMath.proRata(backing, shares, supply));
         }
 
-        // Reverts NoValidatorFound when the registry has no set for this subnet.
         VaultReads.resolveValidators(validatorRegistry, netuid);
 
         return (VaultMath.assetsFor(totalStake(tokenId), supply, shares), 0);
