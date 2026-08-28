@@ -1076,7 +1076,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         VaultReads.Backing memory backing,
         bytes32[] memory currentSet
     ) private pure returns (bytes32[] memory actives) {
-        // Read the names once: the match below is quadratic in the set size.
+        // The loop below runs `indexOf` - a linear scan - per entry, so the names are read into
+        // a flat array once instead of per scan.
         bytes32[] memory logicals = new bytes32[](slots.length);
         for (uint256 i; i < logicals.length;) {
             logicals[i] = slots[i].logical;
