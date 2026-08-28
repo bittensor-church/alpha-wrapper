@@ -94,12 +94,11 @@ swap looks exactly like it once the old key is registered again and the
 edge disappears, so the vault does not guess between them.
 
 Backing that cannot be accounted for shuts the token for **three hours**
-from the moment a call records it. During that window `wrap`,
-`rebalance`, `unwrap` and `unwrapForTao` revert `BackingShortfall`, and
-so does every quote that values the position - `totalStake`,
-`sharePrice`, `previewWrap`, `previewUnwrap`. The watch surface -
-`locatedStake`, `isBackingIntact`, `frozenUntil` - and `claimableTaoOf`
-keep answering, and share transfers, `claimTao` and the mailbox reclaims
+from the moment a call records it. `wrap`, `rebalance`, `unwrap`,
+`unwrapForTao` and every value quote (`totalStake`, `sharePrice`,
+`previewWrap`, `previewUnwrap`) revert `BackingShortfall`. The watch
+surface (`locatedStake`, `isBackingIntact`, `frozenUntil`),
+`claimableTaoOf`, share transfers, `claimTao` and the mailbox reclaims
 stay open throughout.
 
 Anyone can act inside the window. `syncBacking(tokenId)` starts the

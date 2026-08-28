@@ -153,10 +153,9 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
         assertEq(lens.frozenUntil(TOKEN1), 0, "and nothing holding it shut");
     }
 
-    /// @dev Subtensor drains balances progressively while a subnet dissolves, and the record's
-    ///      expectations date from before the drain, so the gap is the chain's doing rather than
-    ///      a loss. The watch surface keeps answering with the in-flux reading and starts no
-    ///      clock, so no watcher is steered into recovery calls nothing can act on.
+    /// @dev The chain drains balances while a subnet dissolves, so the gap against the record is
+    ///      the drain rather than a loss. The watch surface keeps answering with the in-flux
+    ///      reading and starts no clock.
     function test_DissolvingSubnet_ReadsTheDrainAsNoLoss() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateDissolutionStarted(NETUID1);

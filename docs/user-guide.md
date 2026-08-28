@@ -115,11 +115,10 @@ TAO still pays out throughout.
 `isBackingIntact(tokenId)` and `frozenUntil(tokenId)` on the lens report
 the state without reverting, and `locatedStake(tokenId)` reports what the
 vault can currently find. `frozenUntil` returns zero when nothing is
-missing, the maximum uint256 when a loss is visible but nobody has started
-its clock yet - in which case anyone can, with `syncBacking(tokenId)` on
-the vault - and otherwise the unix time from which the loss can be given
-up on. Giving up takes one more `syncBacking` call; the token answers
-again once it runs, and anything still missing is a loss shared by
+missing, the maximum uint256 when the loss has no clock yet - anyone can
+start one with `syncBacking(tokenId)` on the vault - and otherwise the
+unix time from which a further `syncBacking` can write the loss off.
+That call reopens the token, and whatever is still missing falls on
 everyone holding shares at that moment. See
 [edge-cases.md](edge-cases.md).
 

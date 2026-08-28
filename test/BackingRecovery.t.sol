@@ -353,9 +353,9 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertTrue(lens.isBackingIntact(TOKEN1), "with the record naming where it went");
     }
 
-    /// @dev The successor edge that finds a deposit also proves the chosen name is swapped away
-    ///      and refuses every operation naming it, so the record adopts the key that actually
-    ///      holds the deposit rather than move it toward the dead name.
+    /// @dev The successor edge that finds a deposit also proves the chosen name is swapped away,
+    ///      so the record adopts the key holding the deposit rather than move it toward a name
+    ///      that refuses everything.
     function test_Wrap_AdoptsTheSuccessorOfADeletedChosenKey() public {
         address mailbox = vault.getDepositAddress(bob, NETUID1);
         MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey4);
@@ -528,10 +528,9 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertTrue(lens.isBackingIntact(TOKEN1), "and the slot it answers for stayed covered");
     }
 
-    /// @dev While a loss is chasing its alpha, a found stray may only be aimed at a slot that is
-    ///      missing something. Parked under a healthy slot's key it would stop answering as stray,
-    ///      and the slot that lost it could never reach it again - a one-transaction way to bury
-    ///      an honest recovery and force the write-off.
+    /// @dev A found stray may only be aimed at a slot that is missing something: parked under a
+    ///      healthy slot's key it stops answering as stray, and the slot that lost it could never
+    ///      reach it again.
     function test_RecoverStray_RefusesAHealthySlotWhileALossStands() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);

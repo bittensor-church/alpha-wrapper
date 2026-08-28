@@ -243,10 +243,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                 sourceKey != chosenHotkey && actives[chosenIndex] == chosenHotkey
                     && IStaking(STAKING_PRECOMPILE).getStake(chosenHotkey, destColdkey, netuid) == 0
             ) {
-                // The deposit was found through the chosen name's successor edge and the vault
-                // holds nothing under that name, so the name is swapped away and refuses every
-                // operation naming it; the record adopts the key actually holding the deposit
-                // instead of aiming a move at one the chain rejects.
+                // A deposit found through the successor edge, with nothing of the vault's under
+                // the chosen name, means that name is swapped away and refuses every move; the
+                // record adopts the key that actually holds the deposit.
                 actives[chosenIndex] = sourceKey;
             } else {
                 SubnetClone(payable(clone))
@@ -964,10 +963,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///         that slot's expectation: one slot is never recapitalized out of another, and a
     ///         surplus already counts toward the total where it sits.
     ///
-    ///         While any slot is short the recovery must name a short slot, and reverts
-    ///         `RecoveryMisdirected` otherwise: parked under a healthy slot's key, found alpha
-    ///         would stop answering as stray and the slot that lost it could never reach it again.
-    ///         With the record whole any slot may receive a late find.
+    ///         While any slot is short the recovery must name a short slot (`RecoveryMisdirected`
+    ///         otherwise): alpha parked under a healthy key stops answering as stray, out of
+    ///         reach of the slot that lost it. A whole record accepts a late find on any slot.
     ///
     ///         Both keys have to be usable: an unowned hotkey refuses every operation naming it,
     ///         and claiming one is open to anyone, so a watcher does that first and the move here
@@ -1079,14 +1077,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         VaultReads.requireIntact(slots, backing, netuid);
     }
 
-    /// @dev Which key each attested validator's alpha sits under, as the settle is about to record
-    ///      it: the key the record follows for that validator - even one the attesters list for
-    ///      another entry - when it holds anything, and the attested name otherwise. Two entries
-    ///      never land on one key: an emptied entry whose name carries another slot's alpha keeps
-    ///      its own resolved key, and a name with no key of its own that carries another
-    ///      still-attested slot's alpha is refused as `SwappedHotkeyStillAttested` - such a set
-    ///      lists a swapped-away name beside its successor, which only the attesters can
-    ///      untangle, and every move naming the swapped-away key would be refused at full gas.
+    /// @dev The key each attested validator's alpha sits under: the slot's resolved key while it
+    ///      holds anything, the attested name otherwise. No two entries may land on one key, so
+    ///      an emptied entry whose name carries another slot's alpha keeps its resolved key, and
+    ///      a name with no key of its own in that position reverts `SwappedHotkeyStillAttested` -
+    ///      only the attesters can untangle a set listing a swapped-away name beside its
+    ///      successor.
     function _assignActives(
         VaultReads.Slot[] memory slots,
         VaultReads.Backing memory backing,
@@ -1108,10 +1104,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             if (at != type(uint256).max && backing.balances[at] != 0) {
                 actives[i] = backing.keys[at];
             } else {
-                // The entry has nothing of its own to carry, and its name may double as the key
-                // another slot's alpha was swapped onto. While that slot's validator is still
-                // attested it keeps its balance; a validator dropped this call releases the key
-                // to the entry that names it.
+                // Another slot's alpha may sit under this entry's name. It keeps that balance
+                // while its own validator stays attested, and releases the key once dropped.
                 uint256 holder = VaultMath.indexOf(backing.keys, name);
                 bool nameTaken = holder != type(uint256).max && holder != at && backing.balances[holder] != 0
                     && VaultMath.contains(currentSet, logicals[holder]);

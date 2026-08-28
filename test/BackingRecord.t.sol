@@ -143,10 +143,9 @@ contract BackingRecordTest is AlphaVaultTestBase {
         assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "and nothing is counted twice");
     }
 
-    /// @dev A set naming both a swapped-away key and the successor its alpha moved to cannot be
-    ///      served: the old name refuses every stake operation at full gas, so the rails refuse
-    ///      cheaply instead until the attesters drop it. The TAO exit reads no attested set and
-    ///      stays open throughout.
+    /// @dev A set naming both a swapped-away key and its successor cannot be served: the old name
+    ///      refuses every stake operation, so the rails refuse cheaply until the attesters drop
+    ///      it. The TAO exit reads no attested set and stays open.
     function test_SetNamingASwappedKeyAndItsSuccessor_RefusesCheaply() public {
         _setAlphaPrice(NETUID1, 1e18);
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);

@@ -20,9 +20,8 @@ import { NetuidOutOfRange, NoSharesOutstanding, SubnetDissolved, ZeroAddress } f
 ///         Being separate is what keeps the quotes changeable: the vault is immutable and has no
 ///         admin, so anything living inside it is frozen for good, while a lens can be redeployed
 ///         against the same vault whenever a quote needs to improve.
-///         Quotes describe settled state only: read while a vault call is in flight - from a
-///         native TAO transfer callback, say - they can see a mid-operation reading, so never
-///         price a position from inside a callback.
+///         Never price a position from inside a callback: a quote read while a vault call is in
+///         flight can see a mid-operation state.
 contract AlphaVaultLens {
     AlphaVault public immutable vault;
     /// @notice The registry the vault takes its validator sets from, resolved once at construction
@@ -42,9 +41,9 @@ contract AlphaVaultLens {
     ///         `locatedStake` gives that figure regardless, and `isBackingIntact` and
     ///         `frozenUntil` report the state without reverting.
     ///
-    ///         While subtensor dissolution cleanup runs for the netuid the chain is draining
-    ///         balances the record still expects, so the value is the in-flux total with no
-    ///         shortfall judgment; treat it as unstable until `isSubnetDissolving(netuid)` clears.
+    ///         While the subnet is dissolving the chain is draining the balances, so the value is
+    ///         the in-flux total with no shortfall judgment - unstable until
+    ///         `isSubnetDissolving(netuid)` clears.
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @return Alpha staked under the clone for this token.
     function totalStake(uint256 tokenId) public view returns (uint256) {
@@ -69,7 +68,7 @@ contract AlphaVaultLens {
 
     /// @notice Whether the vault can account for the alpha it expects under every validator it
     ///         records. A hotkey swap it can follow on its own reads true, and so does a
-    ///         dissolving subnet: the drain is the chain's doing, never a loss to chase.
+    ///         dissolving subnet: the drain is not a loss to chase.
     /// @dev    False means every rail refuses, and keeps refusing past the deadline until
     ///         `syncBacking` books the loss.
     function isBackingIntact(uint256 tokenId) external view returns (bool) {
@@ -98,11 +97,9 @@ contract AlphaVaultLens {
         }
     }
 
-    /// @dev The same reading the vault's rails take, never applied. A dissolved token's alpha
-    ///      became TAO, so no record holds it to anything and it is simply totalled - and while
-    ///      dissolution runs the chain is draining balances the record still expects, so no
-    ///      shortfall judgment is possible there either and what is found is totalled the same
-    ///      way.
+    /// @dev The reading the vault's rails take, never applied. A dissolved or dissolving position
+    ///      is simply totalled: its alpha became TAO, or is being drained by the chain, so no
+    ///      expectation can be held against it.
     function _readBacking(uint256 tokenId)
         private
         view

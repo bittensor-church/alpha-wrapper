@@ -172,9 +172,7 @@ library VaultReads {
         return (true, successor, successorBalance);
     }
 
-    /// @dev The chain's one-hop successor edge for `hotkey`, folded to zero when there is none.
-    ///      Every path that reads the edge goes through here, so a deposit lookup and the record's
-    ///      own swap-following cannot interpret it differently.
+    /// @dev The hotkey's one-hop successor, or zero when the chain records none.
     function hotkeySuccessor(bytes32 hotkey, uint16 netuid) internal view returns (bytes32) {
         (bool exists, bytes32 successor) = IStaking(STAKING_PRECOMPILE).getHotkeySuccessor(hotkey, netuid);
         if (!exists || successor == hotkey) return bytes32(0);
@@ -191,7 +189,7 @@ library VaultReads {
         }
     }
 
-    /// @dev First slot of a reading that cannot account for itself; max when the record is whole.
+    /// @dev First short slot of a reading; max when none are.
     function firstShortOf(bool[] memory short) internal pure returns (uint256) {
         for (uint256 i; i < short.length;) {
             if (short[i]) return i;
@@ -202,9 +200,8 @@ library VaultReads {
         return type(uint256).max;
     }
 
-    /// @dev The one refusal every share-pricing and alpha-moving surface gives while backing is
-    ///      unaccounted for. The vault's rails and the lens's quotes share it, so they cannot
-    ///      raise different errors for the same reading.
+    /// @dev The one refusal for unaccounted backing, shared so the vault's rails and the lens's
+    ///      quotes cannot disagree about it.
     function requireIntact(Slot[] memory slots, Backing memory backing, uint16 netuid) internal pure {
         uint256 shortIndex = firstShortOf(backing.short);
         if (shortIndex != type(uint256).max) {
