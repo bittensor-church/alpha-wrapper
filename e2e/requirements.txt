@@ -1,3 +1,5 @@
 # Everything the e2e suite needs on top of the shared repo requirements.
 -r ../requirements.txt
 bittensor==11.0.2
+# btcli breaks on typer 0.27.2 (typer._click.exceptions lost `Exit`); pinned until btcli catches up.
+typer==0.27.1
