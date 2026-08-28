@@ -1107,8 +1107,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                 // Another slot may answer under this entry's name. It keeps that key while its
                 // own validator stays attested, even while empty, and releases it once dropped.
                 uint256 holder = VaultMath.indexOf(backing.keys, name);
-                bool nameTaken = holder != type(uint256).max && holder != at
-                    && VaultMath.contains(currentSet, logicals[holder]);
+                bool nameTaken =
+                    holder != type(uint256).max && holder != at && VaultMath.contains(currentSet, logicals[holder]);
                 if (!nameTaken) {
                     actives[i] = name;
                 } else if (at != type(uint256).max) {
