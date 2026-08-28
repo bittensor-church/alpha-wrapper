@@ -26,6 +26,7 @@ import {
     NothingToRecover,
     NothingToUnwrap,
     RecoveryBelowFloor,
+    RecoveryIncomplete,
     RecoveryMisdirected,
     SlippageExceeded,
     SubnetNotRegistered,
@@ -60,9 +61,9 @@ import {
 ///   - Each token carries one compact record per attested validator, holding the exact alpha the
 ///     last call read under it. A validator hotkey swap is resolved from the chain's own successor
 ///     edge, one hop and no further. Backing that record cannot account for shuts every
-///     share-pricing and alpha-moving path until `syncBacking` books it, which it may do once a
-///     three-hour window has run. Anyone may call `recoverStray` meanwhile; whatever is still
-///     missing then falls across the holders of the moment.
+///     share-pricing and alpha-moving path until `syncBacking` books it, which it may do once
+///     the recovery window fixed at deployment has run. Anyone may call `recoverStray`
+///     meanwhile; whatever is still missing then falls across the holders of the moment.
 ///   - Per-subnet clones isolate alpha and TAO returned by dissolved subnets.
 ///   - Native TAO credited to a clone while its subnet is live (forced dust sales, donations) backs
 ///     claims through a cumulative per-share index, never the share price. Arrivals are recorded at
@@ -73,6 +74,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     address public immutable mailboxLogic;
     address public immutable subnetLogic;
     IValidatorRegistry public immutable validatorRegistry;
+    /// @notice How long anyone has to point the vault at missing alpha before the remainder is
+    ///         written off across the holders of the moment; fixed at deployment. Each slot's
+    ///         loss runs its own window.
+    uint256 public immutable recoveryWindow;
 
     // -------------------- State -------------------------------------------------
     mapping(address => bool) public cloneDeployed;
@@ -141,15 +146,23 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
     // -------------------- Constructor -------------------------------------------
     /// @param _uri ERC1155 metadata URI template, fixed for the contract's lifetime.
-    constructor(string memory _uri, address _mailboxLogic, address _subnetLogic, address _validatorRegistry)
-        ERC1155(_uri)
-    {
+    constructor(
+        string memory _uri,
+        address _mailboxLogic,
+        address _subnetLogic,
+        address _validatorRegistry,
+        uint256 _recoveryWindow
+    ) ERC1155(_uri) {
         if (_mailboxLogic == address(0) || _subnetLogic == address(0) || _validatorRegistry == address(0)) {
             revert ZeroAddress();
         }
+        // A zero window would make every recorded loss writable off in the same block, leaving
+        // watchers no time to recover anything.
+        if (_recoveryWindow == 0) revert ZeroAmount();
         mailboxLogic = _mailboxLogic;
         subnetLogic = _subnetLogic;
         validatorRegistry = IValidatorRegistry(_validatorRegistry);
+        recoveryWindow = _recoveryWindow;
     }
 
     // -------------------- Token ID & Subnet Proxy --------------------------------
@@ -958,7 +971,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @dev    Open to anyone, safe by construction rather than by permission: only the subnet
     ///         clone can stake under its own coldkey, so a balance found there is already holders'
     ///         backing and shifting it between the clone's keys can only bring it into view.
-    ///         Recovery is additive and may be partial, and no call moves a deadline either way.
+    ///         The chain moves stake entries whole - a hotkey swap migrates the full balance and
+    ///         the dust sweep removes an entire entry - so what a slot lost sits under one key.
+    ///         A successful recovery makes the slot whole and ends its window; a source that
+    ///         cannot cover the expectation is not where the backing went and is refused
+    ///         (`RecoveryIncomplete`). No call moves a deadline.
     ///         A key any slot resolves to is not stray and is refused, whatever it holds above
     ///         that slot's expectation: one slot is never recapitalized out of another, and a
     ///         surplus already counts toward the total where it sits.
@@ -1000,10 +1017,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // The alpha lands on the key the slot resolves to, so the record names it from here.
         if (slot.active != target) slot.active = target;
 
-        // Short of full coverage both the expectation and the clock stand, so the next fragment
-        // can still come home against them.
         uint256 recovered = IStaking(STAKING_PRECOMPILE).getStake(target, coldkey, netuid);
-        if (slot.shortSince != 0 && VaultReads.coversTracked(recovered, slot.tracked)) slot.shortSince = 0;
+        if (!VaultReads.coversTracked(recovered, slot.tracked)) revert RecoveryIncomplete();
+        if (slot.shortSince != 0) slot.shortSince = 0;
         emit BackingRecovered(tokenId, target, amount);
     }
 
@@ -1045,7 +1061,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                 slot.shortSince = uint64(block.timestamp);
                 emit BackingShortfallDeclared(tokenId, slot.active, slot.tracked, backing.balances[i]);
                 changed = true;
-            } else if (!VaultReads.isWindowStanding(slot.shortSince)) {
+            } else if (!VaultReads.isWindowStanding(slot.shortSince, recoveryWindow)) {
                 emit BackingWrittenOff(tokenId, slot.active, slot.tracked, backing.balances[i]);
                 slot.tracked = backing.balances[i];
                 slot.shortSince = 0;

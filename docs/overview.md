@@ -79,8 +79,8 @@ validator swapping its hotkey carries the vault's alpha to a new key, and
 the chain sweeps small stake entries without recording why - neither
 involves a vault call. The vault follows the chain's own successor edge one
 hop, which resolves the ordinary swap unaided; anything deeper shuts the
-token for a three-hour recovery window, in which anyone may point the vault
-back at the alpha. Whatever is still missing at the deadline is written off
+token for a recovery window fixed at deployment, in which anyone may point
+the vault back at the alpha. Whatever is still missing at the deadline is written off
 across the holders of the moment. The details are in
 [design/backing-resolution.md](design/backing-resolution.md), and what it
 means for a holder is in [edge-cases.md](edge-cases.md).

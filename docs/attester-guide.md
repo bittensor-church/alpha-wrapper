@@ -89,27 +89,12 @@ Deposits parked under a dropped hotkey stay recoverable: `wrap` refuses
 out-of-set hotkeys up front, and stake already sitting in a mailbox
 under one stays reclaimable by its owner.
 
-## What an update does not do
-
-Attesting a set is allocation policy and nothing else. It cannot bring
-backing home: a token holding alpha it cannot account for stays shut on
-its own terms until the alpha is found or its recovery window runs out,
-whatever the attesters name in the meantime. Naming a validator does not
-add its balance to the position either - the vault counts only the keys
-its own record points at, so an update can never change the reported
-backing.
-
-Recovering lost backing needs no signature at all. `syncBacking` and
-`recoverStray` are open to anyone
-([design/backing-resolution.md](design/backing-resolution.md)).
-
-When a validator swaps its hotkey, attesting the new key is the tidy-up,
-not the fix: the vault follows the chain's own successor edge one hop
-and keeps the stake with that validator on its next call. Attest the new
-key when convenient, and drop the old one rather than listing both: a
-set naming a swapped-away key beside its successor makes deposits, alpha
-exits and rebalances refuse with `SwappedHotkeyStillAttested`; only the
-TAO exit stays open.
+When a validator swaps its hotkey, the vault follows the chain's own
+successor edge one hop and keeps the stake with that validator on its
+next call. Attest the new key when convenient, and drop the old name in
+the same update: a set naming a swapped-away key beside its successor
+makes deposits, alpha exits and rebalances refuse with
+`SwappedHotkeyStillAttested`; only the TAO exit stays open.
 
 ## Signer set changes
 

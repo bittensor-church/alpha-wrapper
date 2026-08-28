@@ -44,8 +44,9 @@ For each slot, in order:
    `logical` stays where the attesters put it.
 
 The successor's own successor is never read. A two-hop trail, an erased
-edge, an ambiguous or converging swap, and a partial find are all
-shortfalls, resolved by a watcher rather than guessed at.
+edge, an ambiguous or converging swap, and a successor that cannot cover
+the slot are all shortfalls, resolved by a watcher rather than guessed
+at.
 
 Health is per slot. Growth on one validator never covers a deficit on
 another, and the position's value is the sum over the keys the slots
@@ -68,7 +69,9 @@ that reverts leaves no record behind - only a successful call can write
 one. Anyone may call `syncBacking(tokenId)`, which moves no alpha and
 stamps the moment the vault first saw the loss.
 
-From that stamp the slot has **three hours**. Until the loss is booked:
+From that stamp the slot has the vault's **recovery window** - a
+duration fixed at deployment, reported by `recoveryWindow` on the vault
+and the lens. Until the loss is booked:
 
 - `wrap`, `rebalance`, `unwrap` and `unwrapForTao` revert
   `BackingShortfall`.
@@ -101,10 +104,13 @@ subnet clone can stake under its own coldkey, so a balance found there
 is already holders' backing, and shifting it between the clone's own
 keys cannot take anything out.
 
-- Recovery is **additive**. Several calls can carry fragments home, and
-  the slot is whole only once its key covers what it was owed.
-- No call moves a deadline, in either direction. Finding the whole
-  expectation ends the window; finding part of it does not extend one.
+- Recovery is **whole**. The chain moves stake entries whole - a swap
+  migrates the full balance, a sweep removes an entire entry - so what a
+  slot lost sits under exactly one key. A source that cannot cover the
+  slot's expectation is not where the backing went, and the call refuses
+  it.
+- Finding the expectation makes the slot whole and ends its window. No
+  call moves a deadline in either direction.
 - A key any slot already resolves to is refused, whatever it holds above
   that slot's expectation. Backing that is already accounted for is not
   stray: one slot is never recapitalized out of another, and a surplus

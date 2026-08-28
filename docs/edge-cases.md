@@ -87,13 +87,14 @@ edge and follows it one hop, so the ordinary swap resolves itself on the
 next call and holders never notice.
 
 One hop is all it reads. A validator that swapped twice before the vault
-looked, an edge the chain has since dropped, two swaps converging on one
-key, or a partial move all leave backing the vault cannot account for.
+looked, an edge the chain has since dropped, or two swaps converging on
+one key all leave backing the vault cannot account for.
 So does the chain's dust sweep, which records nothing at all - and a
 swap looks exactly like it once the old key is registered again and the
 edge disappears, so the vault does not guess between them.
 
-Backing that cannot be accounted for shuts the token for **three hours**
+Backing that cannot be accounted for shuts the token for the vault's
+**recovery window** (fixed at deployment; `recoveryWindow` reports it)
 from the moment a call records it. `wrap`, `rebalance`, `unwrap`,
 `unwrapForTao` and every value quote (`totalStake`, `sharePrice`,
 `previewWrap`, `previewUnwrap`) revert `BackingShortfall`. The watch
@@ -103,9 +104,11 @@ stay open throughout.
 
 Anyone can act inside the window. `syncBacking(tokenId)` starts the
 clock and moves no alpha; `recoverStray(tokenId, slotIndex, sourceHotkey)`
-carries found alpha back under the key its slot expects, one fragment at
-a time if need be. Neither needs a signature or a quorum, because the
-alpha in question already sits under the vault's own coldkey.
+carries the found alpha back under the key its slot expects. The chain
+moves stake entries whole, so the loss sits under one key and one
+successful call brings it all home; a source that cannot cover it is
+refused. Neither call needs a signature or a quorum, because the alpha
+in question already sits under the vault's own coldkey.
 
 Whatever is still missing at the deadline is written off by a further
 `syncBacking` call - nothing else books it, so no deposit or exit gives up

@@ -109,10 +109,12 @@ contract BackingHandler is Test {
     function recoverStray(uint256 slotSeed, uint256 sourceSeed) external {
         uint256 slots = vault.recordedSlots(tokenId).length;
         if (slots == 0) return;
+        uint256 slotIndex = bound(slotSeed, 0, slots - 1);
         bytes32 source = touchedHotkeys[bound(sourceSeed, 0, touchedHotkeys.length - 1)];
         bool[] memory coveredBefore = harness.coveredSlots();
-        try vault.recoverStray(tokenId, bound(slotSeed, 0, slots - 1), source) {
+        try vault.recoverStray(tokenId, slotIndex, source) {
             bool[] memory coveredAfter = harness.coveredSlots();
+            assertTrue(coveredAfter[slotIndex], "a successful recovery left its slot short");
             for (uint256 i; i < coveredBefore.length; ++i) {
                 assertTrue(!coveredBefore[i] || coveredAfter[i], "recovery left a covered slot short");
             }

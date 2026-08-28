@@ -91,8 +91,9 @@ over several sales.
   installed by anyone holding its signatures. Landing a replacement is
   what retires it.
 - Backing that goes missing shuts the token - exits included - for up to
-  three hours, and holders wait that out. The design buys a watcher time
-  to preserve the backing and then chooses liveness over waiting longer.
+  the recovery window fixed at deployment (`recoveryWindow`), and holders
+  wait that out. The design buys a watcher time to preserve the backing
+  and then chooses liveness over waiting longer.
 - Backing nobody recovers inside that window is written off across the
   holders of the moment, and alpha found afterwards accrues to whoever
   holds shares then. Whoever knows where that alpha sits can deposit at

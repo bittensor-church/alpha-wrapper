@@ -108,8 +108,9 @@ only at execution, bounded by your `minTaoOut`.
 Every quote and every alpha-moving call can revert `BackingShortfall`.
 That means the vault is holding alpha it cannot currently account for -
 usually a validator hotkey swap it could not follow - and it will not
-value or move the position until the alpha is found or a three-hour
-recovery window runs out. Your shares still transfer and your claimable
+value or move the position until the alpha is found or a recovery
+window runs out (its length is fixed at deployment; `recoveryWindow` on
+the vault or the lens reports it). Your shares still transfer and your claimable
 TAO still pays out throughout.
 
 `isBackingIntact(tokenId)` and `frozenUntil(tokenId)` on the lens report

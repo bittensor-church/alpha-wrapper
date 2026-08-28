@@ -10,6 +10,7 @@ import {
     NothingToRecover,
     NothingToUnwrap,
     RecoveryBelowFloor,
+    RecoveryIncomplete,
     RecoveryMisdirected,
     SubnetInDissolutionBlackoutPeriod
 } from "src/VaultErrors.sol";
@@ -36,7 +37,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vm.prank(bob);
         vault.syncBacking(TOKEN1);
 
-        assertEq(lens.frozenUntil(TOKEN1), block.timestamp + VaultReads.RECOVERY_WINDOW, "the window runs from here");
+        assertEq(lens.frozenUntil(TOKEN1), block.timestamp + vault.recoveryWindow(), "the window runs from here");
         assertEq(vault.recordedSlots(TOKEN1)[0].tracked, owed, "the slot still knows what it is owed");
         assertFalse(lens.isBackingIntact(TOKEN1), "and still reports itself short");
     }
@@ -126,7 +127,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertEq(lens.frozenUntil(TOKEN1), 0, "the window it was granted is spent");
         assertEq(vault.recordedSlots(TOKEN1)[0].shortSince, 0, "no clock left running");
 
-        vm.warp(block.timestamp + 2 * VaultReads.RECOVERY_WINDOW);
+        vm.warp(block.timestamp + 2 * vault.recoveryWindow());
         assertEq(_getVaultStake(hotkey1, NETUID1), owed, "the recurrence is identical to the first loss");
         _buildSwapTrail(NETUID1, hotkey1, 2);
 
@@ -197,29 +198,30 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, quarter, _toSubstrate(alice));
     }
 
-    /// @dev Recovery adds to a fixed target, so fragments can come home one at a time. None of them
-    ///      touches the deadline, and the slot is whole only once its key covers what it was owed.
-    function test_RecoverStray_RestoresASlotInFragments() public {
+    /// @dev The chain moves stake entries whole, so a slot's loss sits under exactly one key: a
+    ///      source holding less is not where the backing went. The refusal leaves the alpha put
+    ///      and the deadline standing, and the key that does cover the loss still recovers it.
+    function test_RevertWhen_TheSourceCannotCoverTheLoss() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);
         uint256 owed = _getVaultStake(hotkey1, NETUID1);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, coldkey, NETUID1, owed / 3);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey5, coldkey, NETUID1, owed - owed / 3);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey5, coldkey, NETUID1, owed);
         vault.syncBacking(TOKEN1);
         uint256 deadline = lens.frozenUntil(TOKEN1);
 
+        vm.expectRevert(RecoveryIncomplete.selector);
         vm.prank(bob);
         vault.recoverStray(TOKEN1, 0, hotkey4);
-        assertFalse(lens.isBackingIntact(TOKEN1), "a fragment is not the whole expectation");
-        assertEq(vault.recordedSlots(TOKEN1)[0].tracked, owed, "and the target it is measured against stands");
-        assertEq(lens.frozenUntil(TOKEN1), deadline, "the deadline did not move");
+        assertFalse(lens.isBackingIntact(TOKEN1), "the loss still stands");
+        assertEq(_getStakeForColdkey(hotkey4, coldkey, NETUID1), owed / 3, "the alpha it refused stayed put");
+        assertEq(lens.frozenUntil(TOKEN1), deadline, "and the deadline did not move");
 
         vm.prank(bob);
         vault.recoverStray(TOKEN1, 0, hotkey5);
-        assertTrue(lens.isBackingIntact(TOKEN1), "the second fragment completes it");
+        assertTrue(lens.isBackingIntact(TOKEN1), "the key covering the loss recovers it");
         assertEq(lens.frozenUntil(TOKEN1), 0, "and the window ends");
-        assertEq(_getVaultStake(hotkey1, NETUID1), owed, "with everything under the key the slot expects");
     }
 
     /// @dev Alpha the chain would refuse to move is not recovered and is socialized with the rest
@@ -444,7 +446,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.syncBacking(TOKEN1);
 
         assertEq(
-            vault.recordedSlots(TOKEN1)[0].shortSince + VaultReads.RECOVERY_WINDOW,
+            vault.recordedSlots(TOKEN1)[0].shortSince + vault.recoveryWindow(),
             firstDeadline,
             "the first clock did not move"
         );
@@ -468,7 +470,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.syncBacking(TOKEN1);
         uint256 deadline = lens.frozenUntil(TOKEN1);
 
-        uint256 at = bound(offset, deadline - VaultReads.RECOVERY_WINDOW, deadline + VaultReads.RECOVERY_WINDOW);
+        uint256 at = bound(offset, deadline - vault.recoveryWindow(), deadline + vault.recoveryWindow());
         vm.warp(at);
 
         if (at < deadline) {

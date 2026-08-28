@@ -33,6 +33,9 @@ error NothingToRecover();
 /// @dev A recovery named a slot that is missing nothing while another slot is.
 error RecoveryMisdirected();
 error RecoveryBelowFloor();
+/// @dev The chain moves stake entries whole, so a slot's loss sits under one key; a source that
+///      cannot cover the whole expectation is not where the backing went.
+error RecoveryIncomplete();
 /// @dev The attested set lists a swapped-away hotkey beside its successor; the vault cannot
 ///      serve it until the attesters drop the old name.
 error SwappedHotkeyStillAttested();

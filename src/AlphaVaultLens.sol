@@ -27,11 +27,15 @@ contract AlphaVaultLens {
     /// @notice The registry the vault takes its validator sets from, resolved once at construction
     ///         because the vault holds it immutably.
     IValidatorRegistry public immutable validatorRegistry;
+    /// @notice How long a recorded loss stays recoverable before it may be written off, resolved
+    ///         once at construction because the vault holds it immutably.
+    uint256 public immutable recoveryWindow;
 
     constructor(AlphaVault _vault) {
         if (address(_vault) == address(0)) revert ZeroAddress();
         vault = _vault;
         validatorRegistry = _vault.validatorRegistry();
+        recoveryWindow = _vault.recoveryWindow();
     }
 
     /// @notice Total alpha backing this token's shares. Returns 0 before the clone exists.
@@ -88,7 +92,7 @@ contract AlphaVaultLens {
             if (backing.short[i]) {
                 uint64 shortSince = slots[i].shortSince;
                 if (shortSince == 0) return type(uint256).max;
-                uint256 slotDeadline = VaultReads.recoveryDeadline(shortSince);
+                uint256 slotDeadline = VaultReads.recoveryDeadline(shortSince, recoveryWindow);
                 if (slotDeadline > deadline) deadline = slotDeadline;
             }
             unchecked {

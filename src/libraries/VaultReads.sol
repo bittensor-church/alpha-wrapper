@@ -112,10 +112,6 @@ library VaultReads {
     ///      on accounting dust the vault will not chase.
     uint256 internal constant TRACKED_SLACK_RAO = 1e3;
 
-    /// @dev How long anyone has to point the vault at missing alpha before the remainder is
-    ///      written off across the holders of the moment. Each slot's loss runs its own window.
-    uint256 internal constant RECOVERY_WINDOW = 3 hours;
-
     /// @dev Reads the record against the chain, writing nothing and resolving at most one hotkey
     ///      swap per slot. The vault's rails and the lens's quotes share it, so they cannot
     ///      disagree about what the position holds.
@@ -214,15 +210,16 @@ library VaultReads {
         return stake + TRACKED_SLACK_RAO >= tracked;
     }
 
-    /// @dev When the loss recorded at `shortSince` becomes writable off.
-    function recoveryDeadline(uint64 shortSince) internal pure returns (uint256) {
-        return shortSince + RECOVERY_WINDOW;
+    /// @dev When the loss recorded at `shortSince` becomes writable off, given the vault's
+    ///      recovery window.
+    function recoveryDeadline(uint64 shortSince, uint256 window) internal pure returns (uint256) {
+        return shortSince + window;
     }
 
     /// @dev Whether a loss recorded at `shortSince` still holds the position shut. An unrecorded
     ///      loss counts: a deadline cannot pass before it exists.
-    function isWindowStanding(uint64 shortSince) internal view returns (bool) {
+    function isWindowStanding(uint64 shortSince, uint256 window) internal view returns (bool) {
         // forge-lint: disable-next-line(block-timestamp)
-        return shortSince == 0 || block.timestamp < recoveryDeadline(shortSince);
+        return shortSince == 0 || block.timestamp < recoveryDeadline(shortSince, window);
     }
 }

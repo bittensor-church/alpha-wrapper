@@ -46,6 +46,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     uint256[] internal signerPks;
 
     string internal constant VAULT_URI = "https://api.tao20.io/{id}.json";
+    uint256 internal constant RECOVERY_WINDOW = 3 hours;
 
     uint256 public constant NETUID1 = 1;
     uint256 public constant NETUID2 = 2;
@@ -111,7 +112,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     ///      with it: reading a fresh vault's quotes off the shared lens is the mismatched pair the
     ///      user guide warns integrators about.
     function _deployVaultAndLens(address _registry) internal returns (AlphaVault freshVault, AlphaVaultLens freshLens) {
-        freshVault = new AlphaVault(VAULT_URI, address(mailboxLogic), address(subnetLogic), _registry);
+        freshVault = new AlphaVault(VAULT_URI, address(mailboxLogic), address(subnetLogic), _registry, RECOVERY_WINDOW);
         freshLens = new AlphaVaultLens(freshVault);
     }
 

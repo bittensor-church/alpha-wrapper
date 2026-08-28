@@ -38,17 +38,22 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     function test_RevertWhen_ConstructorZeroMailboxLogic() public {
         vm.expectRevert(ZeroAddress.selector);
-        new AlphaVault(VAULT_URI, address(0), address(subnetLogic), address(registry));
+        new AlphaVault(VAULT_URI, address(0), address(subnetLogic), address(registry), RECOVERY_WINDOW);
     }
 
     function test_RevertWhen_ConstructorZeroSubnetLogic() public {
         vm.expectRevert(ZeroAddress.selector);
-        new AlphaVault(VAULT_URI, address(mailboxLogic), address(0), address(registry));
+        new AlphaVault(VAULT_URI, address(mailboxLogic), address(0), address(registry), RECOVERY_WINDOW);
     }
 
     function test_RevertWhen_ConstructorZeroValidatorRegistry() public {
         vm.expectRevert(ZeroAddress.selector);
-        new AlphaVault(VAULT_URI, address(mailboxLogic), address(subnetLogic), address(0));
+        new AlphaVault(VAULT_URI, address(mailboxLogic), address(subnetLogic), address(0), RECOVERY_WINDOW);
+    }
+
+    function test_RevertWhen_ConstructorZeroRecoveryWindow() public {
+        vm.expectRevert(ZeroAmount.selector);
+        new AlphaVault(VAULT_URI, address(mailboxLogic), address(subnetLogic), address(registry), 0);
     }
 
     function test_Uri_ReturnsConstructorValue() public view {
