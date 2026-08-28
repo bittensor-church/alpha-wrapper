@@ -94,8 +94,9 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
     }
 
-    /// @dev A successor holding less than the slot is owed explains part of the loss, which is not
-    ///      an explanation: accepting it would report the rest as backing that is not there.
+    /// @dev Pins the resolver's cover guard against a state the chain's whole-entry moves cannot
+    ///      produce: a successor explaining only part of the loss is no explanation, and accepting
+    ///      it would report the rest as backing that is not there.
     function test_PartialSuccessor_FailsClosed() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);
@@ -109,8 +110,9 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
     }
 
-    /// @dev A slot spread across two physical keys is more than the compact record can carry, so a
-    ///      residual left behind sends the case to the watcher rather than down the follow.
+    /// @dev Pins the resolver's zero-residual guard against a split the chain's whole-entry moves
+    ///      cannot produce: a slot spread across two keys is more than the record can carry, so
+    ///      the case goes to the watcher rather than down the follow.
     function test_SuccessorWithAResidualLeftBehind_FailsClosed() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);

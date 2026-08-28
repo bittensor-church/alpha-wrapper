@@ -228,7 +228,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         bytes32 tip = _buildSwapTrail(NETUID1, lost, 2);
         vault.syncBacking(TOKEN1);
 
-        vault.recoverStray(TOKEN1, 0, tip);
+        vault.recoverStray(TOKEN1, tip);
         vm.snapshotGasLastCall("AlphaVault", "recoverStray: whole slot (64 validators)");
     }
 

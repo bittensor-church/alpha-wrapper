@@ -83,6 +83,12 @@ over several sales.
   ([edge-cases.md](edge-cases.md)).
 - Amounts below the chain's minimum stake size can leave the stake split
   drifted from target weights; share value is unaffected.
+- `wrap` reads the caller's mailbox only under the chosen key. A hotkey
+  swap landing between deposit and wrap carries the deposit to the new
+  key, and the wrap reverts until the owner reclaims and retries
+  ([user-guide.md](user-guide.md)). The deposit stays the owner's
+  throughout; the manual retry is the accepted price of a wrap that
+  never guesses where a deposit went.
 - A partial `unwrapForTao` can fill short and refund the unsold part as
   shares instead of reverting; callers bound the damage with
   `minTaoOut`.

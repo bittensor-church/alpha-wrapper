@@ -103,7 +103,7 @@ surface (`locatedStake`, `isBackingIntact`, `frozenUntil`),
 stay open throughout.
 
 Anyone can act inside the window. `syncBacking(tokenId)` starts the
-clock and moves no alpha; `recoverStray(tokenId, slotIndex, sourceHotkey)`
+clock and moves no alpha; `recoverStray(tokenId, sourceHotkey)`
 carries the found alpha back under the key its slot expects. The chain
 moves stake entries whole, so the loss sits under one key and one
 successful call brings it all home; a source that cannot cover it is

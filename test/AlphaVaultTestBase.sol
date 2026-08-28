@@ -112,7 +112,14 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     ///      with it: reading a fresh vault's quotes off the shared lens is the mismatched pair the
     ///      user guide warns integrators about.
     function _deployVaultAndLens(address _registry) internal returns (AlphaVault freshVault, AlphaVaultLens freshLens) {
-        freshVault = new AlphaVault(VAULT_URI, address(mailboxLogic), address(subnetLogic), _registry, RECOVERY_WINDOW);
+        return _deployVaultAndLens(_registry, RECOVERY_WINDOW);
+    }
+
+    function _deployVaultAndLens(address _registry, uint256 recoveryWindow)
+        internal
+        returns (AlphaVault freshVault, AlphaVaultLens freshLens)
+    {
+        freshVault = new AlphaVault(VAULT_URI, address(mailboxLogic), address(subnetLogic), _registry, recoveryWindow);
         freshLens = new AlphaVaultLens(freshVault);
     }
 

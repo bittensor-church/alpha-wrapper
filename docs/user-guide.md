@@ -148,3 +148,12 @@ on request:
 - `reclaimTaoFromMailbox(netuid)` recovers native TAO sitting on the
   mailbox address, such as a dissolution refund that arrived before you
   wrapped.
+
+If your `wrap` reverts `ZeroAmount` even though you deposited, the
+validator likely swapped its hotkey after your deposit arrived - the
+swap carries mailbox stake to the new key along with everything else.
+Retry in three steps: find the key holding your deposit (the chain
+records the swap, and any block explorer shows where your mailbox's
+stake sits), call `reclaimAlphaFromMailbox(netuid, thatKey, yourColdkey)`
+to take it back, then stake it toward a validator currently in the
+attested set and `wrap` again.

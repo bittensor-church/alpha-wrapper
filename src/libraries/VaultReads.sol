@@ -208,17 +208,4 @@ library VaultReads {
     function coversTracked(uint256 stake, uint256 tracked) internal pure returns (bool) {
         return stake + TRACKED_SLACK_RAO >= tracked;
     }
-
-    /// @dev When the loss recorded at `shortSince` becomes writable off, given the vault's
-    ///      recovery window.
-    function recoveryDeadline(uint64 shortSince, uint256 window) internal pure returns (uint256) {
-        return shortSince + window;
-    }
-
-    /// @dev Whether a loss recorded at `shortSince` still holds the position shut. An unrecorded
-    ///      loss counts: a deadline cannot pass before it exists.
-    function isWindowStanding(uint64 shortSince, uint256 window) internal view returns (bool) {
-        // forge-lint: disable-next-line(block-timestamp)
-        return shortSince == 0 || block.timestamp < recoveryDeadline(shortSince, window);
-    }
 }

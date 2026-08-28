@@ -97,8 +97,8 @@ the vault can locate.
 
 ## Recovering the alpha
 
-`recoverStray(tokenId, slotIndex, sourceHotkey)` moves alpha the vault
-already owns back under the key a slot expects it at. Anyone may call
+`recoverStray(tokenId, sourceHotkey)` moves alpha the vault already
+owns back under the key of the slot it makes whole. Anyone may call
 it, and that is safe by construction rather than by permission: only the
 subnet clone can stake under its own coldkey, so a balance found there
 is already holders' backing, and shifting it between the clone's own
@@ -106,9 +106,9 @@ keys cannot take anything out.
 
 - Recovery is **whole**. The chain moves stake entries whole - a swap
   migrates the full balance, a sweep removes an entire entry - so what a
-  slot lost sits under exactly one key. A source that cannot cover the
-  slot's expectation is not where the backing went, and the call refuses
-  it.
+  slot lost sits under exactly one key. The vault aims the find at the
+  short slot with the largest expectation it covers; a source that
+  covers none is not where the backing went, and the call refuses it.
 - Finding the expectation makes the slot whole and ends its window. No
   call moves a deadline in either direction.
 - A key any slot already resolves to is refused, whatever it holds above
@@ -161,11 +161,11 @@ yet, and a timestamp otherwise.
 
 ## Deposits
 
-A hotkey swap carries a waiting mailbox deposit along with everyone
-else's stake, so `wrap` looks under the chosen validator's key and, if
-that is empty, under its single direct successor. Nothing reads a second
-edge. A deposit further down a trail comes back through
-`reclaimAlphaFromMailbox` and is staked again.
+`wrap` reads the caller's mailbox under the chosen validator's key and
+nowhere else. A hotkey swap carries a waiting mailbox deposit along with
+everyone else's stake; the deposit stays the owner's, and it comes back
+through `reclaimAlphaFromMailbox` naming the key that holds it, to be
+staked again toward a live attested validator and wrapped.
 
 A deposit is refused before the mailbox is flushed whenever the position
 is short, so fresh money never recapitalizes a standing loss and then

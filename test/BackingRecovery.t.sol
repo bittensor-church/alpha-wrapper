@@ -2,7 +2,8 @@
 pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
-import { stdError } from "forge-std/Test.sol";
+import { AlphaVault } from "src/AlphaVault.sol";
+import { AlphaVaultLens } from "src/AlphaVaultLens.sol";
 import { VaultReads } from "src/libraries/VaultReads.sol";
 import {
     BackingShortfall,
@@ -11,7 +12,6 @@ import {
     NothingToUnwrap,
     RecoveryBelowFloor,
     RecoveryIncomplete,
-    RecoveryMisdirected,
     SubnetInDissolutionBlackoutPeriod
 } from "src/VaultErrors.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
@@ -151,7 +151,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vm.expectEmit(true, true, false, true, address(vault));
         emit BackingRecovered(TOKEN1, hotkey1, owed);
         vm.prank(bob);
-        vault.recoverStray(TOKEN1, 0, hotkey4);
+        vault.recoverStray(TOKEN1, hotkey4);
 
         assertTrue(lens.isBackingIntact(TOKEN1), "the found alpha accounts for the loss");
         assertEq(lens.frozenUntil(TOKEN1), 0, "finding it ends the window");
@@ -167,7 +167,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.syncBacking(TOKEN1);
 
         vm.prank(bob);
-        vault.recoverStray(TOKEN1, 0, tip);
+        vault.recoverStray(TOKEN1, tip);
 
         assertTrue(lens.isBackingIntact(TOKEN1), "the watcher-supplied source accounts for the loss");
         assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "backing whole again");
@@ -183,14 +183,14 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
         vault.syncBacking(TOKEN1);
 
-        vm.expectRevert();
+        vm.expectRevert(bytes("MockStaking: hotkey has no owner"));
         vm.prank(bob);
-        vault.recoverStray(TOKEN1, 0, hotkey4);
+        vault.recoverStray(TOKEN1, hotkey4);
 
         // An account with no part in the vault, the subnet or the swap takes the key on.
         MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, false);
         vm.prank(bob);
-        vault.recoverStray(TOKEN1, 0, hotkey4);
+        vault.recoverStray(TOKEN1, hotkey4);
 
         assertTrue(lens.isBackingIntact(TOKEN1), "the exit reopens without the vault owning anything");
         uint256 quarter = vault.balanceOf(alice, TOKEN1) / 4;
@@ -198,9 +198,9 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, quarter, _toSubstrate(alice));
     }
 
-    /// @dev The chain moves stake entries whole, so a slot's loss sits under exactly one key: a
-    ///      source holding less is not where the backing went. The refusal leaves the alpha put
-    ///      and the deadline standing, and the key that does cover the loss still recovers it.
+    /// @dev Pins the cover guard against a split the chain's whole-entry moves cannot produce: a
+    ///      source unable to cover any open expectation is refused, the alpha stays put, the
+    ///      deadline stands, and the key that does cover the loss still recovers it.
     function test_RevertWhen_TheSourceCannotCoverTheLoss() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);
@@ -213,13 +213,13 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
         vm.expectRevert(RecoveryIncomplete.selector);
         vm.prank(bob);
-        vault.recoverStray(TOKEN1, 0, hotkey4);
+        vault.recoverStray(TOKEN1, hotkey4);
         assertFalse(lens.isBackingIntact(TOKEN1), "the loss still stands");
         assertEq(_getStakeForColdkey(hotkey4, coldkey, NETUID1), owed / 3, "the alpha it refused stayed put");
         assertEq(lens.frozenUntil(TOKEN1), deadline, "and the deadline did not move");
 
         vm.prank(bob);
-        vault.recoverStray(TOKEN1, 0, hotkey5);
+        vault.recoverStray(TOKEN1, hotkey5);
         assertTrue(lens.isBackingIntact(TOKEN1), "the key covering the loss recovers it");
         assertEq(lens.frozenUntil(TOKEN1), 0, "and the window ends");
     }
@@ -235,7 +235,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
         vm.expectRevert(RecoveryBelowFloor.selector);
         vm.prank(bob);
-        vault.recoverStray(TOKEN1, 0, hotkey4);
+        vault.recoverStray(TOKEN1, hotkey4);
     }
 
     /// @dev Putting one slot's loss on file must not drop the swap another slot resolved on the way
@@ -260,22 +260,144 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
 
         vm.expectRevert(NothingToRecover.selector);
-        vault.recoverStray(TOKEN1, 0, hotkey5);
+        vault.recoverStray(TOKEN1, hotkey5);
     }
 
     function test_RevertWhen_RecoveringFromTheSlotsOwnKey() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
 
         vm.expectRevert(NothingToRecover.selector);
-        vault.recoverStray(TOKEN1, 0, hotkey1);
+        vault.recoverStray(TOKEN1, hotkey1);
     }
 
-    function test_RevertWhen_RecoveringWithASlotIndexOutOfRange() public {
+    /// @dev Two validators lost in the same window: each lump answers only for the slot whose
+    ///      expectation it covers, so the vault routes them home one call at a time.
+    function test_RecoverStray_RoutesEachLumpToItsOwnSlot() public {
+        _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2, hotkey3), _weights(6000, 3000, 1000));
         _depositAndWrap(alice, NETUID1, 30 ether);
-        _buildSwapTrail(NETUID1, hotkey1, 2);
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+        _simulateOffVaultSwap(NETUID1, hotkey2, hotkey5);
+        vault.syncBacking(TOKEN1);
 
-        vm.expectRevert(stdError.indexOOBError);
-        vault.recoverStray(TOKEN1, 3, hotkey4);
+        // The smaller lump cannot cover the larger slot, so it heals its own.
+        vm.prank(bob);
+        vault.recoverStray(TOKEN1, hotkey5);
+        VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
+        assertGt(slots[0].shortSince, 0, "the larger loss still stands");
+        assertEq(slots[1].shortSince, 0, "the smaller slot is whole");
+
+        vm.prank(bob);
+        vault.recoverStray(TOKEN1, hotkey4);
+        assertTrue(lens.isBackingIntact(TOKEN1), "both lumps are home");
+        assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "with nothing lost in routing");
+    }
+
+    /// @dev A source able to cover more than one open expectation goes to the largest, so every
+    ///      later lump still has a slot its own size can answer for.
+    function test_RecoverStray_AimsACoveringSourceAtTheLargestShortSlot() public {
+        _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2, hotkey3), _weights(6000, 3000, 1000));
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+        _simulateOffVaultSwap(NETUID1, hotkey2, hotkey5);
+        vault.syncBacking(TOKEN1);
+
+        vm.prank(bob);
+        vault.recoverStray(TOKEN1, hotkey4);
+        VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
+        assertEq(slots[0].shortSince, 0, "the largest expectation took the covering find");
+        assertGt(slots[1].shortSince, 0, "while the smaller loss keeps its own clock");
+
+        vm.prank(bob);
+        vault.recoverStray(TOKEN1, hotkey5);
+        assertTrue(lens.isBackingIntact(TOKEN1), "and is healed by its own lump");
+    }
+
+    /// @dev Whatever the set size and whichever validators vanish, every lump the watcher names
+    ///      comes home to a slot its size answers for, and the position is whole once all have.
+    function testFuzz_RecoverStray_BringsEveryLumpHome(uint256 countSeed, uint256 lossMask) public {
+        uint256 count = bound(countSeed, 2, 6);
+        bytes32[] memory set = new bytes32[](count);
+        uint16[] memory weights = new uint16[](count);
+        uint16 assigned;
+        for (uint256 i; i < count; ++i) {
+            set[i] = keccak256(abi.encode("fuzz-validator", i));
+            if (i + 1 < count) {
+                weights[i] = uint16(BPS_BASE / count);
+                assigned += weights[i];
+            }
+        }
+        weights[count - 1] = uint16(BPS_BASE - assigned);
+        _setValidators(NETUID1, set, weights);
+        _depositAndWrap(alice, NETUID1, 30 ether);
+
+        lossMask = bound(lossMask, 1, (1 << count) - 1);
+        for (uint256 i; i < count; ++i) {
+            if (lossMask & (1 << i) == 0) continue;
+            _simulateOffVaultSwap(NETUID1, set[i], keccak256(abi.encode("stray", i)));
+        }
+        vault.syncBacking(TOKEN1);
+
+        for (uint256 i; i < count; ++i) {
+            if (lossMask & (1 << i) == 0) continue;
+            vm.prank(bob);
+            vault.recoverStray(TOKEN1, keccak256(abi.encode("stray", i)));
+        }
+
+        assertTrue(lens.isBackingIntact(TOKEN1), "every loss is healed");
+        assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "and the whole deposit is accounted for");
+    }
+
+    /// @dev A watcher can find the alpha before anyone put the loss on file: recovery needs no
+    ///      clock, and a loss healed before its first sighting never opens a window at all.
+    function test_RecoverStray_HealsALossNobodyRecorded() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+        assertEq(lens.frozenUntil(TOKEN1), type(uint256).max, "the loss is visible with no clock");
+
+        vm.prank(bob);
+        vault.recoverStray(TOKEN1, hotkey4);
+
+        assertTrue(lens.isBackingIntact(TOKEN1), "the find lands without a sighting on file");
+        assertEq(lens.frozenUntil(TOKEN1), 0, "and no window ever opened");
+        assertEq(vault.recordedSlots(TOKEN1)[0].shortSince, 0, "with no clock ever started");
+    }
+
+    /// @dev A stray keeps earning while it sits elsewhere, so the lump can come home larger than
+    ///      the expectation; the growth is holders' backing and arrives with it.
+    function test_RecoverStray_BringsAnEmissionGrownLumpHome() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        bytes32 coldkey = _subnetColdkey(NETUID1);
+        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+        uint256 lump = _getStakeForColdkey(hotkey4, coldkey, NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, coldkey, NETUID1, lump + 2 ether);
+        vault.syncBacking(TOKEN1);
+
+        vm.prank(bob);
+        vault.recoverStray(TOKEN1, hotkey4);
+
+        assertTrue(lens.isBackingIntact(TOKEN1), "the loss is healed");
+        assertApproxEqAbs(lens.totalStake(TOKEN1), 32 ether, 0.01 ether, "and the emissions came home with the lump");
+    }
+
+    /// @dev The window is a deployment setting, so the deadline must follow the deployed value.
+    function test_RecoveryWindow_SetAtDeploymentDrivesTheDeadline() public {
+        (AlphaVault hourVault, AlphaVaultLens hourLens) = _deployVaultAndLens(address(registry), 1 hours);
+        uint256 tokenId = hourVault.currentTokenId(NETUID1);
+        address mailbox = hourVault.getDepositAddress(alice, NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _toSubstrate(mailbox), NETUID1, 10 ether);
+        vm.prank(alice);
+        hourVault.wrap(NETUID1, hotkey1);
+
+        bytes32 coldkey = _toSubstrate(hourVault.subnetClone(tokenId));
+        uint256 lump = MockStaking(STAKING_PRECOMPILE).getStake(hotkey1, coldkey, NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, coldkey, NETUID1, lump);
+        hourVault.syncBacking(tokenId);
+
+        assertEq(hourLens.frozenUntil(tokenId), block.timestamp + 1 hours, "the deadline runs on the deployed window");
+        vm.warp(block.timestamp + 1 hours);
+        hourVault.syncBacking(tokenId);
+        assertTrue(hourLens.isBackingIntact(tokenId), "and the write-off falls due on it too");
     }
 
     // -------------------- Running out the window ---------------------------------
@@ -306,7 +428,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vm.warp(block.timestamp + 2 days);
 
         vm.prank(bob);
-        vault.recoverStray(TOKEN1, 0, hotkey4);
+        vault.recoverStray(TOKEN1, hotkey4);
 
         assertTrue(lens.isBackingIntact(TOKEN1), "the alpha came home in the overtime");
         assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "and the backing is whole again");
@@ -329,7 +451,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         uint256 navBefore = lens.totalStake(TOKEN1);
 
         vm.prank(alice);
-        vault.recoverStray(TOKEN1, 0, hotkey4);
+        vault.recoverStray(TOKEN1, hotkey4);
 
         assertApproxEqAbs(lens.totalStake(TOKEN1), navBefore + lost, 0.01 ether, "the find is new backing");
         (uint256 bobsAlpha,) = lens.previewUnwrap(TOKEN1, bobShares);
@@ -339,56 +461,28 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
     // -------------------- Mailboxes ----------------------------------------------
 
-    /// @dev A hotkey swap carries a waiting deposit along with everyone else's stake. The mailbox
-    ///      reads the chosen key and, if that is empty, its single direct successor.
-    function test_Wrap_FindsADepositOneSwapAway() public {
+    /// @dev A hotkey swap carries a waiting mailbox deposit along with everyone else's stake, and
+    ///      the mailbox reads only the chosen key. The owner reclaims the deposit from the key
+    ///      holding it, stakes it again toward a live attested validator, and wraps.
+    function test_Wrap_SweptAlongDepositReturnsThroughReclaim() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         address mailbox = vault.getDepositAddress(bob, NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey4);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, _toSubstrate(mailbox), NETUID1, 1 ether);
-
-        vm.prank(bob);
-        vault.wrap(NETUID1, hotkey1);
-
-        assertGt(vault.balanceOf(bob, TOKEN1), 0, "the deposit landed from one edge away");
-        assertEq(_getStakeForColdkey(hotkey4, _toSubstrate(mailbox), NETUID1), 0, "and the mailbox was drained");
-        assertTrue(lens.isBackingIntact(TOKEN1), "with the record naming where it went");
-    }
-
-    /// @dev The successor edge that finds a deposit also proves the chosen name is swapped away,
-    ///      so the record adopts the key holding the deposit rather than move it toward a name
-    ///      that refuses everything.
-    function test_Wrap_AdoptsTheSuccessorOfADeletedChosenKey() public {
-        address mailbox = vault.getDepositAddress(bob, NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey4);
-        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, _toSubstrate(mailbox), NETUID1, 1 ether);
-
-        vm.prank(bob);
-        vault.wrap(NETUID1, hotkey1);
-
-        assertGt(vault.balanceOf(bob, TOKEN1), 0, "the deposit landed without naming the dead key");
-        assertEq(_getVaultStake(hotkey1, NETUID1), 0, "nothing was aimed at it");
-        assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey4, "the record adopted the key holding the deposit");
-        assertTrue(lens.isBackingIntact(TOKEN1), "and accounts for all of it");
-    }
-
-    /// @dev No path reads a second edge, so a deposit two swaps deep is not found here; it comes
-    ///      back through the mailbox reclaim rail and is staked again.
-    function test_Wrap_DoesNotWalkPastOneEdge() public {
-        _depositAndWrap(alice, NETUID1, 30 ether);
-        address mailbox = vault.getDepositAddress(bob, NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey4);
-        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey4, NETUID1, hotkey5);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey5, _toSubstrate(mailbox), NETUID1, 1 ether);
 
         vm.expectRevert(bytes4(keccak256("ZeroAmount()")));
         vm.prank(bob);
         vault.wrap(NETUID1, hotkey1);
 
         vm.prank(bob);
-        vault.reclaimAlphaFromMailbox(NETUID1, hotkey5, _toSubstrate(bob));
-        assertEq(_getStake(hotkey5, bob, NETUID1), 1 ether, "the deposit came back to its owner");
+        vault.reclaimAlphaFromMailbox(NETUID1, hotkey4, _toSubstrate(bob));
+        assertEq(_getStake(hotkey4, bob, NETUID1), 1 ether, "the deposit came back to its owner");
+
+        _simulateAlphaDepositHotkey(bob, NETUID1, 1 ether, hotkey2);
+        vm.prank(bob);
+        vault.wrap(NETUID1, hotkey2);
+        assertGt(vault.balanceOf(bob, TOKEN1), 0, "the retried deposit lands");
+        assertTrue(lens.isBackingIntact(TOKEN1), "with the record accounting for all of it");
     }
 
     /// @dev A deposit aimed at a validator whose alpha the record has followed elsewhere still lands
@@ -405,32 +499,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertGt(vault.balanceOf(bob, TOKEN1), 0, "the deposit landed off the chosen name");
         assertEq(_getVaultStake(hotkey1, NETUID1), 0, "nothing was aimed at the retired key");
         assertTrue(lens.isBackingIntact(TOKEN1), "and the record accounts for all of it");
-    }
-
-    /// @dev A loss deepening on the same key rides the window its slot already has: the clock
-    ///      answers for the slot's whole expectation, so the size of the gap moves no deadline.
-    function test_DeepeningLoss_KeepsTheOriginalDeadline() public {
-        _depositAndWrap(alice, NETUID1, 30 ether);
-        bytes32 coldkey = _subnetColdkey(NETUID1);
-        uint256 owed = _getVaultStake(hotkey1, NETUID1);
-
-        // Short by a hair: just past the slack the record forgives.
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, owed - 2e3);
-        vault.syncBacking(TOKEN1);
-        uint256 deadline = lens.frozenUntil(TOKEN1);
-
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
-        assertEq(lens.frozenUntil(TOKEN1), deadline, "the deadline did not move");
-
-        vm.warp(deadline - 1);
-        vm.expectRevert(BackingUnchanged.selector);
-        vault.syncBacking(TOKEN1);
-
-        vm.warp(deadline);
-        vm.expectEmit(true, true, false, true, address(vault));
-        emit BackingWrittenOff(TOKEN1, hotkey1, owed, 0);
-        vault.syncBacking(TOKEN1);
-        assertTrue(lens.isBackingIntact(TOKEN1), "the whole slot settled with the window it had");
     }
 
     /// @dev Each slot's loss runs its own clock: a second loss neither restarts the first slot's
@@ -524,28 +592,10 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
         vm.expectRevert(NothingToRecover.selector);
         vm.prank(bob);
-        vault.recoverStray(TOKEN1, 1, hotkey4);
+        vault.recoverStray(TOKEN1, hotkey4);
 
         assertEq(_getVaultStake(hotkey4, NETUID1), owed, "the swapped-to key kept its alpha");
         assertTrue(lens.isBackingIntact(TOKEN1), "and the slot it answers for stayed covered");
-    }
-
-    /// @dev A found stray may only be aimed at a slot that is missing something: parked under a
-    ///      healthy slot's key it stops answering as stray, and the slot that lost it could never
-    ///      reach it again.
-    function test_RecoverStray_RefusesAHealthySlotWhileALossStands() public {
-        _depositAndWrap(alice, NETUID1, 30 ether);
-        _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
-        vault.syncBacking(TOKEN1);
-
-        vm.expectRevert(RecoveryMisdirected.selector);
-        vm.prank(bob);
-        vault.recoverStray(TOKEN1, 1, hotkey4);
-
-        // The stray stayed reachable, so the slot that lost it still recovers in full.
-        vm.prank(bob);
-        vault.recoverStray(TOKEN1, 0, hotkey4);
-        assertTrue(lens.isBackingIntact(TOKEN1), "the honest recovery still lands");
     }
 
     /// @dev A surplus on a covered slot is not stray either: it already counts where it sits, and
@@ -559,7 +609,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
         vm.expectRevert(NothingToRecover.selector);
         vm.prank(bob);
-        vault.recoverStray(TOKEN1, 0, hotkey2);
+        vault.recoverStray(TOKEN1, hotkey2);
     }
 
     /// @dev Booking a loss must leave the record pointing somewhere the next call can use. A slot

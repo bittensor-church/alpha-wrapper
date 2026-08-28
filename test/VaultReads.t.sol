@@ -49,12 +49,6 @@ contract VaultReadsTest is Test {
         VaultReads.requireIntact(slots, backing, netuid);
     }
 
-    /// @dev The optimizer may fold repeated `block.timestamp` reads within one frame, which a
-    ///      `vm.warp` between them cannot break; a fresh frame per read keeps the clock honest.
-    function callIsWindowStanding(uint64 shortSince, uint256 window) external view returns (bool) {
-        return VaultReads.isWindowStanding(shortSince, window);
-    }
-
     // -------------------- Tracked-balance comparison -----------------------------
 
     function testFuzz_CoversTracked_AllowsTheSlack(uint256 stake, uint256 tracked) public pure {
@@ -69,34 +63,6 @@ contract VaultReadsTest is Test {
 
         assertTrue(VaultReads.coversTracked(tracked - VaultReads.TRACKED_SLACK_RAO, tracked));
         assertFalse(VaultReads.coversTracked(tracked - VaultReads.TRACKED_SLACK_RAO - 1, tracked));
-    }
-
-    // -------------------- Recovery-window arithmetic -----------------------------
-
-    function testFuzz_IsWindowStanding_TracksTheDeadline(uint64 shortSince, uint256 window, uint256 at) public {
-        shortSince = uint64(bound(shortSince, 0, type(uint64).max / 2));
-        window = bound(window, 1, 365 days);
-        at = bound(at, 1, type(uint128).max);
-        vm.warp(at);
-
-        bool expected = shortSince == 0 || at < uint256(shortSince) + window;
-        assertEq(VaultReads.isWindowStanding(shortSince, window), expected);
-    }
-
-    function test_IsWindowStanding_EndsExactlyAtTheDeadline() public {
-        uint64 shortSince = 1000;
-        uint256 window = 3 hours;
-
-        vm.warp(uint256(shortSince) + window - 1);
-        assertTrue(this.callIsWindowStanding(shortSince, window));
-        vm.warp(uint256(shortSince) + window);
-        assertFalse(this.callIsWindowStanding(shortSince, window));
-    }
-
-    function test_IsWindowStanding_UnrecordedLossHasNoDeadline() public {
-        vm.warp(type(uint128).max);
-
-        assertTrue(VaultReads.isWindowStanding(0, 1));
     }
 
     // -------------------- Shortfall reporting ------------------------------------

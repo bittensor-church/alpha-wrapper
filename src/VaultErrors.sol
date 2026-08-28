@@ -30,8 +30,6 @@ error GatherBelowFloor();
 error BackingShortfall(uint16 netuid, bytes32 hotkey, uint256 tracked);
 error BackingUnchanged();
 error NothingToRecover();
-/// @dev A recovery named a slot that is missing nothing while another slot is.
-error RecoveryMisdirected();
 error RecoveryBelowFloor();
 /// @dev The chain moves stake entries whole, so a slot's loss sits under one key; a source that
 ///      cannot cover the whole expectation is not where the backing went.

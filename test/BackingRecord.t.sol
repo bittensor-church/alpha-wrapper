@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { VaultReads } from "src/libraries/VaultReads.sol";
-import { SwappedHotkeyStillAttested } from "src/VaultErrors.sol";
+import { SwappedHotkeyStillAttested, ZeroAmount } from "src/VaultErrors.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
@@ -80,8 +80,15 @@ contract BackingRecordTest is AlphaVaultTestBase {
         _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
         MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
 
+        // A deposit that followed the swap to the new key is the owner's to redirect: reclaim,
+        // stake toward a key still in the attested set, wrap.
         _simulateAlphaDepositHotkey(alice, NETUID1, 10 ether, hotkey4);
+        vm.expectRevert(ZeroAmount.selector);
         _wrapHotkey(alice, NETUID1, hotkey1);
+        vm.prank(alice);
+        vault.reclaimAlphaFromMailbox(NETUID1, hotkey4, _toSubstrate(alice));
+        _simulateAlphaDepositHotkey(alice, NETUID1, 10 ether, hotkey2);
+        _wrapHotkey(alice, NETUID1, hotkey2);
         vm.prank(bob);
         vault.unwrap(TOKEN1, shares / 2, _toSubstrate(bob));
         vm.prank(bob);
