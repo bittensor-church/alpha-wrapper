@@ -958,6 +958,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///         whole record takes a late find on its first slot as new backing.
     ///         A key some slot resolves to is refused as source because one slot is never
     ///         recapitalized out of another.
+    ///         Both keys must be owned on chain: a watcher claims an abandoned hotkey before
+    ///         pointing the vault at it, and the move here reverts until they have.
     /// @param  tokenId      ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @param  sourceHotkey The key currently holding the alpha.
     function recoverStray(uint256 tokenId, bytes32 sourceHotkey) external nonReentrant {
@@ -968,6 +970,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
         bytes32 coldkey = VaultReads.coldkeyOf(clone);
         VaultReads.Slot[] memory slots = _slots[tokenId];
+        if (slots.length == 0) revert NothingToRecover();
         VaultReads.Backing memory backing = VaultReads.resolveBacking(slots, coldkey, netuid);
         if (VaultMath.contains(backing.keys, sourceHotkey)) revert NothingToRecover();
 
@@ -986,6 +989,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
         uint256 recovered = IStaking(STAKING_PRECOMPILE).getStake(target, coldkey, netuid);
         if (!VaultReads.coversTracked(recovered, slot.tracked)) revert RecoveryIncomplete();
+        // Anchor the expectation to the re-read, as every settling rail does: a lump larger than
+        // the loss raises what the slot answers for from here on.
+        if (slot.tracked != recovered) slot.tracked = recovered;
         if (slot.shortSince != 0) slot.shortSince = 0;
         emit BackingRecovered(tokenId, target, amount);
     }

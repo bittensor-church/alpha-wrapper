@@ -23,6 +23,7 @@ contract DeployAlpha is Script {
         address validatorRegistry = vm.envAddress("VALIDATOR_REGISTRY");
         string memory vaultUri = vm.envOr("VAULT_URI", string("https://api.tao20.io/metadata/{id}.json"));
         uint256 recoveryWindow = vm.envOr("RECOVERY_WINDOW", uint256(3 hours));
+        console.log("Recovery window (s):   %s", recoveryWindow);
 
         vm.startBroadcast();
 

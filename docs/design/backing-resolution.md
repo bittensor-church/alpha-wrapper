@@ -70,8 +70,8 @@ one. Anyone may call `syncBacking(tokenId)`, which moves no alpha and
 stamps the moment the vault first saw the loss.
 
 From that stamp the slot has the vault's **recovery window** - a
-duration fixed at deployment, reported by `recoveryWindow` on the vault
-and the lens. Until the loss is booked:
+duration fixed at deployment, reported by the vault's `recoveryWindow`.
+Until the loss is booked:
 
 - `wrap`, `rebalance`, `unwrap` and `unwrapForTao` revert
   `BackingShortfall`.

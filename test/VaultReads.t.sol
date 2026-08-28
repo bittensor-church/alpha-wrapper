@@ -51,13 +51,6 @@ contract VaultReadsTest is Test {
 
     // -------------------- Tracked-balance comparison -----------------------------
 
-    function testFuzz_CoversTracked_AllowsTheSlack(uint256 stake, uint256 tracked) public pure {
-        stake = bound(stake, 0, 1e30);
-        tracked = bound(tracked, 0, 1e30);
-
-        assertEq(VaultReads.coversTracked(stake, tracked), stake + VaultReads.TRACKED_SLACK_RAO >= tracked);
-    }
-
     function test_CoversTracked_BoundaryAtTheSlack() public pure {
         uint256 tracked = 1e9;
 

@@ -12,7 +12,8 @@ import {
     NothingToUnwrap,
     RecoveryBelowFloor,
     RecoveryIncomplete,
-    SubnetInDissolutionBlackoutPeriod
+    SubnetInDissolutionBlackoutPeriod,
+    ZeroAmount
 } from "src/VaultErrors.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
@@ -270,6 +271,16 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.recoverStray(TOKEN1, hotkey1);
     }
 
+    /// @dev A clone can exist before any wrap wrote a record; alpha parked under its coldkey then
+    ///      belongs to no slot and there is nothing to recover it onto.
+    function test_RevertWhen_RecoveringOnATokenWithNoSlots() public {
+        vault.createSubnetProxy(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, _subnetColdkey(NETUID1), NETUID1, 5 ether);
+
+        vm.expectRevert(NothingToRecover.selector);
+        vault.recoverStray(TOKEN1, hotkey4);
+    }
+
     /// @dev Two validators lost in the same window: each lump answers only for the slot whose
     ///      expectation it covers, so the vault routes them home one call at a time.
     function test_RecoverStray_RoutesEachLumpToItsOwnSlot() public {
@@ -470,7 +481,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, _toSubstrate(mailbox), NETUID1, 1 ether);
 
-        vm.expectRevert(bytes4(keccak256("ZeroAmount()")));
+        vm.expectRevert(ZeroAmount.selector);
         vm.prank(bob);
         vault.wrap(NETUID1, hotkey1);
 

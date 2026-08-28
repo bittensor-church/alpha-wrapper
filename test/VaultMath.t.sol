@@ -104,13 +104,11 @@ contract VaultMathTest is Test {
     // -------------------- Saturating helpers -------------------------------------
 
     function testFuzz_UnreservedTao_FloorsAtZero(uint256 balance, uint256 reserved) public pure {
-        uint256 expected = balance > reserved ? balance - reserved : 0;
-        assertEq(VaultMath.unreservedTao(balance, reserved), expected);
+        assertEq(VaultMath.unreservedTao(balance, reserved), balance - Math.min(balance, reserved));
     }
 
     function testFuzz_PendingTao_FloorsAtZero(uint256 earned, uint256 debt) public pure {
-        uint256 expected = earned > debt ? earned - debt : 0;
-        assertEq(VaultMath.pendingTao(earned, debt), expected);
+        assertEq(VaultMath.pendingTao(earned, debt), earned - Math.min(earned, debt));
     }
 
     function testFuzz_BackedEntitlement_CapsAtTheLiability(uint256 entitlement, uint256 liability) public pure {

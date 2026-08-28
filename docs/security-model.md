@@ -88,7 +88,9 @@ over several sales.
   key, and the wrap reverts until the owner reclaims and retries
   ([user-guide.md](user-guide.md)). The deposit stays the owner's
   throughout; the manual retry is the accepted price of a wrap that
-  never guesses where a deposit went.
+  never guesses where a deposit went. When every attested key has
+  swapped away at once, deposits wait for the next attestation to name
+  a live key; exits and quotes keep working through the record.
 - A partial `unwrapForTao` can fill short and refund the unsold part as
   shares instead of reverting; callers bound the damage with
   `minTaoOut`.

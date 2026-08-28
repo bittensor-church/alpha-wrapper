@@ -83,11 +83,12 @@ contract AlphaVaultLens {
     ///         further `syncBacking` books the loss.
     function frozenUntil(uint256 tokenId) external view returns (uint256 deadline) {
         (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _readBacking(tokenId);
+        uint256 window = vault.recoveryWindow();
         for (uint256 i; i < backing.short.length;) {
             if (backing.short[i]) {
                 uint64 shortSince = slots[i].shortSince;
                 if (shortSince == 0) return type(uint256).max;
-                uint256 slotDeadline = shortSince + vault.recoveryWindow();
+                uint256 slotDeadline = shortSince + window;
                 if (slotDeadline > deadline) deadline = slotDeadline;
             }
             unchecked {
