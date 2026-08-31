@@ -285,6 +285,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///             chain's floor, `GatherBelowFloor` when the gather's largest slot provably cannot
     ///             clear it, and `ConsolidationBelowFloor` when pending rotated-out stake cannot be
     ///             consolidated above it; such positions exit via `unwrapForTao`.
+    ///             Reverts `ZeroColdkey` when the live-path destination is the zero Substrate account.
     ///             Reverts `BackingShortfall` while the position holds backing it cannot account
     ///             for; `syncBacking` reopens the token by booking the loss.
     /// @param  tokenId              ERC1155 tokenId identifying the (netuid, registrationBlock) position.
@@ -300,6 +301,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         if (VaultReads.isIssuedForDissolvedSubnet(tokenId)) {
             _unwrapFromDissolvedSubnet(tokenId, shares, clone);
         } else {
+            if (userSubstrateColdkey == bytes32(0)) revert ZeroColdkey();
             _unwrapFromLiveSubnet(tokenId, shares, userSubstrateColdkey, clone, netuid);
         }
     }
