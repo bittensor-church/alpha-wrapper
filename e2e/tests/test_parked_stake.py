@@ -7,11 +7,11 @@ still counts it - the backing is exactly where its record expects, so nothing is
 missing and no recovery window opens - but every stake operation naming the
 abandoned key is refused, so nobody can exit.
 
-What matters is that this is not where the money stops. Ownership of a hotkey is
-free for the taking once nobody holds it, so an account with no part in the
-vault, the subnet or the swap can hand the position back to its holders, and
-gains nothing over their stake by doing so. The exit that was refused then pays
-out in full.
+What matters is that this is not where the money stops. Association of a hotkey
+is free for the taking once nobody owns it, so an account with no part in the
+vault, the subnet or the swap can make the position movable again. The old key
+does not need to be registered on the subnet: an Owner entry alone satisfies the
+runtime's stake-operation guard. The exit that was refused then pays out in full.
 """
 import pytest
 
@@ -25,7 +25,7 @@ STRANGER_FUNDING_RAO = 1_000_000_000
 
 
 @pytest.mark.scenario
-def test_stranded_holder_exits_after_anyone_claims_the_hotkey(env):
+def test_stranded_holder_exits_after_watcher_associates_without_registration(env):
     netuid = env.netuids[0]
     token_id = env.token_ids[0]
     hotkeys = env.subnet_hotkey_pubkeys(0)
@@ -55,6 +55,9 @@ def test_stranded_holder_exits_after_anyone_claims_the_hotkey(env):
 
     # The identity moved and the owner went with it; the alpha stayed put.
     assert extrinsics.hotkey_owner(hotkey_ss58) == "", "the swap left the hotkey owned"
+    assert not extrinsics.hotkey_is_registered(hotkey_ss58, netuid), (
+        "the old hotkey should no longer be registered after its identity moved"
+    )
     assert env.stake(hotkey_pubkey, clone_coldkey, netuid) >= parked, (
         "the swap was meant to leave the stake where it was"
     )
@@ -80,6 +83,9 @@ def test_stranded_holder_exits_after_anyone_claims_the_hotkey(env):
 
     assert extrinsics.hotkey_owner(hotkey_ss58) == stranger_ss58, (
         "the stranger's claim did not take"
+    )
+    assert not extrinsics.hotkey_is_registered(hotkey_ss58, netuid), (
+        "try_associate_hotkey must not re-register the abandoned key"
     )
     assert env.stake(hotkey_pubkey, clone_coldkey, netuid) >= parked, (
         "owning the hotkey must carry no claim on the stake delegated under it"

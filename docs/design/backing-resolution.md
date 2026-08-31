@@ -121,8 +121,25 @@ keys cannot take anything out.
 Both keys must be usable by the chain. A hotkey nobody owns refuses
 every stake operation naming it. Taking ownership of an abandoned hotkey
 is open to anyone, costs nothing beyond the fee, and carries no claim on
-the stake delegated under it - so a watcher claims the key first, and
-the vault itself never owns one.
+the stake delegated under it - so a watcher associates the key first,
+and the vault itself never owns one.
+
+Association is not subnet registration. A watcher submits
+`try_associate_hotkey(hotkey)` as a native Subtensor extrinsic (or
+`tryAssociateHotkey(bytes32)` through the neuron precompile at `0x0804`).
+That restores the global `Owner` entry checked by stake operations; the
+abandoned key does not need a UID or renewed subnet membership. The staking
+precompile's `getHotkeyOwner(bytes32)` reader at `0x0805` distinguishes an
+ownerless key from an associated one.
+
+The first successful claimant becomes the owner. That ownership does not let
+the claimant spend stake delegated by the vault clone, because the stake still
+belongs to the clone's coldkey. It does let the claimant initiate another
+hotkey swap, however, which can strand the key again or move the stake farther
+down its lineage. Association is therefore an operational liveness recovery,
+not a permanent on-chain repair: watchers should claim promptly, retain the
+claiming key, and continue monitoring the slot until holders have exited or the
+backing has moved to a stable key.
 
 ## What is written off, and who bears it
 
@@ -150,8 +167,11 @@ The design assumes someone is watching every vault. Their job:
 1. Call `syncBacking` promptly on any token reporting itself short, so
    the clock starts - and again once the deadline passes, since that call
    is the only thing that books the loss and reopens the token.
-2. Take ownership of any funded hotkey the chain has abandoned, so the
-   alpha under it can move again.
+2. For any funded hotkey the chain has abandoned, verify
+   `getHotkeyOwner(hotkey)` reports no owner and call
+   `try_associate_hotkey(hotkey)`. Do not re-register it on the subnet;
+   association alone makes the alpha movable again. Retain and monitor the
+   claimed key because its owner can swap it again.
 3. Find where the alpha went - deeper swap trails and erased lineage are
    resolved off chain - and call `recoverStray` with the key holding it.
 
