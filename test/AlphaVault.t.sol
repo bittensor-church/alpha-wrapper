@@ -247,6 +247,20 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, 0, aliceSub);
     }
 
+    function test_RevertWhen_LiveUnwrapToZeroColdkey() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        uint256 backing = lens.totalStake(TOKEN1);
+
+        vm.prank(alice);
+        vm.expectRevert(ZeroColdkey.selector);
+        vault.unwrap(TOKEN1, shares, bytes32(0));
+
+        assertEq(vault.balanceOf(alice, TOKEN1), shares, "zero destination burned shares");
+        assertEq(lens.totalStake(TOKEN1), backing, "zero destination moved backing");
+    }
+
     // ------------------ Mailbox Security -------------------------------------
 
     function test_OnlyVaultCanFlush() public {
