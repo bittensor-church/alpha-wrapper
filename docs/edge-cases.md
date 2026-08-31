@@ -127,8 +127,15 @@ stake operation naming that key, so the alpha cannot move.
 
 Taking ownership of an abandoned hotkey is open to anyone, costs nothing
 beyond the transaction fee, and gives the claimant no claim on the stake
-delegated under it. Once someone claims it, exits go through again. The
-vault never owns a hotkey itself.
+delegated under it. A watcher calls `try_associate_hotkey`; it does not
+re-register the key on the subnet. Association recreates the owner record
+that stake operations require, and exits go through again.
+
+The first claimant does control later swaps of that hotkey and can strand it
+again, so this is an operational recovery rather than a permanent protocol
+repair. The detailed watcher procedure and monitoring requirement are in
+[design/backing-resolution.md](design/backing-resolution.md#what-a-watcher-does).
+The vault never owns a hotkey itself.
 
 ## Stray TAO
 

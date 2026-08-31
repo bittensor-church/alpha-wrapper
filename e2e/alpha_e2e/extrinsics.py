@@ -289,6 +289,21 @@ def associate_hotkey(
         ), signer_uri=signer_uri)
 
 
+def hotkey_is_registered(
+    hotkey_ss58: str, netuid: int, *, chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> bool:
+    """Whether `hotkey_ss58` currently has subnet membership on `netuid`.
+
+    Association and registration are deliberately separate runtime states: an
+    abandoned key only needs an Owner entry before stake can move from it.
+    """
+    with _connect(chain_endpoint) as client:
+        value = client.query(
+            _sdk().storage.SubtensorModule.IsNetworkMember, [hotkey_ss58, netuid],
+        )
+    return bool(value)
+
+
 # The ownership map answers for every hotkey, so "nobody owns this" arrives as the
 # all-zero account rather than as an absent entry.
 UNOWNED_ACCOUNT = "5C4hrfjw9DjXZTzV3MwzrrAr9P1MJhSrvWGWqi1eSuyUpnhM"

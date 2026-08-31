@@ -103,6 +103,9 @@ docstring in each file carries the full phase-by-phase description.
 - `test_claimable_tao.py` -- a governance dust-threshold raise force-sells the
   vault's position: the stranded native TAO is credited to the holders present
   at that moment, withdrawable in full, and denied to later depositors.
+- `test_parked_stake.py` -- an all-subnets hotkey swap keeps vault stake under
+  an ownerless, unregistered key: exits fail until an unrelated watcher
+  associates (but does not re-register) the key, after which the same exit pays.
 
 Chainless unit tests for the framework itself: `test_substrate.py`,
 `test_chain_unit.py`, `test_checks_unit.py`.
