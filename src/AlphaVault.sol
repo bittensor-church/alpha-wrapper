@@ -444,7 +444,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             return;
         }
 
-        uint256 assets = VaultMath.assetsFor(totalAlpha, totalSupply(tokenId), shares);
+        uint256 supply = totalSupply(tokenId);
+        // Virtual shares protect partial exits from inflation attacks, but no real holder remains
+        // after a full burn to own the virtual shares' cut. Give the terminal holder every asset.
+        uint256 assets = shares == supply ? totalAlpha : VaultMath.assetsFor(totalAlpha, supply, shares);
         if (assets == 0) revert ZeroAmount();
 
         // A sub-floor request is undeliverable on the alpha rail (the chain rejects the transfer);

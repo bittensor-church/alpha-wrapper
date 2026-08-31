@@ -180,7 +180,8 @@ contract AlphaVaultLens {
 
         VaultReads.resolveValidators(validatorRegistry, netuid);
 
-        return (VaultMath.assetsFor(totalStake(tokenId), supply, shares), 0);
+        uint256 alphaBacking = totalStake(tokenId);
+        return (shares == supply ? alphaBacking : VaultMath.assetsFor(alphaBacking, supply, shares), 0);
     }
 
     /// @notice TAO withdrawable by `account` for `tokenId` right now: exactly what `claimTao`

@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import { NothingToUnwrap, ZeroAmount } from "src/VaultErrors.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
+import { CHAIN_MIN_STAKE } from "./mocks/MockStaking.sol";
 
 /// @dev Rounding-to-zero and empty-state guards for the share math, split out of AlphaVault.t.sol.
 ///      Shares its setup/helpers with the other suites via the common AlphaVaultTestBase.
@@ -58,6 +59,28 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));
         uint256 received = _userStakeAcrossHotkeys(alice, NETUID1);
         assertApproxEqAbs(received, 5 ether, 1e9);
+    }
+
+    function test_FullLiveUnwrapDrainsAllBackingAfterEmissions() public {
+        _simulateAlphaDeposit(alice, NETUID1, CHAIN_MIN_STAKE);
+        _wrap(alice, NETUID1);
+        _simulateEmissions(NETUID1, 1 ether);
+
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        uint256 backing = lens.totalStake(TOKEN1);
+        uint256 virtualShareQuote = (shares * (backing + 1)) / (vault.totalSupply(TOKEN1) + 1e9);
+        assertLt(virtualShareQuote, backing, "fixture must expose the terminal virtual-share residue");
+
+        (uint256 previewAlpha, uint256 previewTao) = lens.previewUnwrap(TOKEN1, shares);
+        assertEq(previewAlpha, backing, "a full live burn quotes every backed alpha");
+        assertEq(previewTao, 0);
+
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+
+        assertEq(_userStakeAcrossHotkeys(alice, NETUID1), backing, "the terminal holder receives every backed alpha");
+        assertEq(_totalVaultStakeAcrossHotkeys(NETUID1), 0, "a zero-supply position retains no alpha");
+        assertEq(vault.totalSupply(TOKEN1), 0);
     }
 
     // The dissolved payout floors each holder's pro-rata cut, so earlier exits can round down;
