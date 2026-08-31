@@ -151,13 +151,14 @@ contract AlphaVaultLens {
     /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while the subnet is being dissolved,
     ///         `SubnetDissolved` for a dissolved position whose clone holds no TAO refund, and
     ///         `BackingShortfall` while any backing is unaccounted for, exactly as `unwrap` would.
-    ///         Live-path delivery is exact to within a few RAO of chain-side share rounding: unwrap
-    ///         delivers this amount or reverts, so a sub-floor total is not deliverable here and
-    ///         must be exited via unwrapForTao. That voluntary alpha-for-TAO sell is a market order
-    ///         with no preview of its own: its payout is bounded by the caller's minTaoOut, not
-    ///         quoted here. `tao` is non-zero only for the dissolved-subnet payout. The caller's
-    ///         claimable-TAO entitlement is never part of this quote: it survives unwrapping and
-    ///         is quoted by `claimableTaoOf`.
+    ///         The quote assumes the backing and supply do not change before execution. Live-path
+    ///         consolidation can lose chain-side rounding on every move-stake hop, so the amount
+    ///         actually delivered can be lower by the accumulated rounding loss. A sub-floor
+    ///         total is not deliverable here and must be exited via unwrapForTao. That voluntary
+    ///         alpha-for-TAO sell is a market order with no preview of its own: its payout is
+    ///         bounded by the caller's minTaoOut, not quoted here. `tao` is non-zero only for the
+    ///         dissolved-subnet payout. The caller's claimable-TAO entitlement is never part of
+    ///         this quote: it survives unwrapping and is quoted by `claimableTaoOf`.
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @param  shares  Shares being previewed.
     /// @return alpha   Alpha delivered on the live path.
@@ -181,7 +182,7 @@ contract AlphaVaultLens {
         VaultReads.resolveValidators(validatorRegistry, netuid);
 
         uint256 alphaBacking = totalStake(tokenId);
-        return (shares == supply ? alphaBacking : VaultMath.assetsFor(alphaBacking, supply, shares), 0);
+        return (VaultMath.exitAssetsFor(alphaBacking, supply, shares), 0);
     }
 
     /// @notice TAO withdrawable by `account` for `tokenId` right now: exactly what `claimTao`

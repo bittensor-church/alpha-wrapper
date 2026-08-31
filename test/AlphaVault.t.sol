@@ -2080,8 +2080,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 userReceived = _userStakeAcrossHotkeys(alice, NETUID1);
         uint256 vaultAfter = _totalVaultStakeAcrossHotkeys(NETUID1);
 
-        // Delivery is exact: the position is gathered onto one hotkey and the full pro-rata is
-        // transferred in a single move (b1 >= floor keeps every gather hop above the floor).
+        // This fixture has no simulated move-stake rounding loss: the position is gathered onto
+        // one hotkey and its partial-exit entitlement is transferred in a single move.
         assertEq(userReceived, expectedAssets, "delivers exactly the pro-rata assets");
         assertEq(vaultAfter + userReceived, b1 + b2 + b3, "unwrap conserves total alpha");
     }

@@ -24,6 +24,14 @@ library VaultMath {
         return (shares * (stake + VIRTUAL_ASSETS)) / (supply + VIRTUAL_SHARES);
     }
 
+    /// @dev Assets owed by an exit. Partial exits retain the virtual offsets that protect against
+    ///      inflation attacks; a terminal exit takes the whole backing because no real holder
+    ///      remains to own the virtual shares' cut. Capping excess shares makes read-only quotes
+    ///      monotonic without changing execution, where callers cannot burn more than the supply.
+    function exitAssetsFor(uint256 stake, uint256 supply, uint256 shares) internal pure returns (uint256) {
+        return supply != 0 && shares >= supply ? stake : assetsFor(stake, supply, shares);
+    }
+
     function sumBalances(uint256[] memory balances) internal pure returns (uint256 total) {
         for (uint256 i; i < balances.length;) {
             total += balances[i];
@@ -73,7 +81,9 @@ library VaultMath {
 
     /// @dev A holder's share of a fixed pot, with none of the virtual offsets the live path
     ///      needs: a dissolved position's TAO refund cannot be inflated, so it divides plainly.
+    ///      Read-only quotes cap excess shares at the whole pot; execution cannot burn them.
     function proRata(uint256 total, uint256 shares, uint256 supply) internal pure returns (uint256) {
+        if (supply != 0 && shares >= supply) return total;
         return (total * shares) / supply;
     }
 

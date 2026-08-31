@@ -277,10 +277,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///         then dispatches on subnet state:
     ///           - permanently dissolved (tokenId's registrationBlock no longer current): pays pro-rata
     ///             native TAO from the clone's refund balance.
-    ///           - live: consolidates the position onto one hotkey and delivers the full pro-rata
-    ///             alpha to `userSubstrateColdkey` in a single transfer (exact to within a few RAO
-    ///             of chain-side share rounding, or reverting - never partial), then re-splits the
-    ///             remainder toward the attested weights.
+    ///           - live: consolidates the position onto one hotkey and delivers the holder's alpha
+    ///             entitlement to `userSubstrateColdkey` in a single transfer, then re-splits the
+    ///             remainder toward the attested weights. A full-supply burn claims all backing;
+    ///             chain-side rounding on each consolidation hop can reduce what reaches the
+    ///             delivery slot, and the call delivers that post-consolidation balance.
     ///             At a readable price, reverts `WithdrawTooSmall` when the request is below the
     ///             chain's floor, `GatherBelowFloor` when the gather's largest slot provably cannot
     ///             clear it, and `ConsolidationBelowFloor` when pending rotated-out stake cannot be
@@ -347,7 +348,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // A full burn claims the whole backing exactly: the rounded-down conversion can price it
         // a few RAO short, which would degrade the floor-exempt full drains into floored partials
         // the chain rejects - locking the last holder's sub-floor dust out of its only exit.
-        uint256 assets = shares == supply ? total : VaultMath.assetsFor(total, supply, shares);
+        uint256 assets = VaultMath.exitAssetsFor(total, supply, shares);
         if (assets == 0) revert ZeroAmount();
 
         _burn(msg.sender, tokenId, shares);
@@ -445,9 +446,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
 
         uint256 supply = totalSupply(tokenId);
-        // Virtual shares protect partial exits from inflation attacks, but no real holder remains
-        // after a full burn to own the virtual shares' cut. Give the terminal holder every asset.
-        uint256 assets = shares == supply ? totalAlpha : VaultMath.assetsFor(totalAlpha, supply, shares);
+        uint256 assets = VaultMath.exitAssetsFor(totalAlpha, supply, shares);
         if (assets == 0) revert ZeroAmount();
 
         // A sub-floor request is undeliverable on the alpha rail (the chain rejects the transfer);

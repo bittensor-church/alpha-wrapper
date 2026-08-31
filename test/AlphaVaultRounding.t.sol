@@ -2,8 +2,10 @@
 pragma solidity ^0.8.20;
 
 import { NothingToUnwrap, ZeroAmount } from "src/VaultErrors.sol";
+import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
+import { VaultMath } from "src/libraries/VaultMath.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
-import { CHAIN_MIN_STAKE } from "./mocks/MockStaking.sol";
+import { MockStaking, CHAIN_MIN_STAKE } from "./mocks/MockStaking.sol";
 
 /// @dev Rounding-to-zero and empty-state guards for the share math, split out of AlphaVault.t.sol.
 ///      Shares its setup/helpers with the other suites via the common AlphaVaultTestBase.
@@ -61,14 +63,17 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         assertApproxEqAbs(received, 5 ether, 1e9);
     }
 
-    function test_FullLiveUnwrapDrainsAllBackingAfterEmissions() public {
-        _simulateAlphaDeposit(alice, NETUID1, CHAIN_MIN_STAKE);
+    function testFuzz_FullLiveUnwrap_DrainsAllBackingAfterEmissions(uint256 deposit, uint256 emissions) public {
+        deposit = bound(deposit, CHAIN_MIN_STAKE, type(uint64).max / 2);
+        emissions = bound(emissions, 1, type(uint64).max / 2);
+
+        _simulateAlphaDeposit(alice, NETUID1, deposit);
         _wrap(alice, NETUID1);
-        _simulateEmissions(NETUID1, 1 ether);
+        _simulateEmissions(NETUID1, emissions);
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         uint256 backing = lens.totalStake(TOKEN1);
-        uint256 virtualShareQuote = (shares * (backing + 1)) / (vault.totalSupply(TOKEN1) + 1e9);
+        uint256 virtualShareQuote = VaultMath.assetsFor(backing, vault.totalSupply(TOKEN1), shares);
         assertLt(virtualShareQuote, backing, "fixture must expose the terminal virtual-share residue");
 
         (uint256 previewAlpha, uint256 previewTao) = lens.previewUnwrap(TOKEN1, shares);
@@ -81,6 +86,43 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         assertEq(_userStakeAcrossHotkeys(alice, NETUID1), backing, "the terminal holder receives every backed alpha");
         assertEq(_totalVaultStakeAcrossHotkeys(NETUID1), 0, "a zero-supply position retains no alpha");
         assertEq(vault.totalSupply(TOKEN1), 0);
+    }
+
+    function test_FullLiveUnwrap_DeliversPostConsolidationBalanceWhenMovesRoundDown() public {
+        _simulateAlphaDeposit(alice, NETUID1, 30 ether);
+        _wrap(alice, NETUID1);
+        _simulateEmissions(NETUID1, 5 ether);
+        MockStaking(STAKING_PRECOMPILE).setMoveStakeRoundingLoss(1);
+
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        (uint256 previewAlpha,) = lens.previewUnwrap(TOKEN1, shares);
+
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+
+        uint256 delivered = _userStakeAcrossHotkeys(alice, NETUID1);
+        assertEq(previewAlpha - delivered, 2, "two consolidation hops each lose one RAO");
+        assertEq(_totalVaultStakeAcrossHotkeys(NETUID1), 0);
+        assertEq(vault.totalSupply(TOKEN1), 0);
+    }
+
+    function test_PreviewUnwrap_CapsSharesAboveSupplyOnLiveAndDissolvedPaths() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+
+        uint256 supply = vault.totalSupply(TOKEN1);
+        uint256 alphaBacking = lens.totalStake(TOKEN1);
+        (uint256 alphaQuote, uint256 taoQuote) = lens.previewUnwrap(TOKEN1, supply + 1);
+        assertEq(alphaQuote, alphaBacking);
+        assertEq(taoQuote, 0);
+
+        _simulateDissolutionStarted(NETUID1);
+        _simulateTaoAwardedOnDissolution(TOKEN1, 40 ether);
+        _simulateDissolutionCompleted(NETUID1);
+
+        (alphaQuote, taoQuote) = lens.previewUnwrap(TOKEN1, supply + 1);
+        assertEq(alphaQuote, 0);
+        assertEq(taoQuote, 40 ether);
     }
 
     // The dissolved payout floors each holder's pro-rata cut, so earlier exits can round down;

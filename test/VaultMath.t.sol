@@ -41,6 +41,34 @@ contract VaultMathTest is Test {
         assertLe(VaultMath.assetsFor(stake, supply, supply), stake, "burning all shares overdrew the stake");
     }
 
+    function testFuzz_ExitAssetsFor_FullOrExcessSupplyPaysWholeStake(uint256 stake, uint256 supply, uint256 excess)
+        public
+        pure
+    {
+        stake = bound(stake, 0, STAKE_CEILING);
+        supply = bound(supply, 1, SUPPLY_CAP);
+        excess = bound(excess, 0, type(uint256).max - supply);
+
+        assertEq(VaultMath.exitAssetsFor(stake, supply, supply + excess), stake);
+    }
+
+    function testFuzz_ExitAssetsFor_PartialSupplyRetainsVirtualOffsets(uint256 stake, uint256 supply, uint256 shares)
+        public
+        pure
+    {
+        stake = bound(stake, 0, STAKE_CEILING);
+        supply = bound(supply, 1, SUPPLY_CAP);
+        shares = bound(shares, 0, supply - 1);
+
+        assertEq(VaultMath.exitAssetsFor(stake, supply, shares), VaultMath.assetsFor(stake, supply, shares));
+    }
+
+    function testFuzz_ExitAssetsFor_EmptySupplyDoesNotClaimBacking(uint256 stake) public pure {
+        stake = bound(stake, 0, STAKE_CEILING);
+
+        assertEq(VaultMath.exitAssetsFor(stake, 0, 0), 0);
+    }
+
     function test_SharesFor_FirstDepositMintsAtVirtualParity() public pure {
         assertEq(VaultMath.sharesFor(0, 0, 5e9), 5e9 * VaultMath.VIRTUAL_SHARES);
     }
@@ -127,9 +155,20 @@ contract VaultMathTest is Test {
     function testFuzz_ProRata_NeverExceedsThePot(uint256 total, uint256 shares, uint256 supply) public pure {
         total = bound(total, 0, AMOUNT_CEILING);
         supply = bound(supply, 1, AMOUNT_CEILING);
-        shares = bound(shares, 0, supply);
+        shares = bound(shares, 0, type(uint256).max);
 
         assertLe(VaultMath.proRata(total, shares, supply), total);
+    }
+
+    function testFuzz_ProRata_ExcessSharesPayAtMostTheWholePot(uint256 total, uint256 supply, uint256 excess)
+        public
+        pure
+    {
+        total = bound(total, 0, AMOUNT_CEILING);
+        supply = bound(supply, 1, AMOUNT_CEILING);
+        excess = bound(excess, 0, type(uint256).max - supply);
+
+        assertEq(VaultMath.proRata(total, supply + excess, supply), total);
     }
 
     function testFuzz_ToNativeQuantum_DropsLessThanOneQuantum(uint256 amount) public pure {
