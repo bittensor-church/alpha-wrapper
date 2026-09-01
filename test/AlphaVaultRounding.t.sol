@@ -25,7 +25,7 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         _simulateAlphaDeposit(bob, NETUID1, dust);
         vm.prank(bob);
         vm.expectRevert(ZeroAmount.selector);
-        vault.wrap(NETUID1, hotkey1);
+        vault.wrap(NETUID1, hotkey1, 0);
 
         assertEq(vault.balanceOf(bob, TOKEN1), 0);
     }

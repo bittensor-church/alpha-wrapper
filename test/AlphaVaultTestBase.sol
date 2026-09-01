@@ -231,7 +231,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     function _wrapHotkey(address user, uint256 netuid, bytes32 chosenHotkey) internal {
         vm.prank(user);
-        vault.wrap(netuid, chosenHotkey);
+        vault.wrap(netuid, chosenHotkey, 0);
     }
 
     function _getStake(bytes32 hotkey, address who, uint256 netuid) internal view returns (uint256) {

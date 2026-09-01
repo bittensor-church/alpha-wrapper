@@ -68,7 +68,9 @@ over several sales.
 - First-depositor share-price inflation is blunted with virtual shares
   and assets (the ERC-4626 pattern), and a share-supply cap keeps the
   TAO claim index exact.
-- Market-order exits are slippage-bounded by the caller's `minTaoOut`.
+- Market-order exits are slippage-bounded by the caller's `minTaoOut`,
+  and the mint by their `minSharesOut`, so a rate that moves between the
+  quote and the call costs the caller no more than they allowed.
 - Backing the vault cannot account for shuts every share-pricing and
   alpha-moving path rather than being priced around, so an understated
   total can never be minted or redeemed against. Recovery is open to

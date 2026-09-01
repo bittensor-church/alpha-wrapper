@@ -113,7 +113,7 @@ def test_convicted_alpha(env):
     shares_before_reverted_wrap = env.vault_shares(test_token_id)
     env.vault_send_expect_revert(
         1_500_000, "wrap with no arrived deposit did NOT revert",
-        "wrap(uint256,bytes32)", test_netuid, test_hotkey_pubkey,
+        "wrap(uint256,bytes32,uint256)", test_netuid, test_hotkey_pubkey, 0,
     )
     shares_after_reverted_wrap = env.vault_shares(test_token_id)
     assert shares_after_reverted_wrap == shares_before_reverted_wrap, (

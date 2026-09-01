@@ -13,6 +13,7 @@ import {
     NoSharesOutstanding,
     NoValidatorFound,
     SubnetDissolved,
+    SlippageExceeded,
     SubnetInDissolutionBlackoutPeriod,
     SubnetNotRegistered,
     ValidatorSetMalformed,
@@ -131,7 +132,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     function test_RevertWhen_WrapZero() public {
         vm.prank(alice);
         vm.expectRevert(ZeroAmount.selector);
-        vault.wrap(NETUID1, hotkey1);
+        vault.wrap(NETUID1, hotkey1, 0);
     }
 
     // ------------------ Share Price ------------------------------------------
@@ -825,7 +826,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(ChosenHotkeyNotInSet.selector);
-        vault.wrap(NETUID1, hotkey4);
+        vault.wrap(NETUID1, hotkey4, 0);
 
         bytes32 aliceSub = _toSubstrate(alice);
         vm.prank(alice);
@@ -956,7 +957,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     function test_RevertWhen_WrapSubnetNotRegistered() public {
         vm.prank(alice);
         vm.expectRevert(SubnetNotRegistered.selector);
-        vault.wrap(42, hotkey1);
+        vault.wrap(42, hotkey1, 0);
     }
 
     function test_WrapAfterRecycleDeploysNewCloneAndIsolatesOldShares() public {
@@ -1148,7 +1149,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(SubnetInDissolutionBlackoutPeriod.selector);
-        vault.wrap(NETUID1, hotkey1);
+        vault.wrap(NETUID1, hotkey1, 0);
     }
 
     function test_RevertWhen_UnwrapDuringEarlyBlackout() public {
@@ -1232,7 +1233,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(SubnetNotRegistered.selector);
-        vault.wrap(NETUID1, hotkey1);
+        vault.wrap(NETUID1, hotkey1, 0);
     }
 
     function test_RevertWhen_RebalanceDuringLateBlackout() public {
@@ -1694,7 +1695,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, NETUID1, 30 ether, hotkey4);
         vm.prank(alice);
         vm.expectRevert(ChosenHotkeyNotInSet.selector);
-        vault.wrap(NETUID1, hotkey4);
+        vault.wrap(NETUID1, hotkey4, 0);
     }
 
     function test_WrapCount1ChosenIsValidatorNoMoves() public {
@@ -1711,7 +1712,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     function test_RevertWhen_WrapZeroChosenHotkey() public {
         vm.prank(alice);
         vm.expectRevert(ZeroHotkey.selector);
-        vault.wrap(NETUID1, bytes32(0));
+        vault.wrap(NETUID1, bytes32(0), 0);
     }
 
     function test_RevertWhen_WrapWhenDepositBelowMinStake() public {
@@ -1719,7 +1720,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, NETUID1, 1_999_999, hotkey1);
         vm.prank(alice);
         vm.expectRevert(DepositTooSmall.selector);
-        vault.wrap(NETUID1, hotkey1);
+        vault.wrap(NETUID1, hotkey1, 0);
     }
 
     function test_WrapAcceptsExactlyMinStakeCount1() public {
@@ -1735,7 +1736,89 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, NETUID1, 10 ether, hotkey1);
         vm.prank(alice);
         vm.expectRevert(ZeroAmount.selector);
-        vault.wrap(NETUID1, hotkey2);
+        vault.wrap(NETUID1, hotkey2, 0);
+    }
+
+    // ------------------ Wrap slippage guard ----------------------------------
+
+    function test_WrapMintsExactlyTheQuotedShares() public {
+        _simulateAlphaDepositHotkey(alice, NETUID1, 30 ether, hotkey1);
+        uint256 quoted = lens.previewWrap(TOKEN1, 30 ether);
+
+        vm.prank(alice);
+        vault.wrap(NETUID1, hotkey1, quoted);
+
+        assertEq(vault.balanceOf(alice, TOKEN1), quoted, "the quote is a bound the vault can be held to");
+    }
+
+    function test_RevertWhen_WrapMintsBelowMinSharesOut() public {
+        _simulateAlphaDepositHotkey(alice, NETUID1, 30 ether, hotkey1);
+        uint256 quoted = lens.previewWrap(TOKEN1, 30 ether);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(SlippageExceeded.selector, quoted));
+        vault.wrap(NETUID1, hotkey1, quoted + 1);
+    }
+
+    // The deposit is flushed into the position before the mint is priced, so a refused wrap has to
+    // put it back rather than strand it under the vault's coldkey.
+    function test_WrapRefusedOnSlippageLeavesTheDepositInTheMailbox() public {
+        _simulateAlphaDepositHotkey(alice, NETUID1, 30 ether, hotkey1);
+        bytes32 mailboxColdkey = _toSubstrate(vault.getDepositAddress(alice, NETUID1));
+        uint256 quoted = lens.previewWrap(TOKEN1, 30 ether);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(SlippageExceeded.selector, quoted));
+        vault.wrap(NETUID1, hotkey1, quoted + 1);
+
+        assertEq(_getStakeForColdkey(hotkey1, mailboxColdkey, NETUID1), 30 ether, "deposit still the caller's");
+        assertEq(_totalVaultStakeAcrossHotkeys(NETUID1), 0, "no alpha landed in the position");
+
+        _wrapHotkey(alice, NETUID1, hotkey1);
+        assertEq(vault.balanceOf(alice, TOKEN1), quoted, "the retry mints what the bound refused");
+    }
+
+    // The exposure the bound exists for: a depositor quotes a rate, the position appreciates before
+    // their call lands, and the same alpha buys fewer shares.
+    function test_RevertWhen_BackingGrowsBetweenQuoteAndWrap() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateAlphaDepositHotkey(bob, NETUID1, 30 ether, hotkey1);
+        uint256 quoted = lens.previewWrap(TOKEN1, 30 ether);
+
+        _simulateEmissions(NETUID1, 30 ether);
+
+        uint256 requoted = lens.previewWrap(TOKEN1, 30 ether);
+        assertLt(requoted, quoted, "the appreciation moved the rate against the depositor");
+
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(SlippageExceeded.selector, requoted));
+        vault.wrap(NETUID1, hotkey1, quoted);
+    }
+
+    function testFuzz_WrapMintsAtLeastMinSharesOut(uint256 depositAlpha, uint256 boundBps) public {
+        depositAlpha = bound(depositAlpha, CHAIN_MIN_STAKE, 1_000 ether);
+        boundBps = bound(boundBps, 0, 10_000);
+        _simulateAlphaDepositHotkey(alice, NETUID1, depositAlpha, hotkey1);
+        uint256 quoted = lens.previewWrap(TOKEN1, depositAlpha);
+        uint256 minSharesOut = (quoted * boundBps) / 10_000;
+
+        vm.prank(alice);
+        vault.wrap(NETUID1, hotkey1, minSharesOut);
+
+        assertGe(vault.balanceOf(alice, TOKEN1), minSharesOut, "a bound at or below the quote is honored");
+    }
+
+    function testFuzz_RevertWhen_MinSharesOutExceedsTheQuote(uint256 depositAlpha, uint256 excess) public {
+        depositAlpha = bound(depositAlpha, CHAIN_MIN_STAKE, 1_000 ether);
+        _simulateAlphaDepositHotkey(alice, NETUID1, depositAlpha, hotkey1);
+        uint256 quoted = lens.previewWrap(TOKEN1, depositAlpha);
+        excess = bound(excess, 1, type(uint256).max - quoted);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(SlippageExceeded.selector, quoted));
+        vault.wrap(NETUID1, hotkey1, quoted + excess);
+
+        assertEq(vault.balanceOf(alice, TOKEN1), 0, "a refused wrap mints nothing");
     }
 
     function test_WrapDerivesMailboxColdkeyFromUserClone() public {

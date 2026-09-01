@@ -6,7 +6,7 @@ exits, emission accrual, and a validator rotation -- and cross-checks the
 emitted events against the observability scripts in scripts/:
 
   Phase 6   transfer alpha to the deposit mailboxes (split across 3 validators)
-  Phase 7   wrap every deposit (one wrap per validator)
+  Phase 7   wrap every deposit (one wrap per validator), bounded by the lens quote
   Phase 8   verify shares / totalStake / sharePrice on every vault
   Phase 9   unwrap all shares and verify the alpha comes back in full
   Phase 10  observability scripts asserted row-by-row over the deposit window
@@ -29,6 +29,10 @@ from alpha_e2e.substrate import h160_to_ss58, h160_to_substrate_b32
 
 # Phase 9's single full unwrap can leave a few RAO of per-slot rounding behind.
 FULL_UNWRAP_TOLERANCE_RAO = 10
+
+# What a caller gives up against the lens quote when bounding a wrap. The flush hop
+# shaves chain-side dust off the deposit, so the mint lands just under the quote.
+WRAP_SLIPPAGE_TOLERANCE_PCT = 1
 
 
 @pytest.mark.scenario
@@ -54,11 +58,31 @@ def test_full_flow(env):
             )
 
     # --- Phase 7: process deposits (one wrap per validator) --------------------
+    # The first deposit doubles as the mint slippage-guard leg: quote it on the lens,
+    # show a bound above the quote is refused, then wrap under a caller's tolerance.
+    guard_asserted = False
     for subnet_index, netuid in enumerate(env.netuids):
+        mailbox_coldkey = h160_to_substrate_b32(env.mailbox_address(netuid))
         for hotkey_pubkey in env.subnet_hotkey_pubkeys(subnet_index):
+            min_shares_out = 0
+            if not guard_asserted:
+                deposit_alpha = env.stake(hotkey_pubkey, mailbox_coldkey, netuid)
+                quoted_shares = env.preview_wrap(env.token_ids[subnet_index], deposit_alpha)
+                assert quoted_shares != 0, (
+                    f"previewWrap quoted 0 shares for {deposit_alpha} RAO on netuid {netuid}"
+                )
+                env.assert_vault_reverts_with(
+                    "SlippageExceeded(uint256)", 1_000_000,
+                    "Mint guard: wrap above the previewWrap quote did NOT revert as SlippageExceeded",
+                    "wrap(uint256,bytes32,uint256)", netuid, hotkey_pubkey, quoted_shares * 2,
+                )
+                min_shares_out = quoted_shares * (100 - WRAP_SLIPPAGE_TOLERANCE_PCT) // 100
+                guard_asserted = True
+                print(f"  netuid {netuid}: previewWrap quoted {quoted_shares} shares; "
+                      f"wrapping with minSharesOut={min_shares_out}")
             env.vault_send(
                 1_000_000, f"wrap for netuid {netuid}, hotkey {hotkey_pubkey[:18]}... failed",
-                "wrap(uint256,bytes32)", netuid, hotkey_pubkey,
+                "wrap(uint256,bytes32,uint256)", netuid, hotkey_pubkey, min_shares_out,
             )
 
     # --- Phase 8: verify deposits ----------------------------------------------

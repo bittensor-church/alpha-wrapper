@@ -397,7 +397,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         address mailbox = hourVault.getDepositAddress(alice, NETUID1);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _toSubstrate(mailbox), NETUID1, 10 ether);
         vm.prank(alice);
-        hourVault.wrap(NETUID1, hotkey1);
+        hourVault.wrap(NETUID1, hotkey1, 0);
 
         bytes32 coldkey = _toSubstrate(hourVault.subnetClone(tokenId));
         uint256 lump = MockStaking(STAKING_PRECOMPILE).getStake(hotkey1, coldkey, NETUID1);
@@ -426,7 +426,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertEq(lens.frozenUntil(TOKEN1), 0, "and the token is ordinary again");
         _simulateAlphaDeposit(bob, NETUID1, 1 ether);
         vm.prank(bob);
-        vault.wrap(NETUID1, hotkey1);
+        vault.wrap(NETUID1, hotkey1, 0);
         assertGt(vault.balanceOf(bob, TOKEN1), 0, "deposits resume");
     }
 
@@ -483,7 +483,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
         vm.expectRevert(ZeroAmount.selector);
         vm.prank(bob);
-        vault.wrap(NETUID1, hotkey1);
+        vault.wrap(NETUID1, hotkey1, 0);
 
         vm.prank(bob);
         vault.reclaimAlphaFromMailbox(NETUID1, hotkey4, _toSubstrate(bob));
@@ -491,7 +491,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
         _simulateAlphaDepositHotkey(bob, NETUID1, 1 ether, hotkey2);
         vm.prank(bob);
-        vault.wrap(NETUID1, hotkey2);
+        vault.wrap(NETUID1, hotkey2, 0);
         assertGt(vault.balanceOf(bob, TOKEN1), 0, "the retried deposit lands");
         assertTrue(lens.isBackingIntact(TOKEN1), "with the record accounting for all of it");
     }
@@ -505,7 +505,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
         _simulateAlphaDepositHotkey(bob, NETUID1, 6 ether, hotkey1);
         vm.prank(bob);
-        vault.wrap(NETUID1, hotkey1);
+        vault.wrap(NETUID1, hotkey1, 0);
 
         assertGt(vault.balanceOf(bob, TOKEN1), 0, "the deposit landed off the chosen name");
         assertEq(_getVaultStake(hotkey1, NETUID1), 0, "nothing was aimed at the retired key");
@@ -644,7 +644,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
         _simulateAlphaDepositHotkey(bob, NETUID1, 5 ether, hotkey2);
         vm.prank(bob);
-        vault.wrap(NETUID1, hotkey2);
+        vault.wrap(NETUID1, hotkey2, 0);
         assertGt(vault.balanceOf(bob, TOKEN1), 0, "deposits work again");
     }
 }

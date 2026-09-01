@@ -130,6 +130,13 @@ class Environment:
         its on-chain stake."""
         return substrate.h160_to_substrate_b32(self.clone_address(token_id))
 
+    def preview_wrap(self, token_id: int, assets: int) -> int:
+        """Shares a deposit of `assets` alpha would mint, the quote a caller sizes
+        their `minSharesOut` from."""
+        return int(chain.cast_call(
+            self.lens_address, "previewWrap(uint256,uint256)(uint256)", token_id, assets,
+        ))
+
     def preview_unwrap(self, token_id: int, shares: int) -> Tuple[int, int]:
         """(alpha RAO, native-TAO wei) legs an unwrap of `shares` would pay out."""
         lines = chain.cast_call_lines(
@@ -319,7 +326,7 @@ class Environment:
         self, netuid: int, hotkey_pubkey: str, hotkey_ss58: str,
         amount_rao: int, gas_limit: int, message: str,
         user: Optional[str] = None, private_key: Optional[str] = None,
-        label: Optional[str] = None,
+        label: Optional[str] = None, min_shares_out: int = 0,
     ) -> dict:
         """Transfer alpha from Alice into a user's mailbox under a hotkey, then
         wrap it into the vault. Defaults to the wrapper user; pass `user` and
@@ -331,7 +338,7 @@ class Environment:
             substrate.h160_to_ss58(mailbox), hotkey_ss58, netuid, amount_rao,
         )
         return self.vault_send(
-            gas_limit, message, "wrap(uint256,bytes32)", netuid, hotkey_pubkey,
+            gas_limit, message, "wrap(uint256,bytes32,uint256)", netuid, hotkey_pubkey, min_shares_out,
             private_key=private_key or config.WRAPPER_USER_PRIVATE_KEY, label=label,
         )
 
