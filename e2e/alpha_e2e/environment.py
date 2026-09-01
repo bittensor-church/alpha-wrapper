@@ -210,9 +210,10 @@ class Environment:
 
     def alpha_to_tao_quote(self, netuid: int, alpha_rao: int) -> int:
         """Chain's own alpha->TAO quote (RAO out) for selling `alpha_rao` on `netuid`.
-        Capture it BEFORE the swap that pays out: the simulation re-prices against
-        live reserves and the curve is concave, so a quote taken after the swap
-        understates the payout by its own price impact."""
+        The simulation re-prices against live reserves and the curve is concave, so a
+        quote taken after a swap understates that swap's payout by its own price
+        impact -- which makes it safe to bound a payout from above but never from
+        below. Quote an amount the swap has yet to move to bound one from below."""
         return int(chain.cast_call(
             config.ALPHA_PRECOMPILE, "simSwapAlphaForTao(uint16,uint64)(uint256)",
             netuid, alpha_rao,

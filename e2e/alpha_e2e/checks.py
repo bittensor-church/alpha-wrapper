@@ -1,9 +1,9 @@
 """Shared assertion helpers for balance deltas, gas budgets, and CSV output.
 
 These encode the suite's cross-cutting measurement rules: payouts are judged
-against the chain's own quote for the alpha that moved, gas budgets separate
-designed pre-check reverts from attempted-and-burned precompile dispatches, and
-the observability scripts' CSV output is asserted row-by-row.
+against the chain's own alpha->TAO quotes, gas budgets separate designed
+pre-check reverts from attempted-and-burned precompile dispatches, and the
+observability scripts' CSV output is asserted row-by-row.
 """
 import csv
 import io
@@ -27,9 +27,9 @@ def run_observability_script(
 
 
 def min_tao_out_for(quote_rao: int) -> int:
-    """Half the alpha->TAO quote, in wei: a slippage floor loose enough to absorb
-    the price drift between the quote and the call, while still rejecting a payout
-    that comes back broken."""
+    """Half the alpha->TAO quote, in wei: the same floor assert_payout_near_quote
+    holds the payout to, so a payout the chain accepts is one the assertion accepts
+    too, while still rejecting a broken payout."""
     return quote_rao * 10**9 // 2
 
 
@@ -96,19 +96,30 @@ def assert_payout_matches_emitted(
 
 def assert_payout_near_quote(
     balance_before_wei: int, balance_after_wei: int, receipt: dict,
-    quote_alpha_to_tao: Callable[[int], int], message: str,
+    quote_rao: int, quote_alpha_to_tao: Callable[[int], int], message: str,
 ) -> None:
-    """Require the reconstructed payout within a factor of two of the chain's quote for
-    the alpha the exit reports selling. The amount sold is whatever backs the position
-    when the call runs, and a staking dividend landing beforehand can multiply that
-    several times over, so quoting the reported amount is the only stable reference."""
+    """Bound the reconstructed payout from both sides, each against the quote that
+    stays honest in that direction.
+
+    Below, the pre-call quote for what the position was worth: a staking dividend only
+    ever adds backing, so nothing excuses paying less than the position was already
+    quoted at.
+
+    Above, the chain's quote for the alpha the exit reports selling. An exit sells
+    whatever backs the position when the call runs, and a dividend landing first can
+    multiply that several times over, so the pre-call amount cannot bound it -- but the
+    price the vault got for what left still can.
+    """
     payout = reconstructed_payout(balance_before_wei, balance_after_wei, receipt, message)
     alpha_sold = chain.event_word(receipt, UNWRAPPED_FOR_TAO, 1, message)
-    quote_rao = quote_alpha_to_tao(alpha_sold)
-    quote_wei = quote_rao * 10**9
-    assert quote_wei // 2 <= payout <= 2 * quote_wei, (
+    assert alpha_sold > 0, f"{message} (the exit reports selling no alpha)"
+    assert payout >= quote_rao * 10**9 // 2, (
+        f"{message} (payout {payout} wei against a pre-call quote of {quote_rao} RAO)"
+    )
+    sold_quote_rao = quote_alpha_to_tao(alpha_sold)
+    assert payout <= 2 * sold_quote_rao * 10**9, (
         f"{message} (payout {payout} wei for {alpha_sold} alpha RAO sold, "
-        f"quote {quote_rao} RAO)"
+        f"worth {sold_quote_rao} RAO)"
     )
 
 

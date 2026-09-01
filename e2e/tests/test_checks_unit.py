@@ -84,38 +84,69 @@ def test_assert_tao_gain_near_quote_bounds():
 
 def test_assert_payout_near_quote_reconstructs_gas():
     alpha_sold = 500
-    quote_wei = alpha_sold * 2 * 10**9
+    quote_rao = alpha_sold * 2
+    quote_wei = quote_rao * 10**9
     gas_used = 100_000
     gas_cost_wei = gas_used * config.LOCALNET_GAS_PRICE_WEI
-    receipt = _tao_exit_receipt(gas_used, 0, alpha_sold)
+    receipt = _tao_exit_receipt(gas_used, alpha_sold, 0)
     # A payout smaller than the gas burned still verifies once gas is added back.
-    checks.assert_payout_near_quote(0, quote_wei - gas_cost_wei, receipt, _quote_at(2), "ctx")
-    with pytest.raises(AssertionError, match="payout"):
-        checks.assert_payout_near_quote(
-            0, quote_wei * 3 - gas_cost_wei, receipt, _quote_at(2), "ctx",
-        )
+    checks.assert_payout_near_quote(
+        0, quote_wei - gas_cost_wei, receipt, quote_rao, _quote_at(2), "ctx",
+    )
     with pytest.raises(AssertionError, match="could not parse gasUsed"):
-        checks.assert_payout_near_quote(0, quote_wei, {}, _quote_at(2), "ctx")
+        checks.assert_payout_near_quote(0, quote_wei, {}, quote_rao, _quote_at(2), "ctx")
+
+
+def test_assert_payout_near_quote_rejects_a_shortfall():
+    alpha_sold = 500
+    quote_rao = alpha_sold * 2
+    gas_cost_wei = 100_000 * config.LOCALNET_GAS_PRICE_WEI
+    receipt = _tao_exit_receipt(100_000, alpha_sold, 0)
+    with pytest.raises(AssertionError, match="pre-call quote"):
+        checks.assert_payout_near_quote(
+            0, quote_rao * 10**9 // 3 - gas_cost_wei, receipt, quote_rao, _quote_at(2), "ctx",
+        )
+
+
+def test_assert_payout_near_quote_rejects_overpaying_for_what_was_sold():
+    alpha_sold = 500
+    quote_rao = alpha_sold * 2
+    gas_cost_wei = 100_000 * config.LOCALNET_GAS_PRICE_WEI
+    receipt = _tao_exit_receipt(100_000, alpha_sold, 0)
+    with pytest.raises(AssertionError, match="alpha RAO sold"):
+        checks.assert_payout_near_quote(
+            0, quote_rao * 3 * 10**9 - gas_cost_wei, receipt, quote_rao, _quote_at(2), "ctx",
+        )
 
 
 def test_assert_payout_near_quote_prices_the_alpha_the_exit_sold():
-    # A dividend landing on the position before the call multiplies what the exit
-    # sells, so only the reported amount is a stable reference.
+    # A dividend landing before the call multiplies what the exit sells, so the
+    # ceiling follows the reported amount rather than the pre-call quote.
+    quoted_alpha = 500
     grown_alpha = 5_000
-    payout_wei = grown_alpha * 2 * 10**9
     gas_cost_wei = 100_000 * config.LOCALNET_GAS_PRICE_WEI
-    receipt = _tao_exit_receipt(100_000, 0, grown_alpha)
+    receipt = _tao_exit_receipt(100_000, grown_alpha, 0)
     checks.assert_payout_near_quote(
-        0, payout_wei - gas_cost_wei, receipt, _quote_at(2), "ctx",
+        0, grown_alpha * 2 * 10**9 - gas_cost_wei, receipt, quoted_alpha * 2,
+        _quote_at(2), "ctx",
     )
+
+
+def test_assert_payout_near_quote_rejects_an_exit_that_sold_nothing():
+    with pytest.raises(AssertionError, match="selling no alpha"):
+        checks.assert_payout_near_quote(
+            0, 0, _tao_exit_receipt(100_000, 0, 0), 0, _quote_at(2), "ctx",
+        )
 
 
 def test_assert_payout_near_quote_rejects_a_receipt_without_the_event():
     with pytest.raises(AssertionError, match="UnwrappedForTao"):
-        checks.assert_payout_near_quote(0, 0, {"gasUsed": 1, "logs": []}, _quote_at(2), "ctx")
+        checks.assert_payout_near_quote(
+            0, 0, {"gasUsed": 1, "logs": []}, 0, _quote_at(2), "ctx",
+        )
 
 
-def _tao_exit_receipt(gas_used: int, emitted_wei: int, alpha_sold: int = 0) -> dict:
+def _tao_exit_receipt(gas_used: int, alpha_sold: int, emitted_wei: int) -> dict:
     topic = chain.cast_sig_event(checks.UNWRAPPED_FOR_TAO)
     data = "0x" + "".join(f"{word:064x}" for word in (0, alpha_sold, emitted_wei))
     return {"gasUsed": gas_used, "logs": [{"topics": [topic], "data": data}]}
@@ -129,21 +160,21 @@ def _quote_at(price_rao: int):
 def test_assert_payout_matches_emitted_accepts_the_reported_amount():
     emitted = 5 * checks.RAO_WEI
     gas_cost = 100_000 * config.LOCALNET_GAS_PRICE_WEI
-    receipt = _tao_exit_receipt(100_000, emitted)
+    receipt = _tao_exit_receipt(100_000, 5, emitted)
     checks.assert_payout_matches_emitted(0, emitted - gas_cost, receipt, "ctx")
 
 
 def test_assert_payout_matches_emitted_tolerates_the_sub_rao_remainder():
     emitted = 5 * checks.RAO_WEI + 7
     gas_cost = 100_000 * config.LOCALNET_GAS_PRICE_WEI
-    receipt = _tao_exit_receipt(100_000, emitted)
+    receipt = _tao_exit_receipt(100_000, 5, emitted)
     checks.assert_payout_matches_emitted(0, emitted - 7 - gas_cost, receipt, "ctx")
 
 
 def test_assert_payout_matches_emitted_rejects_a_shortfall():
     emitted = 5 * checks.RAO_WEI
     gas_cost = 100_000 * config.LOCALNET_GAS_PRICE_WEI
-    receipt = _tao_exit_receipt(100_000, emitted)
+    receipt = _tao_exit_receipt(100_000, 5, emitted)
     with pytest.raises(AssertionError, match="emitted"):
         checks.assert_payout_matches_emitted(0, emitted // 2 - gas_cost, receipt, "ctx")
 

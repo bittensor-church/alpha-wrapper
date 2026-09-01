@@ -7,6 +7,8 @@ leftovers, balances on rotated-out validators - and every call along the way
 keeps working at normal gas cost. A closing ledger then checks that everything
 deposited came back out, as delivered alpha or as TAO from sales.
 """
+from functools import partial
+
 import pytest
 
 from alpha_e2e import bootstrap, config
@@ -90,8 +92,8 @@ class ChurnLedger:
         assert_gas_within(receipt, config.UNWRAP_GAS_BOUND, f"{label}: TAO exit")
         balance_after = self.env.user_tao_wei()
         assert_payout_near_quote(
-            balance_before, balance_after, receipt,
-            lambda alpha: self.env.alpha_to_tao_quote(self.netuid, alpha),
+            balance_before, balance_after, receipt, quote,
+            partial(self.env.alpha_to_tao_quote, self.netuid),
             f"{label}: TAO exit payout off quote",
         )
         assert_payout_matches_emitted(
