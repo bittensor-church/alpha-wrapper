@@ -178,7 +178,7 @@ contract BackingInvariantTest is AlphaVaultTestBase {
     function wrapFor(address user, uint256 amount, bytes32 hotkey) external {
         _simulateAlphaDepositHotkey(user, NETUID1, amount, hotkey);
         vm.prank(user);
-        try vault.wrap(NETUID1, hotkey) { } catch { }
+        try vault.wrap(NETUID1, hotkey, 0) { } catch { }
     }
 
     function simulateSwap(bytes32 from, bytes32 to) external {

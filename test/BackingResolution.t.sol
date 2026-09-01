@@ -36,7 +36,7 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         _simulateAlphaDeposit(bob, NETUID1, 1 ether);
         vm.prank(bob);
         vm.expectPartialRevert(BackingShortfall.selector);
-        vault.wrap(NETUID1, hotkey1);
+        vault.wrap(NETUID1, hotkey1, 0);
         vm.prank(alice);
         vm.expectPartialRevert(BackingShortfall.selector);
         vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));

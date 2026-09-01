@@ -51,7 +51,7 @@ def test_min_stake_floor(env):
     gate_refusal_receipt = env.assert_vault_reverts_with(
         "DepositTooSmall()", 1_500_000,
         "Floor gate: sub-floor wrap did NOT revert as DepositTooSmall",
-        "wrap(uint256,bytes32)", gate_netuid, gate_hotkey_pubkey,
+        "wrap(uint256,bytes32,uint256)", gate_netuid, gate_hotkey_pubkey, 0,
     )
     assert_gas_within(
         gate_refusal_receipt, config.REVERT_GAS_BOUND, "Floor gate: sub-floor wrap refusal",
@@ -64,7 +64,7 @@ def test_min_stake_floor(env):
     )
     above_floor_wrap_receipt = env.vault_send(
         1_500_000, "Floor gate: above-floor wrap failed",
-        "wrap(uint256,bytes32)", gate_netuid, gate_hotkey_pubkey,
+        "wrap(uint256,bytes32,uint256)", gate_netuid, gate_hotkey_pubkey, 0,
     )
     print("  wrap accepted the deposit once it cleared the minimum")
 

@@ -23,7 +23,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, 99, 3e6, hotkey4);
         vm.prank(alice);
         vm.expectRevert(DepositTooSmall.selector);
-        vault.wrap(99, hotkey4);
+        vault.wrap(99, hotkey4, 0);
     }
 
     function test_Wrap_SucceedsAtTaoFloorBoundaryUnderLowPrice() public {
@@ -86,7 +86,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, NETUID1, 6e6, hotkey1);
         vm.recordLogs();
         vm.prank(alice);
-        vault.wrap{ gas: 1_500_000 }(NETUID1, hotkey1);
+        vault.wrap{ gas: 1_500_000 }(NETUID1, hotkey1, 0);
 
         assertEq(_countRebalancedLogs(vm.getRecordedLogs()), 0, "doomed move never attempted");
         assertGt(vault.balanceOf(alice, TOKEN1), 0, "wrap completed within the fixed gas budget");
@@ -136,7 +136,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, 99, 3e6, hotkey4);
         vm.prank(alice);
         vm.expectRevert(DepositTooSmall.selector);
-        vault.wrap(99, hotkey4);
+        vault.wrap(99, hotkey4, 0);
     }
 
     function test_RevertWhen_UnwrapBelowRaisedChainFloor() public {
@@ -160,7 +160,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(DepositTooSmall.selector);
-        vault.wrap(99, hotkey4);
+        vault.wrap(99, hotkey4, 0);
 
         _setChainMinStake(CHAIN_MIN_TRANSFER);
         _wrapHotkey(alice, 99, hotkey4);
@@ -218,7 +218,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(DepositTooSmall.selector);
-        vault.wrap(99, hotkey4);
+        vault.wrap(99, hotkey4, 0);
 
         _setChainMinStake(5e5);
         _wrapHotkey(alice, 99, hotkey4);
@@ -250,7 +250,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, 99, deposit, hotkey4);
 
         vm.prank(alice);
-        (bool ok, bytes memory ret) = address(vault).call(abi.encodeCall(vault.wrap, (99, hotkey4)));
+        (bool ok, bytes memory ret) = address(vault).call(abi.encodeCall(vault.wrap, (99, hotkey4, 0)));
 
         // The deposit must clear both bars to land: the vault's gate, then the chain's own minimum
         // for moving it out of the mailbox. The gate is checked first, so it names the refusal.
@@ -487,6 +487,6 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(bytes("MockStaking: transferStake reverted"));
-        vault.wrap(99, hotkey4);
+        vault.wrap(99, hotkey4, 0);
     }
 }

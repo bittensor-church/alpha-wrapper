@@ -160,7 +160,7 @@ def test_hostile_dust(env):
     plant_refusal_receipt = env.assert_vault_reverts_with(
         "DepositTooSmall()", 1_500_000,
         "Hostile dust: sub-floor mailbox plant did NOT revert as DepositTooSmall",
-        "wrap(uint256,bytes32)", netuid, hotkey_b_pubkey,
+        "wrap(uint256,bytes32,uint256)", netuid, hotkey_b_pubkey, 0,
     )
     assert_gas_within(
         plant_refusal_receipt, config.REVERT_GAS_BOUND,

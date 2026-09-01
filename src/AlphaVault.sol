@@ -213,7 +213,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///         produces a movable residual.
     ///         Reverts `SubnetInDissolutionBlackoutPeriod` while a dissolving subnet still has a
     ///         registration block, then `SubnetNotRegistered` once cleanup has removed it.
-    function wrap(uint256 netuid, bytes32 chosenHotkey) external nonReentrant {
+    ///         `minSharesOut` bounds the mint against rate movement between quote and execution,
+    ///         and is sized from the lens `previewWrap`, which prices the same backing.
+    /// @param  netuid       Subnet the deposit sits on.
+    /// @param  chosenHotkey Attested validator hotkey the mailbox balance is staked under.
+    /// @param  minSharesOut Slippage floor; revert if fewer shares would mint.
+    function wrap(uint256 netuid, bytes32 chosenHotkey, uint256 minSharesOut) external nonReentrant {
         if (chosenHotkey == bytes32(0)) revert ZeroHotkey();
 
         uint256 tokenId = currentTokenId(netuid);
@@ -260,6 +265,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 preStake = totalAlpha > totalDeposit ? totalAlpha - totalDeposit : 0;
         uint256 shares = VaultMath.sharesFor(preStake, totalSupply(tokenId), totalDeposit);
         if (shares == 0) revert ZeroAmount();
+        if (shares < minSharesOut) revert SlippageExceeded(shares);
         // Recapitalizing a swept position multiplies supply toward the bound; retiring the swept
         // shares through the zero-backing unwrap resets supply and lifts it.
         if (totalSupply(tokenId) + shares > SUPPLY_CAP) revert SupplyCapExceeded();

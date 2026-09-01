@@ -39,16 +39,20 @@ address as a call argument is a way to be paid less than you asked for.
 4. Transfer your staked alpha to that coldkey with a substrate
    transfer_stake call, same subnet. The stake stays under its hotkey,
    which is why that hotkey must be one of the validators from step 1.
-5. Call `wrap(netuid, chosenHotkey)` from the same EVM account you used
-   in step 2, naming the hotkey your deposit sits under. The vault
-   collects the mailbox balance under that hotkey and mints shares to
-   you.
+5. Call `wrap(netuid, chosenHotkey, minSharesOut)` from the same EVM
+   account you used in step 2, naming the hotkey your deposit sits under.
+   The vault collects the mailbox balance under that hotkey and mints
+   shares to you.
 
 One `wrap` collects one hotkey's balance, so stake parked under several
 hotkeys takes one call each. A deposit whose TAO value is below the
 chain's minimum stake size is refused (`DepositTooSmall`); top the mailbox
 up and wrap once. `previewWrap(tokenId, assets)` quotes the share amount
-beforehand.
+beforehand, and `minSharesOut` is the floor you will accept if the rate
+moves between that quote and your call: under it the wrap reverts
+`SlippageExceeded` and your deposit stays in the mailbox, untouched. The
+quote is exact bar the RAO or so the chain keeps while moving your deposit,
+so a bound a hair below it is enough; `0` waives the check.
 
 ## What you hold
 

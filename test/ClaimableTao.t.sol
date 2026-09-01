@@ -350,7 +350,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         _simulateAlphaDeposit(bob, NETUID1, DEPOSIT);
         vm.expectRevert(SupplyCapExceeded.selector);
         vm.prank(bob);
-        vault.wrap(NETUID1, chosen);
+        vault.wrap(NETUID1, chosen, 0);
     }
 
     // -------------------- Zero-supply arrivals ------------------------------------
