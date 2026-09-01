@@ -96,6 +96,14 @@ over several sales.
 - A partial `unwrapForTao` can fill short and refund the unsold part as
   shares instead of reverting; callers bound the damage with
   `minTaoOut`.
+- Every `unwrapForTao` exit sells into the subnet's pool, and that sale
+  moves the pool's price against the holders who stay. The withdrawer
+  is protected by `minTaoOut`; the stayers are not compensated. Users
+  paying attention exit through `unwrap`, which never touches the pool -
+  `unwrapForTao` is the opt-in escape hatch for when the pool touches
+  them (disabled alpha transfers, sub-floor positions). Accepted design
+  asymmetry: the alternative is a rail that prices an exit above what
+  the pool can pay.
 - A quorum-signed attestation stays submittable until one lands for its
   subnet, so a list the signers have moved away from can still be
   installed by anyone holding its signatures. Landing a replacement is

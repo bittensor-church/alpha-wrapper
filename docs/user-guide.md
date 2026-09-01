@@ -68,28 +68,38 @@ for live subnets.
 ## Exiting
 
 There are two exits from a live subnet, and a third path once a subnet is
-gone.
+gone. **`unwrap` is the default - use `unwrapForTao` only when `unwrap`
+cannot serve you.**
 
 `unwrap(tokenId, shares, yourColdkey)` returns staked alpha. The vault
 burns the shares and transfers your pro-rata alpha to `yourColdkey` in a
 single transfer. The alpha arrives still staked on the subnet, under one
 of the current validators; unstake it yourself if you want liquid TAO.
-Delivery is all-or-nothing: you receive the full quote, to within a few
-RAO of chain-side rounding, or the call reverts. A request below the
-chain's minimum stake size reverts (`WithdrawTooSmall`); see the TAO exit
-below for the way out. Double-check the coldkey argument - the chain
-delivers to whatever key you name.
+Because nothing here trades against the subnet's pool, an exit through
+this rail costs exactly your pro-rata share and leaves every other
+holder's backing untouched. Delivery is all-or-nothing: you receive the
+full quote, to within a few RAO of chain-side rounding, or the call
+reverts. A request below the chain's minimum stake size reverts
+(`WithdrawTooSmall`); see the TAO exit below for the way out. Double-check
+the coldkey argument - the chain delivers to whatever key you name.
 
 `unwrapForTao(tokenId, shares, minTaoOut)` sells your share of the backing
-into the subnet's pool and pays you native TAO on your EVM address. This
-is a market order: the payout depends on pool depth and fees at
-execution, and `minTaoOut` is your only protection. Mind the units: native
-TAO amounts, `minTaoOut` included, are 18-decimal EVM wei, while alpha
-amounts use the chain's 9 decimals - a floor quoted in alpha units is a
-billion times too low. Whatever the chain leaves unsold stays staked and
-comes back to you as shares, so you only burn what actually sold. The
-exception is a burn of the token's entire supply, which drops a leftover
-below the chain's minimum.
+into the subnet's pool and pays you native TAO on your EVM address. Treat
+this as an opt-in, risk-on exit, not a convenience rail: it is a market
+order executed against the pool, and your sells move that pool's price
+permanently - the proceeds (up to your `minTaoOut`) are yours, but the
+depressed price stays with everyone still holding the token. An exit
+through `unwrap` has no such side effect, so this rail earns its place
+only when `unwrap` is unavailable - the subnet owner has disabled alpha
+transfers (see [edge-cases.md](edge-cases.md)), or your position is below
+the chain's floor for `unwrap`. The payout itself depends on pool depth
+and fees at execution, and `minTaoOut` is your only protection. Mind the
+units: native TAO amounts, `minTaoOut` included, are 18-decimal EVM wei,
+while alpha amounts use the chain's 9 decimals - a floor quoted in alpha
+units is a billion times too low. Whatever the chain leaves unsold stays
+staked and comes back to you as shares, so you only burn what actually
+sold. The exception is a burn of the token's entire supply, which drops a
+leftover below the chain's minimum.
 
 This is also the exit for positions too small for `unwrap`: a burn of
 the token's entire supply is exempt from the chain's minimum, so the
