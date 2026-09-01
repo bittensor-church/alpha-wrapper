@@ -93,7 +93,8 @@ def test_rotated_out_dust_cannot_lock_the_vault(env):
     )
     balance_after = env.user_tao_wei()
     assert_payout_near_quote(
-        balance_before, balance_after, tao_exit_receipt, tao_exit_quote,
+        balance_before, balance_after, tao_exit_receipt,
+        lambda alpha: env.alpha_to_tao_quote(netuid, alpha),
         "Rotated-out dust: TAO exit payout off quote",
     )
     assert_payout_matches_emitted(
@@ -176,7 +177,8 @@ def test_price_crash_cannot_lock_exits(env):
     )
     balance_after = env.user_tao_wei()
     assert_payout_near_quote(
-        balance_before, balance_after, tao_exit_receipt, tao_exit_quote,
+        balance_before, balance_after, tao_exit_receipt,
+        lambda alpha: env.alpha_to_tao_quote(netuid, alpha),
         "Price crash: TAO exit payout off quote",
     )
     assert_payout_matches_emitted(
@@ -350,7 +352,8 @@ def test_sub_floor_co_holder_cannot_be_locked_in_or_leak_the_other_holder(env):
     )
     balance_after = env.user_tao_wei()
     assert_payout_near_quote(
-        balance_before, balance_after, large_exit_receipt, large_exit_quote,
+        balance_before, balance_after, large_exit_receipt,
+        lambda alpha: env.alpha_to_tao_quote(netuid, alpha),
         "Co-holder: large holder's payout off quote",
     )
     assert_payout_matches_emitted(

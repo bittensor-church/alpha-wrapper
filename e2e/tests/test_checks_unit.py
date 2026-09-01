@@ -83,23 +83,47 @@ def test_assert_tao_gain_near_quote_bounds():
 
 
 def test_assert_payout_near_quote_reconstructs_gas():
-    quote_rao = 1_000
-    quote_wei = quote_rao * 10**9
+    alpha_sold = 500
+    quote_wei = alpha_sold * 2 * 10**9
     gas_used = 100_000
     gas_cost_wei = gas_used * config.LOCALNET_GAS_PRICE_WEI
-    receipt = {"gasUsed": gas_used}
+    receipt = _tao_exit_receipt(gas_used, 0, alpha_sold)
     # A payout smaller than the gas burned still verifies once gas is added back.
-    checks.assert_payout_near_quote(0, quote_wei - gas_cost_wei, receipt, quote_rao, "ctx")
+    checks.assert_payout_near_quote(0, quote_wei - gas_cost_wei, receipt, _quote_at(2), "ctx")
     with pytest.raises(AssertionError, match="payout"):
-        checks.assert_payout_near_quote(0, quote_wei * 3 - gas_cost_wei, receipt, quote_rao, "ctx")
+        checks.assert_payout_near_quote(
+            0, quote_wei * 3 - gas_cost_wei, receipt, _quote_at(2), "ctx",
+        )
     with pytest.raises(AssertionError, match="could not parse gasUsed"):
-        checks.assert_payout_near_quote(0, quote_wei, {}, quote_rao, "ctx")
+        checks.assert_payout_near_quote(0, quote_wei, {}, _quote_at(2), "ctx")
 
 
-def _tao_exit_receipt(gas_used: int, emitted_wei: int) -> dict:
+def test_assert_payout_near_quote_prices_the_alpha_the_exit_sold():
+    # A dividend landing on the position before the call multiplies what the exit
+    # sells, so only the reported amount is a stable reference.
+    grown_alpha = 5_000
+    payout_wei = grown_alpha * 2 * 10**9
+    gas_cost_wei = 100_000 * config.LOCALNET_GAS_PRICE_WEI
+    receipt = _tao_exit_receipt(100_000, 0, grown_alpha)
+    checks.assert_payout_near_quote(
+        0, payout_wei - gas_cost_wei, receipt, _quote_at(2), "ctx",
+    )
+
+
+def test_assert_payout_near_quote_rejects_a_receipt_without_the_event():
+    with pytest.raises(AssertionError, match="UnwrappedForTao"):
+        checks.assert_payout_near_quote(0, 0, {"gasUsed": 1, "logs": []}, _quote_at(2), "ctx")
+
+
+def _tao_exit_receipt(gas_used: int, emitted_wei: int, alpha_sold: int = 0) -> dict:
     topic = chain.cast_sig_event(checks.UNWRAPPED_FOR_TAO)
-    data = "0x" + "".join(f"{word:064x}" for word in (0, 0, emitted_wei))
+    data = "0x" + "".join(f"{word:064x}" for word in (0, alpha_sold, emitted_wei))
     return {"gasUsed": gas_used, "logs": [{"topics": [topic], "data": data}]}
+
+
+def _quote_at(price_rao: int):
+    """A stand-in for the chain's alpha->TAO quote at a flat price."""
+    return lambda alpha_rao: alpha_rao * price_rao
 
 
 def test_assert_payout_matches_emitted_accepts_the_reported_amount():

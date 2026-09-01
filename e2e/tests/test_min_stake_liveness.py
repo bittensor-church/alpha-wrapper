@@ -90,7 +90,8 @@ class ChurnLedger:
         assert_gas_within(receipt, config.UNWRAP_GAS_BOUND, f"{label}: TAO exit")
         balance_after = self.env.user_tao_wei()
         assert_payout_near_quote(
-            balance_before, balance_after, receipt, quote,
+            balance_before, balance_after, receipt,
+            lambda alpha: self.env.alpha_to_tao_quote(self.netuid, alpha),
             f"{label}: TAO exit payout off quote",
         )
         assert_payout_matches_emitted(

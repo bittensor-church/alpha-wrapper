@@ -1,13 +1,13 @@
 """Shared assertion helpers for balance deltas, gas budgets, and CSV output.
 
 These encode the suite's cross-cutting measurement rules: payouts are judged
-against pre-captured chain quotes, gas budgets separate designed pre-check
-reverts from attempted-and-burned precompile dispatches, and the observability
-scripts' CSV output is asserted row-by-row.
+against the chain's own quote for the alpha that moved, gas budgets separate
+designed pre-check reverts from attempted-and-burned precompile dispatches, and
+the observability scripts' CSV output is asserted row-by-row.
 """
 import csv
 import io
-from typing import Dict, Iterable, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional
 
 from . import chain, config
 
@@ -27,9 +27,9 @@ def run_observability_script(
 
 
 def min_tao_out_for(quote_rao: int) -> int:
-    """Half the alpha->TAO quote, in wei: a slippage threshold loose enough to
-    stay inside assert_payout_near_quote's factor-of-two acceptance band while
-    still rejecting a broken payout."""
+    """Half the alpha->TAO quote, in wei: a slippage floor loose enough to absorb
+    the price drift between the quote and the call, while still rejecting a payout
+    that comes back broken."""
     return quote_rao * 10**9 // 2
 
 
@@ -96,14 +96,19 @@ def assert_payout_matches_emitted(
 
 def assert_payout_near_quote(
     balance_before_wei: int, balance_after_wei: int, receipt: dict,
-    quote_rao: int, message: str,
+    quote_alpha_to_tao: Callable[[int], int], message: str,
 ) -> None:
-    """Require the reconstructed payout within a factor of two of the
-    pre-captured chain quote."""
+    """Require the reconstructed payout within a factor of two of the chain's quote for
+    the alpha the exit reports selling. The amount sold is whatever backs the position
+    when the call runs, and a staking dividend landing beforehand can multiply that
+    several times over, so quoting the reported amount is the only stable reference."""
     payout = reconstructed_payout(balance_before_wei, balance_after_wei, receipt, message)
+    alpha_sold = chain.event_word(receipt, UNWRAPPED_FOR_TAO, 1, message)
+    quote_rao = quote_alpha_to_tao(alpha_sold)
     quote_wei = quote_rao * 10**9
     assert quote_wei // 2 <= payout <= 2 * quote_wei, (
-        f"{message} (payout {payout} wei vs quote {quote_rao} RAO)"
+        f"{message} (payout {payout} wei for {alpha_sold} alpha RAO sold, "
+        f"quote {quote_rao} RAO)"
     )
 
 
