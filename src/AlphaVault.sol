@@ -313,7 +313,15 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     }
 
     /// @notice Burn vault shares pro-rata and pay the caller native TAO from selling the backing alpha.
-    /// @dev    Full-balance sells go straight to the chain - full drains are exempt from its
+    /// @dev    Opt-in risk exit - prefer `unwrap` wherever the chain still moves stake.
+    ///         This rail liquidates the backing through the subnet's constant-product AMM, and the
+    ///         two sell rounds move that pool's price permanently. The proceeds go to the caller
+    ///         (`minTaoOut` included), but the depressed price stays with the holders who remain:
+    ///         an on-chain sell here taxes the stayers, never the withdrawer. `unwrap` pays the same
+    ///         shares out as staked alpha with no pool interaction at all, so use this rail only
+    ///         when `unwrap` is unavailable (subnet owner disabled alpha transfers) or the floor
+    ///         makes `unwrap` refuse.
+    ///         Full-balance sells go straight to the chain - full drains are exempt from its
     ///         minimum - and their failures bubble.
     ///         A full burn claims the exact backing, so every slot drains fully and nothing is
     ///         withheld - the only exit for a sub-floor position. On a partial burn the remainder

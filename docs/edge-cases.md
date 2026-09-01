@@ -39,7 +39,9 @@ alpha exit and `reclaimAlphaFromMailbox` all transfer stake between
 coldkeys, so all three revert on such a subnet, with shares and mailbox
 balances intact. The TAO paths (`unwrapForTao`,
 `reclaimMailboxAlphaAsTao`) unstake rather than transfer and keep
-working.
+working. This is the situation `unwrapForTao` exists for: it is the
+emergency exit, priced opt-in because its sells move the subnet's pool
+against the holders who stay (see the user guide's exiting section).
 
 ## The chain's minimum stake size
 
