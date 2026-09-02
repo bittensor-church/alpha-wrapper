@@ -9,8 +9,13 @@
 | **Mode**                         | default (all in-scope `src/`)                                                                              |
 | **Files reviewed**               | `AlphaVault.sol` · `AlphaVaultLens.sol` · `CloneBase.sol`<br>`DepositMailbox.sol` · `SubnetClone.sol` · `ValidatorRegistry.sol`<br>`VaultErrors.sol` · `libraries/VaultMath.sol` · `libraries/VaultReads.sol` |
 | **Confidence threshold (1-100)** | 80                                                                                                         |
+| **Severity breakdown**           | Critical 0 · High 3 · Medium 4 · Low 4                                                                      |
 
 Reviewed on `main` at `66a3f6e`. Twelve specialist agents ran sequentially: math-precision, access-control, economic-security, execution-trace, invariant, periphery, first-principles, asymmetry, boundary, and the numerical, trust and flow gap-hunters. Tests, docs, `src/interfaces/` and the local Subtensor source were read as context only; no worktree was opened and no file in the repository was modified.
+
+Result: **no Critical, 3 High, 4 Medium, 4 Low**, plus 21 leads.
+
+Severity and confidence answer different questions. Confidence is how certain the finding is real; severity is how much it costs if it is. Finding 1 is the most certain and only Medium; finding 5 is the most costly and one point less certain.
 
 Raw agent output: 15 findings and 45 leads across 29 unique contract/function pairs. All 29 are adjudicated below.
 
@@ -20,7 +25,7 @@ Raw agent output: 15 findings and 45 leads across 29 unique contract/function pa
 
 [90] **1. Full-supply `unwrapForTao` reverts once the position has appreciated**
 
-`AlphaVault.unwrapForTao` · Confidence: 90
+`AlphaVault.unwrapForTao` · Severity: Medium · Confidence: 90
 
 **Description**
 On a full burn the `assets = total` override zeroes both operands of the refund's share price, so the refund mints at the fixed `1e9` virtual ratio rather than the vault's live rate; once backing has grown past that ratio, a short fill makes `refundShares` exceed `shares` and the event's `shares - refundShares` underflows, reverting the exit the docs promise is always available.
@@ -42,7 +47,7 @@ This matters most where it is least recoverable: the full-supply burn is the flo
 
 [85] **2. An emptied slot re-targets a hotkey the chain has deleted**
 
-`AlphaVault._assignActives` · Confidence: 85
+`AlphaVault._assignActives` · Severity: Medium · Confidence: 85
 
 **Description**
 When a slot's balance reads zero, `_assignActives` discards the successor key the record resolved to and falls back to the attested name (`actives[i] = name`), but Subtensor's all-subnet `swap_hotkey` deletes `Owner(old_hotkey)` while still recording the successor edge — so the vault aims every subsequent stake move at a hotkey that no longer exists, and `validate_stake_transition` rejects it with `HotKeyAccountNotExists`. Precompile dispatch failures exit with `ExitError::Other`, consuming all forwarded gas, so `wrap`, the alpha `unwrap` and `rebalance` all revert expensively until the attesters publish a corrected set. Only the lossy AMM rail survives.
@@ -70,7 +75,7 @@ A second mechanism lives in the same function: a stale `active` pointer on an em
 
 [85] **3. A dust stake under a swapped-away key freezes the whole token**
 
-`VaultReads._followSwap` · Confidence: 85
+`VaultReads._followSwap` · Severity: High · Confidence: 85
 
 **Description**
 `_followSwap` abandons the swap-follow on *any* non-zero balance at the old key (`if (balance != 0) return (false, ...)`) rather than on a balance that fails to explain the slot. Substrate lets any coldkey push stake onto an arbitrary destination coldkey — that is the very primitive `CloneBase.flush` uses, and `validate_stake_transition` checks only that both hotkeys exist, with no minimum on same-subnet transfers. So anyone can place one RAO under the old name of a per-subnet-swapped validator, whose `Owner` entry that path deliberately keeps, and convert a silent self-healing swap into `BackingShortfall` on every rail: `wrap`, `unwrap`, `unwrapForTao`, `rebalance`, and every lens quote including `totalStake`, `sharePrice`, `previewWrap` and `previewUnwrap`.
@@ -102,7 +107,7 @@ The `recoverStray` NatSpec claiming "only the subnet clone can stake under its o
 
 [85] **4. A written-off position burns shares for nothing on the alpha rail**
 
-`AlphaVault._unwrapFromLiveSubnet` · Confidence: 85
+`AlphaVault._unwrapFromLiveSubnet` · Severity: High · Confidence: 85
 
 **Description**
 After a complete write-off every slot's `tracked` is set to its located balance of zero, `coversTracked(0, 0)` passes, and the token reopens intact with its supply untouched. A holder calling `unwrap` then reaches the `totalAlpha == 0` branch, which settles, burns the caller's shares and emits a zero payout without reverting — while the alpha still exists under a key `recoverStray` can reclaim the next block, for the benefit of whoever still holds shares.
@@ -131,7 +136,7 @@ The branch's premise, that a fully swept position cannot regain alpha, does not 
 
 [85] **5. A write-off and its later recovery can be separated by a mint**
 
-`AlphaVault.syncBacking` / `AlphaVault.recoverStray` · Confidence: 85
+`AlphaVault.syncBacking` / `AlphaVault.recoverStray` · Severity: High · Confidence: 85
 
 **Description**
 `syncBacking`, `wrap` and `recoverStray` are three unlinked permissionless calls, so an attacker can book a write-off, mint against the marked-down backing, and then restore the written-off alpha onto their own new shares — all as sequential top-level calls in one transaction, which the reentrancy guard does not constrain. `_chooseRecoverySlot` sets `chosen = 0` when no slot is short, so alpha reappearing after a write-off is booked as fresh backing to whoever holds shares at that moment, not to the cohort that absorbed the loss.
@@ -154,7 +159,7 @@ Record the written-off amount and refuse `wrap` on that tokenId for one further 
 
 [82] **6. The dissolved-subnet payout ignores the chain's native quantum**
 
-`AlphaVault._unwrapFromDissolvedSubnet` · Confidence: 82
+`AlphaVault._unwrapFromDissolvedSubnet` · Severity: Low · Confidence: 82
 
 **Description**
 `userTao` is paid straight through with no rounding, but native TAO moves only in whole `1e9`-wei steps: Subtensor's balance converter truncates by integer division, so the transfer succeeds while delivering `floor(userTao / 1e9) * 1e9`. Because `taoLiability` accrues with ceiling rounding, `backing` is generically not a multiple of the quantum, so every dissolved exit forfeits its sub-RAO tail to the clone, and a holder whose whole pro-rata slice is below one RAO has their shares burned for a transfer of exactly zero. The `if (userTao > 0)` check does not catch that, since the value is non-zero in EVM units.
@@ -178,7 +183,7 @@ Five agents flagged this. It is the only native payout path in the contract with
 
 [80] **7. The unstake minimum is applied to moves the chain never floors**
 
-`AlphaVault._isBelowFloorAtReadPrice` / `AlphaVault._isBelowFloorAtAnyPrice` · Confidence: 80
+`AlphaVault._isBelowFloorAtReadPrice` / `AlphaVault._isBelowFloorAtAnyPrice` · Severity: Medium · Confidence: 80
 
 **Description**
 `_minStakeTao()` returns `getDefaultMinStake()`, and both floor helpers apply it to same-subnet `moveStake` and `transferStake` as well as to unstaking. On chain the minimum-amount check sits entirely inside `if origin_netuid != destination_netuid`, and the vault only ever issues same-subnet operations, which route to a pure ledger move with no minimum and no swap leg. Even reading the constants alone the guard is 20x stricter than the transfer minimum.
@@ -206,7 +211,7 @@ Keep the floor on `removeStake` sizing in `unwrapForTao` and `_sellableChunk`, a
 
 [80] **8. Attested hotkeys are committed without checking they exist**
 
-`ValidatorRegistry.updateValidators` · Confidence: 80
+`ValidatorRegistry.updateValidators` · Severity: Medium · Confidence: 80
 
 **Description**
 `_validatePayload` checks netuid range, count, length agreement, zero hotkeys, zero weights, duplicates and the 10000 sum — but never that a hotkey names an account the chain knows. The vault has no fallback set and no non-fatal path around a rejected move, so the first `wrap`, `unwrap` or `rebalance` after such an attestation lands drives a `moveStake` at that key and reverts with all forwarded gas consumed, shutting the alpha rail for the subnet until a corrected attestation arrives.
@@ -231,7 +236,7 @@ No compromise is required. A single typo, or a hotkey that has since been deregi
 
 [75] **9. Move destinations are never validated before the dispatch**
 
-`AlphaVault._rebalanceStep` · Confidence: 75
+`AlphaVault._rebalanceStep` · Severity: Low · Confidence: 75
 
 **Description**
 The rebalance step, the final hop of `_consolidateRotatedStake`, and the deposit redirect in `wrap` all use a registry-supplied `bytes32` directly as a `moveStake` destination, checking value preconditions (floor, price) but never identity. Both an all-subnet hotkey swap and a coldkey swap delete the destination's owner record, and each is a unilateral validator action. This is the same consequence as findings 2 and 8, at a third layer: it also covers the case those two do not, where the attested key never had an owner at all.
@@ -240,7 +245,7 @@ The rebalance step, the final hop of `_consolidateRotatedStake`, and the deposit
 
 [75] **10. The TAO exit hands control away while its own supply is understated**
 
-`AlphaVault.unwrapForTao` · Confidence: 75
+`AlphaVault.unwrapForTao` · Severity: Low · Confidence: 75
 
 **Description**
 The payout deliberately precedes the refund mint so proceeds are not folded into the claim index, but `Address.sendValue` forwards all remaining gas, so the caller executes arbitrary code while `totalSupply` is missing `refundShares` and `totalStake` still counts the unsold alpha. `nonReentrant` blocks re-entering the vault, not reading it: `sharePrice` and `previewUnwrap` both quote an inflated figure for the duration of the callback, by a factor of `1 + unsold/(total - assets)`, which rises without bound as the burn approaches the full supply. The lens NatSpec warns integrators against quoting from inside a callback, but the vault creates the window rather than closing it.
@@ -251,7 +256,7 @@ Confidence is held below the threshold because no consumer of these quotes exist
 
 [75] **11. `sharePrice` floors to zero after a recapitalization**
 
-`AlphaVaultLens.sharePrice` · Confidence: 75
+`AlphaVaultLens.sharePrice` · Severity: Low · Confidence: 75
 
 **Description**
 The quote is scaled at `1e18`, which leaves only nine digits of headroom over the vault's normal ratio of about `1e9` shares per RAO. Recapitalizing a written-off position multiplies supply by the deposit — the path the `SUPPLY_CAP` comment names explicitly — pushing the ratio past `1e18`, after which `sharePrice` returns zero while `totalStake` and `previewUnwrap` on the same lens still report the real value. An integrator pricing a holding the conventional way reads zero against real backing. The dead zone begins at `1e18 * (stake + 1) < supply + 1e9`, which any position that once held a single alpha satisfies after recapitalization, and later wraps preserve the ratio.
@@ -262,19 +267,19 @@ This is a new consequence of the `sharePrice` change in `66a3f6e`, not a recurre
 
 Findings List
 
-| # | Confidence | Title |
-|---|---|---|
-| 1 | [90] | Full-supply `unwrapForTao` reverts once the position has appreciated |
-| 2 | [85] | An emptied slot re-targets a hotkey the chain has deleted |
-| 3 | [85] | A dust stake under a swapped-away key freezes the whole token |
-| 4 | [85] | A written-off position burns shares for nothing on the alpha rail |
-| 5 | [85] | A write-off and its later recovery can be separated by a mint |
-| 6 | [82] | The dissolved-subnet payout ignores the chain's native quantum |
-| 7 | [80] | The unstake minimum is applied to moves the chain never floors |
-| 8 | [80] | Attested hotkeys are committed without checking they exist |
-| 9 | [75] | Move destinations are never validated before the dispatch |
-| 10 | [75] | The TAO exit hands control away while its own supply is understated |
-| 11 | [75] | `sharePrice` floors to zero after a recapitalization |
+| # | Severity | Confidence | Title |
+|---|---|---|---|
+| 1 | Medium | [90] | Full-supply `unwrapForTao` reverts once the position has appreciated |
+| 2 | Medium | [85] | An emptied slot re-targets a hotkey the chain has deleted |
+| 3 | High | [85] | A dust stake under a swapped-away key freezes the whole token |
+| 4 | High | [85] | A written-off position burns shares for nothing on the alpha rail |
+| 5 | High | [85] | A write-off and its later recovery can be separated by a mint |
+| 6 | Low | [82] | The dissolved-subnet payout ignores the chain's native quantum |
+| 7 | Medium | [80] | The unstake minimum is applied to moves the chain never floors |
+| 8 | Medium | [80] | Attested hotkeys are committed without checking they exist |
+| 9 | Low | [75] | Move destinations are never validated before the dispatch |
+| 10 | Low | [75] | The TAO exit hands control away while its own supply is understated |
+| 11 | Low | [75] | `sharePrice` floors to zero after a recapitalization |
 
 ---
 
