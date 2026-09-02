@@ -215,6 +215,8 @@ Attack path for an external integration:
 
 The local runtime exposes a high enough maximum price for the two-RAO seed to satisfy the default floor (`pallets/swap/src/pallet/impls.rs:372-377`). An actual affected exchange, lender, or accounting consumer remains unverified.
 
+**Status:** fixed in [`66a3f6e`](https://github.com/bittensor-church/alpha-wrapper/commit/66a3f6ebb4e5c785a8899fddcdb49171c9d4c7ff) ([PR #62](https://github.com/bittensor-church/alpha-wrapper/pull/62)). `sharePrice` now quotes through the same virtual-offset rate a live unwrap of one share unit pays.
+
 Checklist anchors: ERC-1155 composability, quote/execution parity, first-depositor boundary.
 
 ### [75] Low, conditional — AMM price can preserve an overweight validator allocation
@@ -268,7 +270,7 @@ Checklist anchors: native precision boundary, division rounding, event/accountin
 ## Unverified questions and retained leads
 
 - **Low-liquidity dual-exit liveness:** a still-live subnet with transfers disabled and reserves below swap limits may make both alpha and TAO exits fail. Confirmation requires deployed reserve values, subnet-owner controls, and the chain's eventual-dissolution guarantees.
-- **Cross-generation blackout coupling:** `unwrap` checks dissolution by low-16-bit netuid before selecting an older dissolved token's refund path (`src/AlphaVault.sol:300-308`, `src/libraries/VaultReads.sol:66-70`). A newer generation's cleanup therefore freezes older refunds. An unprivileged trigger was not established; local dissolution is root-controlled.
+- **Cross-generation blackout coupling:** `unwrap` checks dissolution by low-16-bit netuid before selecting an older dissolved token's refund path (`src/AlphaVault.sol:300-308`, `src/libraries/VaultReads.sol:66-70`). A newer generation's cleanup therefore freezes older refunds. An unprivileged trigger was not established; local dissolution is root-controlled. Fixed in [`66a3f6e`](https://github.com/bittensor-church/alpha-wrapper/commit/66a3f6ebb4e5c785a8899fddcdb49171c9d4c7ff) ([PR #62](https://github.com/bittensor-church/alpha-wrapper/pull/62)): the hold is now scoped to the token whose own generation is dissolving.
 - The deployed Subtensor runtime/spec version was not supplied, so local precompile selectors, rollback, conversion, and lifecycle behavior cannot be proven byte-identical to production.
 - The scoped Solidity does not state the intended user operation for initially moving native alpha into a mailbox.
 - Actual deployment addresses, registry admin/signers/threshold, recovery window, and keeper coverage cannot be determined from these contracts.
