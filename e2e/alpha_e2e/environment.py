@@ -12,6 +12,17 @@ from typing import List, Optional, Tuple
 from . import chain, config, extrinsics, substrate, validators
 
 
+def alpha_to_tao_quote(netuid: int, alpha_rao: int, block: Optional[int] = None) -> int:
+    """Chain's own alpha->TAO quote (RAO out) for selling `alpha_rao` on `netuid`, against
+    live reserves or those at `block`. Pin the block when pricing a swap that already ran:
+    the curve is concave, so a quote against post-swap reserves understates that swap's
+    payout by its own price impact."""
+    return int(chain.cast_call(
+        config.ALPHA_PRECOMPILE, "simSwapAlphaForTao(uint16,uint64)(uint256)",
+        netuid, alpha_rao, block=block,
+    ))
+
+
 def read_stake(hotkey_pubkey: str, coldkey_pubkey: str, netuid: int) -> int:
     """Alpha stake (RAO) for a single (hotkey, coldkey, netuid) from the
     staking precompile."""
@@ -59,11 +70,14 @@ class Environment:
             for hotkey_pubkey in hotkey_pubkeys
         )
 
-    def vault_shares(self, token_id: int, holder: Optional[str] = None) -> int:
-        """ERC1155 share balance of `holder` (default: the wrapper user)."""
+    def vault_shares(
+        self, token_id: int, holder: Optional[str] = None, block: Optional[int] = None,
+    ) -> int:
+        """ERC1155 share balance of `holder` (default: the wrapper user), live or as of
+        `block`."""
         return int(chain.cast_call(
             self.vault_address, "balanceOf(address,uint256)(uint256)",
-            holder or config.WRAPPER_USER_ADDRESS, token_id,
+            holder or config.WRAPPER_USER_ADDRESS, token_id, block=block,
         ))
 
     def vault_total_supply(self, token_id: int) -> int:
@@ -71,11 +85,11 @@ class Environment:
             self.vault_address, "totalSupply(uint256)(uint256)", token_id,
         ))
 
-    def vault_total_stake(self, token_id: int) -> int:
-        """Alpha (RAO) backing a token id, summed live across the validators the position
-        holds stake on."""
+    def vault_total_stake(self, token_id: int, block: Optional[int] = None) -> int:
+        """Alpha (RAO) backing a token id, summed across the validators the position holds
+        stake on, live or as of `block`."""
         return int(chain.cast_call(
-            self.lens_address, "totalStake(uint256)(uint256)", token_id,
+            self.lens_address, "totalStake(uint256)(uint256)", token_id, block=block,
         ))
 
     def vault_located_stake(self, token_id: int) -> int:
@@ -209,14 +223,9 @@ class Environment:
         return price, boundary
 
     def alpha_to_tao_quote(self, netuid: int, alpha_rao: int) -> int:
-        """Chain's own alpha->TAO quote (RAO out) for selling `alpha_rao` on `netuid`.
-        Capture it BEFORE the swap that pays out: the simulation re-prices against
-        live reserves and the curve is concave, so a quote taken after the swap
-        understates the payout by its own price impact."""
-        return int(chain.cast_call(
-            config.ALPHA_PRECOMPILE, "simSwapAlphaForTao(uint16,uint64)(uint256)",
-            netuid, alpha_rao,
-        ))
+        """Chain's own alpha->TAO quote (RAO out) for selling `alpha_rao` on `netuid`
+        against live reserves."""
+        return alpha_to_tao_quote(netuid, alpha_rao)
 
     def holder_assets(self, token_id: int, holder: str) -> int:
         """A holder's pro-rata alpha backing (RAO)."""

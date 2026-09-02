@@ -1,15 +1,19 @@
 """Shared assertion helpers for balance deltas, gas budgets, and CSV output.
 
-These encode the suite's cross-cutting measurement rules: payouts are judged
-against pre-captured chain quotes, gas budgets separate designed pre-check
-reverts from attempted-and-burned precompile dispatches, and the observability
-scripts' CSV output is asserted row-by-row.
+These encode the suite's cross-cutting measurement rules: TAO payouts are judged
+against the chain's own alpha->TAO quote at the block before the exit, gas budgets
+separate designed pre-check reverts from attempted-and-burned precompile
+dispatches, and the observability scripts' CSV output is asserted row-by-row.
 """
 import csv
 import io
+from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional
 
-from . import chain, config
+from . import chain, config, environment
+
+# Native delivery is RAO-granular, so the sub-RAO remainder of what the vault reports stays behind.
+RAO_WEI = 10**9
 
 
 def run_observability_script(
@@ -27,10 +31,10 @@ def run_observability_script(
 
 
 def min_tao_out_for(quote_rao: int) -> int:
-    """Half the alpha->TAO quote, in wei: a slippage threshold loose enough to
-    stay inside assert_payout_near_quote's factor-of-two acceptance band while
-    still rejecting a broken payout."""
-    return quote_rao * 10**9 // 2
+    """Half a pre-call alpha->TAO quote, in wei: a slippage floor that a dividend
+    landing before the exit can only lift the payout further above, while a payout
+    that halves is still rejected."""
+    return quote_rao * RAO_WEI // 2
 
 
 def assert_gas_within(receipt: dict, bound: int, message: str) -> None:
@@ -50,21 +54,6 @@ def assert_positive_gain(balance_before_wei: int, balance_after_wei: int, messag
     return gain
 
 
-def assert_tao_gain_near_quote(
-    balance_before_wei: int, balance_after_wei: int, quote_rao: int, message: str,
-) -> int:
-    """Assert the caller's native-TAO gain matches a pre-captured alpha->TAO quote
-    within +/-10% (which absorbs gas and a block or two of emission drift) -- a
-    real value check, not just a positive delta. The precompile quotes in RAO,
-    so x1e9 -> wei. Returns the wei gain."""
-    gain = balance_after_wei - balance_before_wei
-    expected_wei = quote_rao * 10**9
-    assert expected_wei * 9 // 10 <= gain <= expected_wei * 11 // 10, (
-        f"{message} (gained {gain} wei, quote {quote_rao} RAO)"
-    )
-    return gain
-
-
 def reconstructed_payout(
     balance_before_wei: int, balance_after_wei: int, receipt: dict, message: str,
 ) -> int:
@@ -76,19 +65,29 @@ def reconstructed_payout(
     return balance_after_wei - balance_before_wei + gas_used * config.LOCALNET_GAS_PRICE_WEI
 
 
-UNWRAPPED_FOR_TAO = "UnwrappedForTao(address,uint256,uint256,uint256,uint256)"
+@dataclass(frozen=True)
+class TaoSale:
+    """Where an exit that pays TAO reports the alpha it sold and the TAO it paid: the
+    event's signature and the data-word index of each."""
+    event: str
+    alpha_word: int
+    tao_word: int
 
-# Native delivery is RAO-granular, so the sub-RAO remainder of what the vault reports stays behind.
-RAO_WEI = 10**9
+
+VAULT_TAO_EXIT = TaoSale("UnwrappedForTao(address,uint256,uint256,uint256,uint256)", 1, 2)
+MAILBOX_TAO_RECLAIM = TaoSale(
+    "MailboxAlphaSoldForTao(address,uint256,bytes32,uint256,uint256)", 0, 1,
+)
 
 
 def assert_payout_matches_emitted(
     balance_before_wei: int, balance_after_wei: int, receipt: dict, message: str,
+    sale: TaoSale = VAULT_TAO_EXIT,
 ) -> None:
     """Assert the caller actually received what the TAO exit reported paying, to the RAO. The event
     is the vault's own claim; the balance delta is the chain's, so the two are independent."""
     payout = reconstructed_payout(balance_before_wei, balance_after_wei, receipt, message)
-    emitted = chain.event_word(receipt, UNWRAPPED_FOR_TAO, 2, message)
+    emitted = chain.event_word(receipt, sale.event, sale.tao_word, message)
     assert 0 <= emitted - payout < RAO_WEI, (
         f"{message} (emitted {emitted} wei, received {payout} wei)"
     )
@@ -96,15 +95,34 @@ def assert_payout_matches_emitted(
 
 def assert_payout_near_quote(
     balance_before_wei: int, balance_after_wei: int, receipt: dict,
-    quote_rao: int, message: str,
-) -> None:
-    """Require the reconstructed payout within a factor of two of the
-    pre-captured chain quote."""
+    netuid: int, quoted_alpha_rao: Optional[int], message: str,
+    sale: TaoSale = VAULT_TAO_EXIT,
+) -> int:
+    """Assert the exit paid within +/-10% of the chain's quote for the alpha it reports
+    selling, priced at the block before the exit, and sold at least `quoted_alpha_rao`.
+    Returns the alpha sold (RAO).
+
+    An exit sells whatever backs the position when it runs, and a staking dividend
+    landing first can multiply that, so no amount captured earlier bounds the payout;
+    the reported amount priced at the exit's own block does. The quoted amount keeps
+    that report honest against selling short. Pass None for a partial exit: the vault
+    cuts one short wherever a slot's leftover would fall under the chain's dust
+    threshold and refunds those shares, so its caller holds the report to the shares
+    that actually burned instead.
+    """
     payout = reconstructed_payout(balance_before_wei, balance_after_wei, receipt, message)
-    quote_wei = quote_rao * 10**9
-    assert quote_wei // 2 <= payout <= 2 * quote_wei, (
-        f"{message} (payout {payout} wei vs quote {quote_rao} RAO)"
+    alpha_sold = chain.event_word(receipt, sale.event, sale.alpha_word, message)
+    if quoted_alpha_rao is not None:
+        assert alpha_sold >= quoted_alpha_rao - config.ROUNDING_DUST_TOTAL_RAO, (
+            f"{message} (sold {alpha_sold} alpha RAO of the {quoted_alpha_rao} quoted)"
+        )
+    pre_exit_block = chain.receipt_block_number(receipt, message) - 1
+    quote_wei = environment.alpha_to_tao_quote(netuid, alpha_sold, block=pre_exit_block) * RAO_WEI
+    assert quote_wei * 9 // 10 <= payout <= quote_wei * 11 // 10, (
+        f"{message} (payout {payout} wei for {alpha_sold} alpha RAO, "
+        f"quoted {quote_wei} wei at block {pre_exit_block})"
     )
+    return alpha_sold
 
 
 def assert_csv(

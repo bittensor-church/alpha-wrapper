@@ -45,13 +45,27 @@ def run(
     return completed
 
 
-def cast_call(to: str, signature: str, *args, rpc: str = config.RPC_URL) -> str:
-    completed = run(["cast", "call", to, signature, *[str(a) for a in args], "--rpc-url", rpc])
+def _cast_call_command(
+    to: str, signature: str, args: tuple, rpc: str, block: Optional[int],
+) -> List[str]:
+    """`cast call` against live state, or against the state at `block`."""
+    cmd = ["cast", "call", to, signature, *[str(a) for a in args], "--rpc-url", rpc]
+    if block is not None:
+        cmd += ["--block", str(block)]
+    return cmd
+
+
+def cast_call(
+    to: str, signature: str, *args, rpc: str = config.RPC_URL, block: Optional[int] = None,
+) -> str:
+    completed = run(_cast_call_command(to, signature, args, rpc, block))
     return _first_token(completed.stdout)
 
 
-def cast_call_lines(to: str, signature: str, *args, rpc: str = config.RPC_URL) -> List[str]:
-    completed = run(["cast", "call", to, signature, *[str(a) for a in args], "--rpc-url", rpc])
+def cast_call_lines(
+    to: str, signature: str, *args, rpc: str = config.RPC_URL, block: Optional[int] = None,
+) -> List[str]:
+    completed = run(_cast_call_command(to, signature, args, rpc, block))
     return _tokens_per_line(completed.stdout)
 
 
@@ -101,6 +115,13 @@ def receipt_gas_used(receipt: dict) -> Optional[int]:
         return int(str(value), 0)
     except (TypeError, ValueError):
         return None
+
+
+def receipt_block_number(receipt: dict, message: str) -> int:
+    """The block the receipt's transaction landed in."""
+    value = receipt.get("blockNumber")
+    assert value is not None, f"{message}: could not parse blockNumber"
+    return int(str(value), 0)
 
 
 def forge_create(

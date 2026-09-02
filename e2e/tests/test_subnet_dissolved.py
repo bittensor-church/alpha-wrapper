@@ -235,19 +235,18 @@ def test_subnet_dissolved(env):
 
     # --- Phase 13: the untouched subnet still exits normally -----------------------
     surviving_alpha, _ = env.preview_unwrap(surviving_token_id, surviving_shares)
-    surviving_quote = env.alpha_to_tao_quote(surviving_netuid, surviving_alpha)
 
     user_tao_before = env.user_tao_wei()
-    env.vault_send(
+    receipt = env.vault_send(
         2_500_000, "unwrapForTao on the surviving subnet failed",
         "unwrapForTao(uint256,uint256,uint256)", surviving_token_id, surviving_shares, 0,
     )
     assert env.vault_shares(surviving_token_id) == 0, (
         "shares still outstanding after unwrapForTao on the live subnet"
     )
-    gained = checks.assert_tao_gain_near_quote(
-        user_tao_before, env.user_tao_wei(), surviving_quote,
+    sold_alpha = checks.assert_payout_near_quote(
+        user_tao_before, env.user_tao_wei(), receipt, surviving_netuid, surviving_alpha,
         "surviving-subnet unwrapForTao payout off the alpha->TAO quote",
     )
-    print(f"  Surviving subnet paid {gained} wei (matches quote {surviving_quote} RAO); "
+    print(f"  Surviving subnet sold {sold_alpha} alpha RAO at the chain's quote; "
           f"dissolution was scoped to netuid {dissolved_netuid}")
