@@ -76,7 +76,53 @@ over several sales.
   total can never be minted or redeemed against. Recovery is open to
   anyone and can only move alpha between the vault's own keys, so it
   needs no permission and grants none
-  ([design/backing-resolution.md](design/backing-resolution.md)).
+  ([edge-cases.md](edge-cases.md#a-validator-swaps-its-hotkey)).
+
+## Recovery-window tradeoff and late-recovery attack
+
+Backing that goes missing freezes the token - exits included - for the
+recovery window fixed at deployment. Anyone can start the clock with
+`syncBacking` and recover located alpha with `recoverStray`. If nobody
+recovers it before the deadline, another `syncBacking` writes the missing
+amount off and reopens the token against only the backing the vault can
+locate. This deliberately chooses bounded unavailability over waiting for
+alpha that may be gone or too small to recover economically forever.
+
+A dishonest validator can manufacture a profitable late recovery:
+
+1. Its attested hotkey carries some of the vault's alpha. The validator
+   swaps to a successor, carrying the alpha with it, and then registers the
+   old hotkey again. Subtensor removes the successor edge, leaving the vault
+   unable to discover the funded key on chain.
+2. If watchers cannot independently find and recover that key before the
+   deadline, anyone - including the validator - can finalize the write-off.
+3. The validator or a collaborator deposits after the token reopens and
+   mints shares against the written-down backing. After a complete write-off,
+   a comparatively small valid deposit can make it the dominant holder.
+4. The validator reveals the funded key and calls `recoverStray`, or lets a
+   later attestation and settling call bring it back into the accounting.
+   The alpha then belongs pro rata to the current share supply, allowing the
+   new shares to capture most of it.
+
+For a hidden balance that has not grown, this ordering cannot drain backing
+that remained located or charge incumbents for the same principal twice. If
+`H` is the amount finalized as missing, the incumbent cohort's aggregate
+reduction between its pre-loss claim and its post-recovery claim is at most
+`H`; it approaches `H` as the new depositor approaches the entire share
+supply. The attack changes who receives the late `H` rather than extracting
+another `H` from the vault.
+
+The `BackingWrittenOff` event is not necessarily a cap on the eventual
+windfall. A hidden position may earn emissions, or its key may hold a surplus,
+after the vault last anchored its expectation. Recovery accounts for the
+whole balance actually returned, and that additional growth also belongs to
+the cohort holding shares at recovery time.
+
+This is accepted policy, not a guarantee that written-off alpha was destroyed.
+It requires active monitoring: watchers should start the window promptly,
+identify erased or multi-hop successors off chain, and recover them before the
+deadline whenever possible. After finalization, neither recovery nor a new
+validator attestation can reconstruct the prior cohort's entitlement.
 
 ## Known tradeoffs
 
@@ -108,16 +154,3 @@ over several sales.
   subnet, so a list the signers have moved away from can still be
   installed by anyone holding its signatures. Landing a replacement is
   what retires it.
-- Backing that goes missing shuts the token - exits included - for up to
-  the recovery window fixed at deployment (`recoveryWindow`), and holders
-  wait that out. The design buys a watcher time to preserve the backing
-  and then chooses liveness over waiting longer.
-- Backing nobody recovers inside that window is written off across the
-  holders of the moment, and alpha found afterwards accrues to whoever
-  holds shares then. Whoever knows where that alpha sits can deposit at
-  the written-down price first and recover it second, taking most of it
-  from the holders who bore the loss. Accepted policy rather than an
-  accident; the vault has no recapitalization mechanism.
-- The vault relies on someone watching it. Nothing is lost if no one
-  does - the window still runs and the token still reopens - but the
-  missing alpha is then socialized rather than recovered.
