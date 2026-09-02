@@ -279,8 +279,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
     /// @notice Burn shares and pay out the underlying position.
     /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while subtensor's asynchronous
-    ///         cleanup of the netuid is in progress (alpha and TAO refunds are in flux),
-    ///         then dispatches on subnet state:
+    ///         cleanup of the netuid is in progress (alpha and TAO refunds are in flux). A
+    ///         position a later subnet has already replaced keeps paying through that subnet's
+    ///         cleanup, except in its late window once the registration block reads zero.
+    ///         Then dispatches on subnet state:
     ///           - permanently dissolved (tokenId's registrationBlock no longer current): pays pro-rata
     ///             native TAO from the clone's refund balance.
     ///           - live: consolidates the position onto one hotkey and delivers the full pro-rata
@@ -301,7 +303,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         if (shares == 0) revert ZeroAmount();
         if (balanceOf(msg.sender, tokenId) < shares) revert InsufficientShares();
         uint16 netuid = VaultMath.netuidOf(tokenId);
-        VaultReads.requireNotDissolving(netuid);
+        VaultReads.requireNotHeldByDissolution(tokenId);
         address clone = subnetClone[tokenId];
 
         if (VaultReads.isIssuedForDissolvedSubnet(tokenId)) {

@@ -24,6 +24,18 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
         assertEq(address(lens.vault()), address(vault));
     }
 
+    /// @dev The price of a share is what a live unwrap of one share unit pays, virtual offsets
+    ///      included, so a holder's `balance * sharePrice / 1e18` never overstates their exit.
+    function testFuzz_SharePrice_MatchesTheLivePayoutOfOneShareUnit(uint256 deposit, uint256 emissions) public {
+        deposit = bound(deposit, 1e7, 1e20);
+        emissions = bound(emissions, 0, 1e20);
+        _depositAndWrap(alice, NETUID1, deposit);
+        _simulateEmissions(NETUID1, emissions);
+
+        (uint256 alpha,) = lens.previewUnwrap(TOKEN1, 1e18);
+        assertEq(lens.sharePrice(TOKEN1), alpha);
+    }
+
     /// @dev A position whose shares were all burned still has a clone, and integrators poll it.
     ///      The quote reports nothing left rather than reverting on the division.
     function test_PreviewUnwrap_QuotesZeroAfterTheLastHolderExits() public {

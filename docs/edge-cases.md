@@ -23,11 +23,14 @@ refund sits on the clone: until it arrives - or while all of the clone's
 TAO is reserved for claims - `unwrap` reverts `NothingToUnwrap` and
 `previewUnwrap` reverts `SubnetDissolved`. `claimTao` works throughout.
 
-The blackout is scoped by netuid because the chain reports dissolution
-by netuid alone. An old, already-dissolved
-position on a reused netuid is therefore also frozen while its successor
-dissolves, and resumes when that cleanup completes. This is a deliberate
-availability tradeoff.
+The chain reports dissolution by netuid alone. An old, already-dissolved
+position on a reused netuid keeps paying its refund while its successor
+dissolves: the successor's cleanup drains only the successor's clone. The
+one exception is the late window of that cleanup, once the registration
+block already reads zero. There the vault cannot tell the successor's
+cleanup from the old position's own, so `unwrap` and `previewUnwrap` wait
+until it completes. `wrap`, `rebalance` and `unwrapForTao` act on the
+live generation only and stay frozen for the whole blackout.
 
 A dissolution refund can also land on your deposit mailbox if stake was
 still parked there; `reclaimTaoFromMailbox(netuid)` recovers it.

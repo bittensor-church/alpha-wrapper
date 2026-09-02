@@ -118,7 +118,8 @@ contract AlphaVaultLens {
         backing = VaultReads.resolveBacking(slots, coldkey, netuid);
     }
 
-    /// @notice Price of one share in 1e18 precision, expressed in alpha.
+    /// @notice Price of one share in 1e18 precision, expressed in alpha: what a live unwrap of
+    ///         one share unit delivers, so the quote carries the same virtual offsets the rails apply.
     /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while the subnet is being dissolved,
     ///         `SubnetDissolved` once dissolution has completed or
     ///         the tokenId does not correspond to the currently-registered subnet,
@@ -131,7 +132,7 @@ contract AlphaVaultLens {
         _requireCurrentRegistration(tokenId);
         uint256 supply = vault.totalSupply(tokenId);
         if (supply == 0) revert NoSharesOutstanding();
-        return (totalStake(tokenId) * 1e18) / supply;
+        return VaultMath.assetsFor(totalStake(tokenId), supply, 1e18);
     }
 
     /// @notice Preview how many shares would be minted for a deposit of `assets` alpha.
@@ -148,7 +149,8 @@ contract AlphaVaultLens {
     }
 
     /// @notice Preview the unwrap of `shares` for a position.
-    /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while the subnet is being dissolved,
+    /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while a dissolution holds the position
+    ///         (a replaced position pays through its successor's cleanup, as `unwrap` does),
     ///         `SubnetDissolved` for a dissolved position whose clone holds no TAO refund, and
     ///         `BackingShortfall` while any backing is unaccounted for, exactly as `unwrap` would.
     ///         Live-path delivery is exact to within a few RAO of chain-side share rounding: unwrap
@@ -170,7 +172,7 @@ contract AlphaVaultLens {
         if (supply == 0) return (0, 0);
 
         uint16 netuid = VaultMath.netuidOf(tokenId);
-        VaultReads.requireNotDissolving(netuid);
+        VaultReads.requireNotHeldByDissolution(tokenId);
 
         if (VaultReads.isIssuedForDissolvedSubnet(tokenId)) {
             uint256 backing = VaultMath.unreservedTao(clone.balance, vault.taoLiability(tokenId));
