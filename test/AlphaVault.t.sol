@@ -11,6 +11,7 @@ import {
     InsufficientShares,
     NetuidOutOfRange,
     NoSharesOutstanding,
+    NothingToUnwrap,
     NoValidatorFound,
     SubnetDissolved,
     SlippageExceeded,
@@ -1091,21 +1092,51 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(alice.balance - before, 50 ether);
     }
 
-    /// @dev The freeze is per netuid: an old tokenId stays frozen while a newer subnet on the
-    ///      same netuid is dissolving.
-    function test_RevertWhen_UnwrapDuringSuccessorBlackoutRegardlessOfForceSendDust() public {
-        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
-        _wrap(alice, NETUID1);
-        uint256 tokenId = vault.currentTokenId(NETUID1);
-        uint256 shares = vault.balanceOf(alice, tokenId);
-
-        _setRegBlock(NETUID1, 500);
+    /// @dev A replaced generation's refund sits on its own clone, which the successor's cleanup
+    ///      never touches, so the old position keeps paying while the successor dissolves.
+    function test_Unwrap_ReplacedGenerationPaysDuringSuccessorBlackout() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 10 ether);
+        _simulateNewNetworkRegistered(TOKEN1, 500, 5 ether);
         _simulateDissolutionStarted(NETUID1);
-        vm.deal(vault.subnetClone(tokenId), 1);
+
+        uint256 aliceBefore = alice.balance;
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        assertEq(alice.balance - aliceBefore, 5 ether);
+    }
+
+    /// @dev Once the successor's cleanup has cleared the registration block, a replaced position
+    ///      reads the same as one whose own refund is still landing, so it waits with it.
+    function test_RevertWhen_UnwrapDuringSuccessorLateBlackout() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 10 ether);
+        _simulateNewNetworkRegistered(TOKEN1, 500, 5 ether);
+        _simulateDissolutionStarted(NETUID1);
+        _setRegBlock(NETUID1, 0);
 
         vm.prank(alice);
         vm.expectRevert(SubnetInDissolutionBlackoutPeriod.selector);
-        vault.unwrap(tokenId, shares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+    }
+
+    /// @dev The TAO rail and the value quotes answer a replaced token with its permanent state
+    ///      through a successor's blackout, never with the transient one.
+    function test_RevertWhen_UnwrapForTaoOnReplacedGenerationDuringSuccessorBlackout() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 10 ether);
+        _simulateNewNetworkRegistered(TOKEN1, 500, 5 ether);
+        _simulateDissolutionStarted(NETUID1);
+
+        vm.prank(alice);
+        vm.expectRevert(NothingToUnwrap.selector);
+        vault.unwrapForTao(TOKEN1, shares, 0);
+    }
+
+    function test_RevertWhen_SharePriceOnReplacedGenerationDuringSuccessorBlackout() public {
+        _depositAndWrap(alice, NETUID1, 10 ether);
+        _simulateNewNetworkRegistered(TOKEN1, 500, 5 ether);
+        _simulateDissolutionStarted(NETUID1);
+
+        vm.expectRevert(SubnetDissolved.selector);
+        lens.sharePrice(TOKEN1);
     }
 
     function test_UnwrapSucceedsAfterCleanupCompletesAfterForceSend() public {
@@ -1127,20 +1158,6 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.unwrap(tokenId, shares, _toSubstrate(alice));
 
         assertEq(alice.balance - aliceBefore, 5 ether + 1);
-    }
-
-    function test_RevertWhen_UnwrapDuringSuccessorBlackout() public {
-        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
-        _wrap(alice, NETUID1);
-        uint256 tokenId = vault.currentTokenId(NETUID1);
-        uint256 shares = vault.balanceOf(alice, tokenId);
-
-        _setRegBlock(NETUID1, 500);
-        _simulateDissolutionStarted(NETUID1);
-
-        vm.prank(alice);
-        vm.expectRevert(SubnetInDissolutionBlackoutPeriod.selector);
-        vault.unwrap(tokenId, shares, _toSubstrate(alice));
     }
 
     function test_RevertWhen_WrapDuringBlackout() public {
@@ -1264,32 +1281,14 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(tao, 40 ether);
     }
 
-    function test_RevertWhen_PreviewUnwrapDuringSuccessorBlackout() public {
-        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
-        _wrap(alice, NETUID1);
-        uint256 tokenId = vault.currentTokenId(NETUID1);
-        uint256 shares = vault.balanceOf(alice, tokenId);
-
-        _setRegBlock(NETUID1, 500);
+    function test_PreviewUnwrap_QuotesReplacedGenerationDuringSuccessorBlackout() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 10 ether);
+        _simulateNewNetworkRegistered(TOKEN1, 500, 40 ether);
         _simulateDissolutionStarted(NETUID1);
-        _simulateTaoAwardedOnDissolution(tokenId, 40 ether);
 
-        vm.expectRevert(SubnetInDissolutionBlackoutPeriod.selector);
-        lens.previewUnwrap(tokenId, shares);
-    }
-
-    function test_RevertWhen_PreviewUnwrapDuringSuccessorBlackoutRegardlessOfForceSendDust() public {
-        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
-        _wrap(alice, NETUID1);
-        uint256 tokenId = vault.currentTokenId(NETUID1);
-        uint256 shares = vault.balanceOf(alice, tokenId);
-
-        _setRegBlock(NETUID1, 500);
-        _simulateDissolutionStarted(NETUID1);
-        vm.deal(vault.subnetClone(tokenId), 1);
-
-        vm.expectRevert(SubnetInDissolutionBlackoutPeriod.selector);
-        lens.previewUnwrap(tokenId, shares);
+        (uint256 alpha, uint256 tao) = lens.previewUnwrap(TOKEN1, shares);
+        assertEq(alpha, 0);
+        assertEq(tao, 40 ether);
     }
 
     function test_PreviewUnwrapUnknownTokenId() public view {

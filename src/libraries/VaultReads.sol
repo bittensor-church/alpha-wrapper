@@ -63,11 +63,25 @@ library VaultReads {
         return ISubnet(SUBNET_PRECOMPILE).isSubnetDissolving(netuid);
     }
 
-    /// @dev Every share-priced path is frozen until dissolution completes. The check is per netuid,
-    ///      so an already-dissolved position is also frozen while a newer subnet on the same netuid
-    ///      dissolves.
+    /// @dev Every path that prices the live generation is frozen until dissolution completes.
     function requireNotDissolving(uint16 netuid) internal view {
         if (isDissolving(netuid)) revert SubnetInDissolutionBlackoutPeriod();
+    }
+
+    /// @dev Whether a dissolution in progress on the netuid holds this token's payout. A token a
+    ///      different subnet has since replaced is not held: that subnet's cleanup drains its own
+    ///      clone and leaves the old refund whole. Once cleanup has cleared the registration block
+    ///      a replaced token reads like one in its own late window, and the vault keeps that window
+    ///      shut rather than price a refund the chain may still be settling, so it waits too.
+    function isHeldByDissolution(uint256 tokenId) internal view returns (bool) {
+        uint16 netuid = VaultMath.netuidOf(tokenId);
+        if (!isDissolving(netuid)) return false;
+        uint64 currentRegistrationBlock = ISubnet(SUBNET_PRECOMPILE).getNetworkRegistrationBlock(netuid);
+        return currentRegistrationBlock == 0 || currentRegistrationBlock == VaultMath.registrationBlockOf(tokenId);
+    }
+
+    function requireNotHeldByDissolution(uint256 tokenId) internal view {
+        if (isHeldByDissolution(tokenId)) revert SubnetInDissolutionBlackoutPeriod();
     }
 
     /// @dev The part of a clone's `balance` a synchronization may fold into the claim index right

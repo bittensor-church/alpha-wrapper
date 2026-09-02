@@ -167,6 +167,27 @@ contract VaultReadsTest is Test {
         assertTrue(VaultReads.isIssuedForDissolvedSubnet(TOKEN_ID));
     }
 
+    function test_IsHeldByDissolution_LiveSubnetHoldsNothing() public view {
+        assertFalse(VaultReads.isHeldByDissolution(TOKEN_ID));
+    }
+
+    function test_IsHeldByDissolution_OwnCleanupHoldsThroughBothWindows() public {
+        MockSubnetPrecompile(SUBNET_PRECOMPILE).setDissolving(NETUID, true);
+        assertTrue(VaultReads.isHeldByDissolution(TOKEN_ID), "early window");
+
+        MockSubnetPrecompile(SUBNET_PRECOMPILE).setRegisteredAt(NETUID, 0);
+        assertTrue(VaultReads.isHeldByDissolution(TOKEN_ID), "late window");
+    }
+
+    function test_IsHeldByDissolution_SuccessorCleanupHoldsOnlyItsLateWindow() public {
+        MockSubnetPrecompile(SUBNET_PRECOMPILE).setRegisteredAt(NETUID, REGISTRATION_BLOCK + 1);
+        MockSubnetPrecompile(SUBNET_PRECOMPILE).setDissolving(NETUID, true);
+        assertFalse(VaultReads.isHeldByDissolution(TOKEN_ID), "early window");
+
+        MockSubnetPrecompile(SUBNET_PRECOMPILE).setRegisteredAt(NETUID, 0);
+        assertTrue(VaultReads.isHeldByDissolution(TOKEN_ID), "late window");
+    }
+
     function test_IndexableTao_LiveSubnetYieldsTheUnreservedBalance() public view {
         assertEq(VaultReads.indexableTao(TOKEN_ID, 10e9, 4e9), 6e9);
         assertEq(VaultReads.indexableTao(TOKEN_ID, 4e9, 10e9), 0);
