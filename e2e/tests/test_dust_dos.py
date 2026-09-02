@@ -14,8 +14,6 @@ subnets):
      top-up lets the small holder leave in full; the large holder exits
      unharmed.
 """
-from functools import partial
-
 import pytest
 
 from alpha_e2e import bootstrap, chain, config
@@ -86,8 +84,8 @@ def test_rotated_out_dust_cannot_lock_the_vault(env):
 
     # The TAO exit needs no consolidation and full drains are floor-exempt on the
     # chain: it must pay out even from this state.
-    tao_exit_quote = env.alpha_to_tao_quote(netuid, env.vault_total_stake(token_id))
-    min_tao_out = min_tao_out_for(tao_exit_quote)
+    tao_exit_alpha = env.vault_total_stake(token_id)
+    min_tao_out = min_tao_out_for(env.alpha_to_tao_quote(netuid, tao_exit_alpha))
     balance_before = env.user_tao_wei()
     tao_exit_receipt = env.vault_send(
         2_500_000, "Rotated-out dust: TAO exit failed from the dust state",
@@ -95,8 +93,7 @@ def test_rotated_out_dust_cannot_lock_the_vault(env):
     )
     balance_after = env.user_tao_wei()
     assert_payout_near_quote(
-        balance_before, balance_after, tao_exit_receipt, tao_exit_quote,
-        partial(env.alpha_to_tao_quote, netuid),
+        balance_before, balance_after, tao_exit_receipt, netuid, tao_exit_alpha,
         "Rotated-out dust: TAO exit payout off quote",
     )
     assert_payout_matches_emitted(
@@ -170,8 +167,8 @@ def test_price_crash_cannot_lock_exits(env):
     assert_gas_within(refusal_receipt, config.REVERT_GAS_BOUND, "Price crash: alpha-exit refusal")
     print("  Alpha exit refused up front as WithdrawTooSmall, without burning the gas budget")
 
-    tao_exit_quote = env.alpha_to_tao_quote(netuid, env.vault_total_stake(token_id))
-    min_tao_out = min_tao_out_for(tao_exit_quote)
+    tao_exit_alpha = env.vault_total_stake(token_id)
+    min_tao_out = min_tao_out_for(env.alpha_to_tao_quote(netuid, tao_exit_alpha))
     balance_before = env.user_tao_wei()
     tao_exit_receipt = env.vault_send(
         2_500_000, "Price crash: TAO exit failed at the crashed price",
@@ -179,8 +176,7 @@ def test_price_crash_cannot_lock_exits(env):
     )
     balance_after = env.user_tao_wei()
     assert_payout_near_quote(
-        balance_before, balance_after, tao_exit_receipt, tao_exit_quote,
-        partial(env.alpha_to_tao_quote, netuid),
+        balance_before, balance_after, tao_exit_receipt, netuid, tao_exit_alpha,
         "Price crash: TAO exit payout off quote",
     )
     assert_payout_matches_emitted(
@@ -344,8 +340,7 @@ def test_sub_floor_co_holder_cannot_be_locked_in_or_leak_the_other_holder(env):
         large_holder_assets_before - config.CONSOLIDATION_ROUNDING_TOLERANCE_RAO
     ), "Co-holder: large holder's backing shrank"
 
-    large_exit_quote = env.alpha_to_tao_quote(netuid, large_holder_assets_after)
-    min_tao_out = min_tao_out_for(large_exit_quote)
+    min_tao_out = min_tao_out_for(env.alpha_to_tao_quote(netuid, large_holder_assets_after))
     balance_before = env.user_tao_wei()
     large_exit_receipt = env.vault_send(
         2_500_000, "Co-holder: large holder's exit failed",
@@ -354,8 +349,7 @@ def test_sub_floor_co_holder_cannot_be_locked_in_or_leak_the_other_holder(env):
     )
     balance_after = env.user_tao_wei()
     assert_payout_near_quote(
-        balance_before, balance_after, large_exit_receipt, large_exit_quote,
-        partial(env.alpha_to_tao_quote, netuid),
+        balance_before, balance_after, large_exit_receipt, netuid, large_holder_assets_after,
         "Co-holder: large holder's payout off quote",
     )
     assert_payout_matches_emitted(

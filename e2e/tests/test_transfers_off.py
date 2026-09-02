@@ -95,34 +95,28 @@ def test_transfers_off(env):
     print(f"  Alpha-rail unwrap reverted; shares preserved ({shares_after_revert})")
 
     # --- Phase 10: withdraw the deposit clone as TAO (unwrapForTao) ----------------
-    # Live backing alpha this position will sell, and its alpha->TAO quote -- both
-    # captured pre-swap.
     position_alpha, _ = env.preview_unwrap(position_token_id, position_shares)
-    position_quote = env.alpha_to_tao_quote(position_netuid, position_alpha)
 
     user_tao_before = env.user_tao_wei()
-    env.vault_send(
+    receipt = env.vault_send(
         2_500_000, "unwrapForTao failed with transfers off",
         "unwrapForTao(uint256,uint256,uint256)", position_token_id, position_shares, 0,
     )
     remaining_shares = env.vault_shares(position_token_id)
     assert remaining_shares == 0, f"shares still {remaining_shares} after unwrapForTao"
 
-    gained = checks.assert_tao_gain_near_quote(
-        user_tao_before, env.user_tao_wei(), position_quote,
+    sold_alpha = checks.assert_payout_near_quote(
+        user_tao_before, env.user_tao_wei(), receipt, position_netuid, position_alpha,
         "unwrapForTao payout off the alpha->TAO quote",
     )
-    print(f"  Deposit clone withdrawn as TAO; user gained {gained} wei "
-          f"(matches quote {position_quote} RAO)")
+    print(f"  Deposit clone withdrawn as TAO: sold {sold_alpha} alpha RAO at the chain's quote")
 
     # --- Phase 11: withdraw the mailbox itself as TAO (reclaimMailboxAlphaAsTao) ---
-    # Live mailbox alpha (re-read: accrued emissions since Phase 7) and its
-    # alpha->TAO quote, both captured pre-swap.
+    # Live mailbox alpha, re-read: it has accrued emissions since Phase 7.
     reclaim_alpha = env.stake(seed_hotkey_pubkey, seed_mailbox_coldkey, seed_netuid)
-    reclaim_quote = env.alpha_to_tao_quote(seed_netuid, reclaim_alpha)
 
     user_tao_before = env.user_tao_wei()
-    env.vault_send(
+    receipt = env.vault_send(
         1_500_000, "reclaimMailboxAlphaAsTao failed with transfers off",
         "reclaimMailboxAlphaAsTao(uint256,bytes32,uint256)",
         seed_netuid, seed_hotkey_pubkey, 0,
@@ -132,9 +126,8 @@ def test_transfers_off(env):
         f"mailbox still holds {seed_alpha_after} RAO after reclaim"
     )
 
-    gained = checks.assert_tao_gain_near_quote(
-        user_tao_before, env.user_tao_wei(), reclaim_quote,
-        "reclaim payout off the alpha->TAO quote",
+    sold_alpha = checks.assert_payout_near_quote(
+        user_tao_before, env.user_tao_wei(), receipt, seed_netuid, reclaim_alpha,
+        "reclaim payout off the alpha->TAO quote", checks.MAILBOX_TAO_RECLAIM,
     )
-    print(f"  Mailbox withdrawn as TAO; user gained {gained} wei "
-          f"(matches quote {reclaim_quote} RAO)")
+    print(f"  Mailbox withdrawn as TAO: sold {sold_alpha} alpha RAO at the chain's quote")

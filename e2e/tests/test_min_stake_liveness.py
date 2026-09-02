@@ -7,11 +7,9 @@ leftovers, balances on rotated-out validators - and every call along the way
 keeps working at normal gas cost. A closing ledger then checks that everything
 deposited came back out, as delivered alpha or as TAO from sales.
 """
-from functools import partial
-
 import pytest
 
-from alpha_e2e import bootstrap, config
+from alpha_e2e import bootstrap, chain, config
 from alpha_e2e.checks import (
     assert_gas_within, assert_payout_matches_emitted, assert_payout_near_quote, min_tao_out_for,
 )
@@ -77,13 +75,12 @@ class ChurnLedger:
         print(f"  {label}: unwrapped {percent}% of shares, delivered {delivered} alpha RAO")
 
     def unwrap_for_tao_step(self, label: str, percent: int) -> None:
-        total_before = self.env.vault_total_stake(self.token_id)
+        supply_before = self.env.vault_total_supply(self.token_id)
         burn = self.env.vault_shares(self.token_id) * percent // 100
         sold_assets = (
             self.env.holder_assets(self.token_id, config.WRAPPER_USER_ADDRESS) * percent // 100
         )
-        quote = self.env.alpha_to_tao_quote(self.netuid, sold_assets)
-        min_tao_out = min_tao_out_for(quote)
+        min_tao_out = min_tao_out_for(self.env.alpha_to_tao_quote(self.netuid, sold_assets))
         balance_before = self.env.user_tao_wei()
         receipt = self.env.vault_send(
             2_500_000, f"{label}: TAO exit failed",
@@ -91,16 +88,26 @@ class ChurnLedger:
         )
         assert_gas_within(receipt, config.UNWRAP_GAS_BOUND, f"{label}: TAO exit")
         balance_after = self.env.user_tao_wei()
-        assert_payout_near_quote(
-            balance_before, balance_after, receipt, quote,
-            partial(self.env.alpha_to_tao_quote, self.netuid),
+        alpha_sold = assert_payout_near_quote(
+            balance_before, balance_after, receipt, self.netuid, sold_assets,
             f"{label}: TAO exit payout off quote",
         )
         assert_payout_matches_emitted(
             balance_before, balance_after, receipt,
             f"{label}: TAO exit paid less than it reported",
         )
-        self.sold_alpha_total += total_before - self.env.vault_total_stake(self.token_id)
+        # The payout is priced from the exit's own report of what it sold, so hold that
+        # report to the burn's share of the backing the exit found: what it left behind
+        # plus what it says it sold.
+        left_behind = self.env.vault_total_stake(
+            self.token_id, block=chain.receipt_block_number(receipt, label),
+        )
+        entitled = burn * (left_behind + alpha_sold) // supply_before
+        assert alpha_sold <= entitled + config.ROUNDING_DUST_TOTAL_RAO, (
+            f"{label}: TAO exit sold {alpha_sold} alpha RAO, more than the {entitled} the burn "
+            f"entitled it to"
+        )
+        self.sold_alpha_total += alpha_sold
         print(f"  {label}: sold {percent}% of shares for TAO")
 
     def churn_cycle(

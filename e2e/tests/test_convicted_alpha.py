@@ -177,19 +177,17 @@ def test_convicted_alpha(env):
     # --- Phase 10: unwrapForTao works while a large lock exists on the subnet -------
     remaining_shares = env.vault_shares(test_token_id)
     previewed_remaining_alpha, _ = env.preview_unwrap(test_token_id, remaining_shares)
-    remaining_tao_quote = env.alpha_to_tao_quote(test_netuid, previewed_remaining_alpha)
 
     user_tao_before = env.user_tao_wei()
-    env.vault_send(
+    receipt = env.vault_send(
         2_500_000, "unwrapForTao failed on a subnet with active locks",
         "unwrapForTao(uint256,uint256,uint256)", test_token_id, remaining_shares, 0,
     )
     final_shares = env.vault_shares(test_token_id)
     assert final_shares == 0, f"shares still {final_shares} after unwrapForTao"
 
-    tao_gained = checks.assert_tao_gain_near_quote(
-        user_tao_before, env.user_tao_wei(), remaining_tao_quote,
+    sold_alpha = checks.assert_payout_near_quote(
+        user_tao_before, env.user_tao_wei(), receipt, test_netuid, previewed_remaining_alpha,
         "unwrapForTao payout off the alpha->TAO quote",
     )
-    print(f"  Remaining shares exited as TAO: gained {tao_gained} wei "
-          f"(quote {remaining_tao_quote} RAO)")
+    print(f"  Remaining shares exited as TAO: sold {sold_alpha} alpha RAO at the chain's quote")
