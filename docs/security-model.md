@@ -126,9 +126,9 @@ validator attestation can reconstruct the prior cohort's entitlement.
 
 ## Known tradeoffs
 
-- The netuid-scoped dissolution blackout can temporarily freeze an old
-  position while a successor subnet on the same netuid dissolves
-  ([edge-cases.md](edge-cases.md)).
+- The dissolution blackout holds an already-dissolved position during
+  the late window of a successor subnet's cleanup on the same netuid,
+  once the registration block reads zero ([edge-cases.md](edge-cases.md)).
 - Amounts below the chain's minimum stake size can leave the stake split
   drifted from target weights; share value is unaffected.
 - `wrap` reads the caller's mailbox only under the chosen key. A hotkey

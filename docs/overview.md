@@ -49,8 +49,10 @@ The first `wrap` on a subnet deploys the clone and opens the position;
 
 ## Share price
 
-Shares are priced by the ratio of staked alpha to share supply. The lens
-call `sharePrice(tokenId)` returns alpha per share, scaled by 1e18. Staking
+Shares are priced by the ratio of staked alpha to share supply, with the
+same virtual offsets every rail applies. The lens call `sharePrice(tokenId)`
+returns alpha per share, scaled by 1e18, matching what a live unwrap of one
+share unit pays. Staking
 emissions accrue to the clone's stake, so the price rises over time and
 later depositors mint fewer shares per alpha. The price counts staked
 alpha only; native TAO sitting on the clone is owed to specific holders

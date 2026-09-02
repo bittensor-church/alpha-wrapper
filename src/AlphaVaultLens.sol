@@ -224,11 +224,11 @@ contract AlphaVaultLens {
         return hotkeys;
     }
 
-    /// @dev Guard for quotes that describe only the currently-registered subnet: the blackout check
+    /// @dev Guard for quotes that describe only the currently-registered subnet: the hold check
     ///      must precede the registration-block comparison so an in-flux registration is never
     ///      classified as dissolved.
     function _requireCurrentRegistration(uint256 tokenId) private view {
-        VaultReads.requireNotDissolving(VaultMath.netuidOf(tokenId));
+        VaultReads.requireNotHeldByDissolution(tokenId);
         if (VaultReads.isIssuedForDissolvedSubnet(tokenId)) revert SubnetDissolved();
     }
 

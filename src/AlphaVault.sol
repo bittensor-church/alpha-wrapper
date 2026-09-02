@@ -345,7 +345,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         if (balanceOf(msg.sender, tokenId) < shares) revert InsufficientShares();
         address clone = subnetClone[tokenId];
         uint16 netuid = VaultMath.netuidOf(tokenId);
-        VaultReads.requireNotDissolving(netuid);
+        VaultReads.requireNotHeldByDissolution(tokenId);
 
         if (VaultReads.isIssuedForDissolvedSubnet(tokenId)) revert NothingToUnwrap();
 
@@ -984,7 +984,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         address clone = subnetClone[tokenId];
         if (clone == address(0)) revert NothingToUnwrap();
         uint16 netuid = VaultMath.netuidOf(tokenId);
-        VaultReads.requireNotDissolving(netuid);
+        VaultReads.requireNotHeldByDissolution(tokenId);
 
         bytes32 coldkey = VaultReads.coldkeyOf(clone);
         VaultReads.Slot[] memory slots = _slots[tokenId];
@@ -1047,7 +1047,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         address clone = subnetClone[tokenId];
         if (clone == address(0)) revert NothingToUnwrap();
         uint16 netuid = VaultMath.netuidOf(tokenId);
-        VaultReads.requireNotDissolving(netuid);
+        VaultReads.requireNotHeldByDissolution(tokenId);
         if (VaultReads.isIssuedForDissolvedSubnet(tokenId)) revert BackingUnchanged();
 
         bytes32 coldkey = VaultReads.coldkeyOf(clone);

@@ -71,7 +71,8 @@ library VaultReads {
     /// @dev Whether a dissolution in progress on the netuid holds this token's payout. A token a
     ///      different subnet has since replaced is not held: that subnet's cleanup drains its own
     ///      clone and leaves the old refund whole. Once cleanup has cleared the registration block
-    ///      the two cannot be told apart, so a replaced token waits out that late window too.
+    ///      a replaced token reads like one in its own late window, and the vault keeps that window
+    ///      shut rather than price a refund the chain may still be settling, so it waits too.
     function isHeldByDissolution(uint256 tokenId) internal view returns (bool) {
         uint16 netuid = VaultMath.netuidOf(tokenId);
         if (!isDissolving(netuid)) return false;

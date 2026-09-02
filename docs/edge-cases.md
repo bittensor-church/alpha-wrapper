@@ -10,8 +10,9 @@ Subtensor dissolves subnets asynchronously. Chain-side cleanup burns the
 subnet's alpha, converts the pool to TAO and refunds holders pro-rata,
 the vault's clone included.
 
-While cleanup runs the vault freezes every share-priced operation on
-that netuid; the calls revert with `SubnetInDissolutionBlackoutPeriod`.
+While cleanup runs the vault freezes every operation priced on the
+dissolving generation; the calls revert with
+`SubnetInDissolutionBlackoutPeriod`.
 Pricing mid-refund would distribute an incomplete amount.
 
 Once cleanup completes the position is permanently dissolved: the
@@ -28,9 +29,9 @@ position on a reused netuid keeps paying its refund while its successor
 dissolves: the successor's cleanup drains only the successor's clone. The
 one exception is the late window of that cleanup, once the registration
 block already reads zero. There the vault cannot tell the successor's
-cleanup from the old position's own, so `unwrap` and `previewUnwrap` wait
-until it completes. `wrap`, `rebalance` and `unwrapForTao` act on the
-live generation only and stay frozen for the whole blackout.
+cleanup from the old position's own, so the old position waits until it
+completes. Calls that price the live generation stay frozen for the
+whole blackout.
 
 A dissolution refund can also land on your deposit mailbox if stake was
 still parked there; `reclaimTaoFromMailbox(netuid)` recovers it.
