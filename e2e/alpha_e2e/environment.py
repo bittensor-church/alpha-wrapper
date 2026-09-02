@@ -70,11 +70,14 @@ class Environment:
             for hotkey_pubkey in hotkey_pubkeys
         )
 
-    def vault_shares(self, token_id: int, holder: Optional[str] = None) -> int:
-        """ERC1155 share balance of `holder` (default: the wrapper user)."""
+    def vault_shares(
+        self, token_id: int, holder: Optional[str] = None, block: Optional[int] = None,
+    ) -> int:
+        """ERC1155 share balance of `holder` (default: the wrapper user), live or as of
+        `block`."""
         return int(chain.cast_call(
             self.vault_address, "balanceOf(address,uint256)(uint256)",
-            holder or config.WRAPPER_USER_ADDRESS, token_id,
+            holder or config.WRAPPER_USER_ADDRESS, token_id, block=block,
         ))
 
     def vault_total_supply(self, token_id: int) -> int:

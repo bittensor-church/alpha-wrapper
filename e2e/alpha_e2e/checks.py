@@ -95,23 +95,27 @@ def assert_payout_matches_emitted(
 
 def assert_payout_near_quote(
     balance_before_wei: int, balance_after_wei: int, receipt: dict,
-    netuid: int, quoted_alpha_rao: int, message: str, sale: TaoSale = VAULT_TAO_EXIT,
+    netuid: int, quoted_alpha_rao: Optional[int], message: str,
+    sale: TaoSale = VAULT_TAO_EXIT,
 ) -> int:
-    """Assert the exit sold at least the alpha the position was quoted to hold and paid
-    within +/-10% of the chain's quote for the alpha it reports selling, priced at the
-    block before the exit. Returns the alpha sold (RAO).
+    """Assert the exit paid within +/-10% of the chain's quote for the alpha it reports
+    selling, priced at the block before the exit, and sold at least `quoted_alpha_rao`.
+    Returns the alpha sold (RAO).
 
     An exit sells whatever backs the position when it runs, and a staking dividend
     landing first can multiply that, so no amount captured earlier bounds the payout;
     the reported amount priced at the exit's own block does. The quoted amount keeps
-    that report honest against selling short; a partial exit's caller bounds
-    over-selling with what the exit left behind.
+    that report honest against selling short. Pass None for a partial exit: the vault
+    cuts one short wherever a slot's leftover would fall under the chain's dust
+    threshold and refunds those shares, so its caller holds the report to the shares
+    that actually burned instead.
     """
     payout = reconstructed_payout(balance_before_wei, balance_after_wei, receipt, message)
     alpha_sold = chain.event_word(receipt, sale.event, sale.alpha_word, message)
-    assert alpha_sold >= quoted_alpha_rao - config.ROUNDING_DUST_TOTAL_RAO, (
-        f"{message} (sold {alpha_sold} alpha RAO of the {quoted_alpha_rao} quoted)"
-    )
+    if quoted_alpha_rao is not None:
+        assert alpha_sold >= quoted_alpha_rao - config.ROUNDING_DUST_TOTAL_RAO, (
+            f"{message} (sold {alpha_sold} alpha RAO of the {quoted_alpha_rao} quoted)"
+        )
     pre_exit_block = chain.receipt_block_number(receipt, message) - 1
     quote_wei = environment.alpha_to_tao_quote(netuid, alpha_sold, block=pre_exit_block) * RAO_WEI
     assert quote_wei * 9 // 10 <= payout <= quote_wei * 11 // 10, (

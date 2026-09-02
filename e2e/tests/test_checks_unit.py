@@ -153,6 +153,14 @@ def test_assert_payout_near_quote_rejects_selling_short(flat_quote):
         _check_payout(sold * PRICE_RAO * checks.RAO_WEI, alpha_sold=sold)
 
 
+def test_assert_payout_near_quote_leaves_a_partial_exit_unfloored(flat_quote):
+    sold = QUOTED_ALPHA_RAO // 2
+    assert checks.assert_payout_near_quote(
+        0, sold * PRICE_RAO * checks.RAO_WEI - EXIT_GAS_WEI, _tao_exit_receipt(sold, 0),
+        NETUID, None, "ctx",
+    ) == sold
+
+
 def test_assert_payout_near_quote_reads_the_mailbox_sale(flat_quote):
     mailbox = checks.MAILBOX_TAO_RECLAIM
     assert _check_payout(FAIR_PAYOUT_WEI, sale=mailbox) == QUOTED_ALPHA_RAO

@@ -76,7 +76,8 @@ class ChurnLedger:
 
     def unwrap_for_tao_step(self, label: str, percent: int) -> None:
         supply_before = self.env.vault_total_supply(self.token_id)
-        burn = self.env.vault_shares(self.token_id) * percent // 100
+        shares_before = self.env.vault_shares(self.token_id)
+        burn = shares_before * percent // 100
         sold_assets = (
             self.env.holder_assets(self.token_id, config.WRAPPER_USER_ADDRESS) * percent // 100
         )
@@ -89,7 +90,7 @@ class ChurnLedger:
         assert_gas_within(receipt, config.UNWRAP_GAS_BOUND, f"{label}: TAO exit")
         balance_after = self.env.user_tao_wei()
         alpha_sold = assert_payout_near_quote(
-            balance_before, balance_after, receipt, self.netuid, sold_assets,
+            balance_before, balance_after, receipt, self.netuid, None,
             f"{label}: TAO exit payout off quote",
         )
         assert_payout_matches_emitted(
@@ -97,15 +98,17 @@ class ChurnLedger:
             f"{label}: TAO exit paid less than it reported",
         )
         # The payout is priced from the exit's own report of what it sold, so hold that
-        # report to the burn's share of the backing the exit found: what it left behind
-        # plus what it says it sold.
-        left_behind = self.env.vault_total_stake(
-            self.token_id, block=chain.receipt_block_number(receipt, label),
-        )
-        entitled = burn * (left_behind + alpha_sold) // supply_before
-        assert alpha_sold <= entitled + config.ROUNDING_DUST_TOTAL_RAO, (
-            f"{label}: TAO exit sold {alpha_sold} alpha RAO, more than the {entitled} the burn "
-            f"entitled it to"
+        # report to what the shares that actually burned (net of any refund) were worth
+        # of the backing the exit found: what it left behind plus what it says it sold.
+        exit_block = chain.receipt_block_number(receipt, label)
+        burned = shares_before - self.env.vault_shares(self.token_id, block=exit_block)
+        backing = self.env.vault_total_stake(self.token_id, block=exit_block) + alpha_sold
+        entitled = burned * backing // supply_before
+        # The refund rounds to whole shares, so allow one share's worth of alpha on top of dust.
+        slack = config.ROUNDING_DUST_TOTAL_RAO + (backing + supply_before - 1) // supply_before
+        assert abs(alpha_sold - entitled) <= slack, (
+            f"{label}: TAO exit sold {alpha_sold} alpha RAO against the {entitled} that "
+            f"{burned} burned shares were worth"
         )
         self.sold_alpha_total += alpha_sold
         print(f"  {label}: sold {percent}% of shares for TAO")
