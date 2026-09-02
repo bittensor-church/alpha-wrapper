@@ -104,9 +104,7 @@ watcher to call `recoverStray` before the deadline where possible. If the
 shortfall has already been written off, introducing that successor lets
 a later settling call count its existing alpha for the current share
 cohort; it cannot restore the entitlement of the holders who bore the
-write-off. A validator who concealed the successor can exploit that
-ordering by depositing at the written-down price before revealing the
-key. See the
+write-off. See the
 [security model](security-model.md#recovery-window-tradeoff-and-late-recovery-attack)
 for the complete attack and its loss bound.
 

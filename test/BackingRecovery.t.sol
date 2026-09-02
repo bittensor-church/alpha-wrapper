@@ -5,6 +5,7 @@ import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { AlphaVaultLens } from "src/AlphaVaultLens.sol";
 import { VaultReads } from "src/libraries/VaultReads.sol";
+import { VaultMath } from "src/libraries/VaultMath.sol";
 import {
     BackingShortfall,
     BackingUnchanged,
@@ -15,7 +16,7 @@ import {
     SubnetInDissolutionBlackoutPeriod,
     ZeroAmount
 } from "src/VaultErrors.sol";
-import { MockStaking } from "./mocks/MockStaking.sol";
+import { MockStaking, CHAIN_MIN_STAKE } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 /// @dev Covers getting a position back once the vault has lost sight of its alpha: a watcher
@@ -470,39 +471,30 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertEq(vault.balanceOf(alice, TOKEN1), 0, "not to the cohort that bore the loss");
     }
 
-    /// @dev A post-write-off depositor can capture some alpha that is found later, but the share
-    ///      mint cannot reach into the backing that remained accounted for. Alice owns the entire
-    ///      incumbent cohort, so the difference between her executable quotes before the loss and
-    ///      after recapitalization is its aggregate loss. Fuzzing one through all three validator
-    ///      slots covers partial and complete write-offs; the recovered stake carries no emissions,
-    ///      isolating the written-off principal from separately accruing yield.
-    function testFuzz_LateRecoveryCannotDiluteIncumbentByMoreThanFinalizedWriteOff(
+    /// @dev A post-write-off depositor can capture alpha found later, but cannot reach into the
+    ///      backing that remained accounted for. Partial write-offs price the new deposit between
+    ///      one quarter and four times the remaining backing, so the fuzz domain exercises material
+    ///      cohort splits rather than only negligible new holders. Complete write-offs keep the
+    ///      deposit small enough for the virtual-share mint to remain below the supply cap. The
+    ///      recovered stake carries no growth here; the separate growth test covers that case.
+    function testFuzz_LateRecovery_CannotDiluteIncumbentByMoreThanFinalizedWriteOff(
         uint256 incumbentDeposit,
-        uint256 recapitalizationDeposit,
+        uint256 recapitalizationSeed,
         uint256 hiddenSlotCount
     ) public {
         incumbentDeposit = bound(incumbentDeposit, 30 ether, 1_000_000 ether);
-        recapitalizationDeposit = bound(recapitalizationDeposit, 2e6, 1e9);
         hiddenSlotCount = bound(hiddenSlotCount, 1, 3);
 
         uint256 incumbentShares = _depositAndWrap(alice, NETUID1, incumbentDeposit);
         uint256 backingBefore = lens.totalStake(TOKEN1);
         (uint256 incumbentValueBefore,) = lens.previewUnwrap(TOKEN1, incumbentShares);
 
-        bytes32[3] memory recordedHotkeys;
-        recordedHotkeys[0] = hotkey1;
-        recordedHotkeys[1] = hotkey2;
-        recordedHotkeys[2] = hotkey3;
-        bytes32[3] memory strayHotkeys;
-        strayHotkeys[0] = hotkey4;
-        strayHotkeys[1] = hotkey5;
-        strayHotkeys[2] = keccak256("writeoff-bound-hotkey6");
-
+        bytes32[] memory recordedHotkeys = _hotkeys(hotkey1, hotkey2, hotkey3);
         uint256 hidden;
         for (uint256 i; i < hiddenSlotCount; ++i) {
             uint256 slotBalance = _getVaultStake(recordedHotkeys[i], NETUID1);
             hidden += slotBalance;
-            _simulateOffVaultSwap(NETUID1, recordedHotkeys[i], strayHotkeys[i]);
+            _simulateOffVaultSwap(NETUID1, recordedHotkeys[i], keccak256(abi.encode("stray", i)));
         }
 
         _runOutRecoveryWindow(TOKEN1);
@@ -510,10 +502,15 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         uint256 finalizedWriteOff = backingBefore - backingAfterWriteOff;
         assertEq(finalizedWriteOff, hidden, "the finalized deficit is exactly the hidden principal");
 
+        uint256 recapitalizationDeposit = backingAfterWriteOff == 0
+            ? bound(recapitalizationSeed, CHAIN_MIN_STAKE, 1e9)
+            : bound(recapitalizationSeed, backingAfterWriteOff / 4, backingAfterWriteOff * 4);
         uint256 recapitalizerShares = _depositAndWrap(bob, NETUID1, recapitalizationDeposit);
+        (uint256 recapitalizerValueBeforeRecovery,) = lens.previewUnwrap(TOKEN1, recapitalizerShares);
+        uint256 supplyAtRecovery = vault.totalSupply(TOKEN1);
         for (uint256 i; i < hiddenSlotCount; ++i) {
             vm.prank(bob);
-            vault.recoverStray(TOKEN1, strayHotkeys[i]);
+            vault.recoverStray(TOKEN1, keccak256(abi.encode("stray", i)));
         }
 
         assertEq(
@@ -523,14 +520,124 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         );
 
         (uint256 incumbentValueAfter,) = lens.previewUnwrap(TOKEN1, incumbentShares);
-        uint256 incumbentLoss =
-            incumbentValueBefore > incumbentValueAfter ? incumbentValueBefore - incumbentValueAfter : 0;
-        assertLe(incumbentLoss, finalizedWriteOff, "incumbents cannot lose accounted backing");
+        assertLe(
+            incumbentValueBefore, incumbentValueAfter + finalizedWriteOff, "incumbents cannot lose accounted backing"
+        );
 
-        (uint256 recapitalizerValue,) = lens.previewUnwrap(TOKEN1, recapitalizerShares);
-        uint256 recapitalizerGain =
-            recapitalizerValue > recapitalizationDeposit ? recapitalizerValue - recapitalizationDeposit : 0;
-        assertLe(recapitalizerGain, finalizedWriteOff, "the recapitalizer cannot capture more than the write-off");
+        (uint256 recapitalizerValueAfterRecovery,) = lens.previewUnwrap(TOKEN1, recapitalizerShares);
+        assertLe(
+            recapitalizerValueAfterRecovery,
+            recapitalizationDeposit + finalizedWriteOff,
+            "the recapitalizer cannot capture more than the write-off"
+        );
+
+        uint256 recapitalizerRecoveryGain = recapitalizerValueAfterRecovery - recapitalizerValueBeforeRecovery;
+        uint256 proRataRecoveryFloor =
+            (finalizedWriteOff * recapitalizerShares) / (supplyAtRecovery + VaultMath.VIRTUAL_SHARES);
+        assertGe(recapitalizerRecoveryGain, proRataRecoveryFloor, "the late cohort receives its share of the find");
+        if (backingAfterWriteOff == 0) {
+            assertGe(
+                recapitalizerRecoveryGain,
+                finalizedWriteOff - finalizedWriteOff / 1_000_000,
+                "a valid post-wipeout deposit captures nearly all of the recovered principal"
+            );
+        }
+    }
+
+    /// @dev Growth on a concealed position is returned with its principal. After a finalized
+    ///      partial write-off and a material new deposit, that growth can make the new cohort's
+    ///      recovery windfall larger than the amount reported by BackingWrittenOff.
+    function test_LateRecovery_GrowthCanPushWindfallPastWriteOff() public {
+        uint256 incumbentShares = _depositAndWrap(alice, NETUID1, 30 ether);
+        uint256 backingBefore = lens.totalStake(TOKEN1);
+        (uint256 incumbentValueBefore,) = lens.previewUnwrap(TOKEN1, incumbentShares);
+
+        bytes32 stray = keccak256(abi.encode("grown-stray"));
+        _simulateOffVaultSwap(NETUID1, hotkey1, stray);
+        uint256 hidden = _getVaultStake(stray, NETUID1);
+        uint256 growth = hidden * 3;
+        MockStaking(STAKING_PRECOMPILE).setStake(stray, _subnetColdkey(NETUID1), NETUID1, hidden + growth);
+
+        _runOutRecoveryWindow(TOKEN1);
+        uint256 backingAfterWriteOff = lens.totalStake(TOKEN1);
+        uint256 finalizedWriteOff = backingBefore - backingAfterWriteOff;
+        assertEq(finalizedWriteOff, hidden, "only the previously anchored principal was written off");
+
+        uint256 recapitalizationDeposit = backingAfterWriteOff;
+        uint256 recapitalizerShares = _depositAndWrap(bob, NETUID1, recapitalizationDeposit);
+        (uint256 recapitalizerValueBeforeRecovery,) = lens.previewUnwrap(TOKEN1, recapitalizerShares);
+        uint256 supplyAtRecovery = vault.totalSupply(TOKEN1);
+
+        vm.prank(bob);
+        vault.recoverStray(TOKEN1, stray);
+
+        assertEq(
+            lens.totalStake(TOKEN1),
+            backingBefore + recapitalizationDeposit + growth,
+            "the returned balance includes post-anchor growth"
+        );
+        (uint256 recapitalizerValueAfterRecovery,) = lens.previewUnwrap(TOKEN1, recapitalizerShares);
+        uint256 recapitalizerRecoveryGain = recapitalizerValueAfterRecovery - recapitalizerValueBeforeRecovery;
+        assertGt(recapitalizerRecoveryGain, finalizedWriteOff, "growth can make the windfall exceed the write-off");
+        assertGe(
+            recapitalizerRecoveryGain,
+            ((hidden + growth) * recapitalizerShares) / (supplyAtRecovery + VaultMath.VIRTUAL_SHARES),
+            "the recovery-time cohort receives its pro-rata share of principal and growth"
+        );
+
+        (uint256 incumbentValueAfter,) = lens.previewUnwrap(TOKEN1, incumbentShares);
+        assertLe(
+            incumbentValueBefore,
+            incumbentValueAfter + finalizedWriteOff,
+            "growth does not turn the written-off principal into a second incumbent loss"
+        );
+    }
+
+    /// @dev Introducing a funded successor through the attested set after finalization reaches the
+    ///      same economic outcome as recoverStray: the next settling rail adopts the balance for
+    ///      whoever holds shares then, without reconstructing the prior cohort's entitlement.
+    function test_LateAttestation_AdoptsWrittenOffAlphaForCurrentCohort() public {
+        uint256 incumbentShares = _depositAndWrap(alice, NETUID1, 30 ether);
+        uint256 backingBefore = lens.totalStake(TOKEN1);
+        (uint256 incumbentValueBefore,) = lens.previewUnwrap(TOKEN1, incumbentShares);
+
+        bytes32 successor = keccak256(abi.encode("attested-successor"));
+        uint256 hidden = _getVaultStake(hotkey1, NETUID1);
+        _simulateOffVaultSwap(NETUID1, hotkey1, successor);
+        _runOutRecoveryWindow(TOKEN1);
+        uint256 backingAfterWriteOff = lens.totalStake(TOKEN1);
+        uint256 finalizedWriteOff = backingBefore - backingAfterWriteOff;
+        assertEq(finalizedWriteOff, hidden, "the successor holds exactly the written-off principal");
+
+        uint256 recapitalizationDeposit = backingAfterWriteOff;
+        uint256 recapitalizerShares = _depositAndWrap(bob, NETUID1, recapitalizationDeposit);
+        (uint256 recapitalizerValueBeforeAdoption,) = lens.previewUnwrap(TOKEN1, recapitalizerShares);
+        uint256 supplyAtAdoption = vault.totalSupply(TOKEN1);
+
+        _setValidators(
+            NETUID1, _hotkeys(successor, hotkey2, hotkey3), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
+        );
+        vault.rebalance(NETUID1);
+
+        assertEq(
+            lens.totalStake(TOKEN1),
+            backingBefore + recapitalizationDeposit,
+            "settlement adopts the funded successor exactly once"
+        );
+        (uint256 recapitalizerValueAfterAdoption,) = lens.previewUnwrap(TOKEN1, recapitalizerShares);
+        uint256 recapitalizerAdoptionGain = recapitalizerValueAfterAdoption - recapitalizerValueBeforeAdoption;
+        assertGe(
+            recapitalizerAdoptionGain,
+            (finalizedWriteOff * recapitalizerShares) / (supplyAtAdoption + VaultMath.VIRTUAL_SHARES),
+            "the late cohort receives its share through the attestation route"
+        );
+
+        (uint256 incumbentValueAfter,) = lens.previewUnwrap(TOKEN1, incumbentShares);
+        assertLe(
+            incumbentValueBefore,
+            incumbentValueAfter + finalizedWriteOff,
+            "attestation cannot charge incumbents beyond the finalized write-off"
+        );
     }
 
     // -------------------- Mailboxes ----------------------------------------------

@@ -134,6 +134,12 @@ delegated under it. A watcher calls `try_associate_hotkey`; it does not
 re-register the key on the subnet. Association recreates the owner record
 that stake operations require, and exits go through again.
 
+From EVM tooling, first verify that the neuron-info precompile's
+`getHotkeyOwner(bytes32)` reader at `0x0805` reports no owner, then call
+`tryAssociateHotkey(bytes32)` through the neuron precompile at `0x0804`.
+Those calls are the EVM route to the same check and association; they do
+not grant the watcher control of the vault's coldkey or delegated stake.
+
 The first claimant does control later swaps of that hotkey and can strand it
 again, so this is an operational recovery rather than a permanent protocol
 repair. A watcher should retain the claiming key and keep monitoring the slot
