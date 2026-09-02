@@ -106,7 +106,8 @@ a later settling call count its existing alpha for the current share
 cohort; it cannot restore the entitlement of the holders who bore the
 write-off. A validator who concealed the successor can exploit that
 ordering by depositing at the written-down price before revealing the
-key. See [Backing resolution](design/backing-resolution.md#deliberate-swap-hide-deposit-recover-ordering)
+key. See the
+[security model](security-model.md#recovery-window-tradeoff-and-late-recovery-attack)
 for the complete attack and its loss bound.
 
 ## Signer set changes

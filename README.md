@@ -25,9 +25,6 @@ Bittensor alpha-token wrapper (ERC-1155 vault + staking precompile integration).
   chain's minimums, stray TAO
 - [Security model](docs/security-model.md) - roles, trust boundaries,
   safeguards
-- [Backing resolution](docs/design/backing-resolution.md) - what the vault
-  does when a validator's hotkey swap or a chain sweep moves its alpha: the
-  one-hop resolver, the recovery window, and the write-off
 
 Tooling docs: [`scripts/README.md`](scripts/README.md) for the on-chain
 observability scripts, [`e2e/README.md`](e2e/README.md) for the end-to-end

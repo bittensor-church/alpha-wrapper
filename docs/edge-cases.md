@@ -117,8 +117,9 @@ Whatever is still missing at the deadline is written off by a further
 on backing as a side effect. The token then reopens valued at what it can
 find, and the loss falls across everyone holding shares at that moment. Alpha found afterwards is new backing for
 whoever holds shares then. Both halves of that are deliberate - the
-alternative is a token that stays shut indefinitely. The full account is
-in [design/backing-resolution.md](design/backing-resolution.md).
+alternative is a token that stays shut indefinitely. The resulting
+late-recovery attack is documented in the
+[security model](security-model.md#recovery-window-tradeoff-and-late-recovery-attack).
 
 ## A hotkey nobody owns
 
@@ -135,9 +136,9 @@ that stake operations require, and exits go through again.
 
 The first claimant does control later swaps of that hotkey and can strand it
 again, so this is an operational recovery rather than a permanent protocol
-repair. The detailed watcher procedure and monitoring requirement are in
-[design/backing-resolution.md](design/backing-resolution.md#what-a-watcher-does).
-The vault never owns a hotkey itself.
+repair. A watcher should retain the claiming key and keep monitoring the slot
+until holders have exited or the backing has moved to a stable key. The vault
+never owns a hotkey itself.
 
 ## Stray TAO
 
