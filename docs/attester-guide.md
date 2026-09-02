@@ -96,6 +96,19 @@ the same update: a set naming a swapped-away key beside its successor
 makes deposits, alpha exits and rebalances refuse with
 `SwappedHotkeyStillAttested`; only the TAO exit stays open.
 
+That convenience rule applies only to an ordinary, still-resolvable
+one-hop swap. If the old key has been registered again, Subtensor has
+removed its successor edge, and a vault reports a backing shortfall, do
+not treat attesting the funded successor as recovery. Coordinate with a
+watcher to call `recoverStray` before the deadline where possible. If the
+shortfall has already been written off, introducing that successor lets
+a later settling call count its existing alpha for the current share
+cohort; it cannot restore the entitlement of the holders who bore the
+write-off. A validator who concealed the successor can exploit that
+ordering by depositing at the written-down price before revealing the
+key. See [Backing resolution](design/backing-resolution.md#deliberate-swap-hide-deposit-recover-ordering)
+for the complete attack and its loss bound.
+
 ## Signer set changes
 
 The registry admin replaces the signer set with

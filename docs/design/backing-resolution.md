@@ -157,6 +157,52 @@ loss. The vault does not prevent that. It is the accepted price of a
 bounded window, chosen over leaving a token shut indefinitely, and there
 is no recapitalization mechanism.
 
+### Deliberate swap-hide-deposit-recover ordering
+
+A dishonest validator can manufacture that ordering rather than merely
+benefit from an accidental late find:
+
+1. Its attested hotkey carries some of the vault's alpha. The validator
+   swaps to a successor, carrying that alpha with it, and then registers
+   the old hotkey again. Subtensor removes the successor edge, so the
+   vault sees the old key empty but can no longer discover the funded
+   successor on chain.
+2. If no watcher independently finds the successor before the recovery
+   window expires, anyone - including the validator - can finalize the
+   write-off with `syncBacking`.
+3. The validator or a collaborator deposits after the token reopens and
+   receives shares priced only against the backing the vault can still
+   locate. A complete write-off can make this depositor the dominant
+   holder for a comparatively small valid deposit.
+4. The validator reveals the funded successor and calls `recoverStray`,
+   or lets another caller do so. The returned alpha belongs pro rata to
+   the post-deposit share supply, so the new shares capture most of it.
+
+For a hidden balance that has not grown, this does **not** charge the old
+cohort for the same principal twice or expose backing that remained
+located. If `H` is the amount finalized as missing, the old cohort's
+aggregate reduction between its pre-loss claim and its post-recovery
+claim is at most `H`; as the new depositor's share of supply approaches
+100%, the reduction approaches `H`. The attack changes who receives the
+late `H` rather than extracting an additional `H` from the vault.
+
+The `BackingWrittenOff` event is not necessarily a cap on the eventual
+windfall. A hidden position can earn emissions, or the recovered source
+can contain a surplus, after the vault last anchored its expectation.
+`recoverStray` anchors the whole amount it actually moves, and all of
+that amount accrues to the holders at recovery time. The principal bound
+above therefore assumes the recovered source has not grown; any growth
+while hidden is a separate transfer to the later cohort.
+
+Naming the funded successor in a later validator attestation is not a
+retroactive recovery for the cohort that bore the loss. Before write-off,
+the unresolved record still freezes share-pricing calls and the stray
+must be recovered explicitly. After write-off, a later deposit, exit or
+rebalance can adopt that attested key and count the alpha already under
+it as backing for the holders at that later time. Once the deadline has
+been finalized, neither an attestation nor recovery reconstructs the old
+cohort's entitlement.
+
 Alpha below the chain's movement floor, and dust a chain operation
 rounds away, may stay unrecovered and be socialized the same way.
 
