@@ -470,6 +470,69 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertEq(vault.balanceOf(alice, TOKEN1), 0, "not to the cohort that bore the loss");
     }
 
+    /// @dev A post-write-off depositor can capture some alpha that is found later, but the share
+    ///      mint cannot reach into the backing that remained accounted for. Alice owns the entire
+    ///      incumbent cohort, so the difference between her executable quotes before the loss and
+    ///      after recapitalization is its aggregate loss. Fuzzing one through all three validator
+    ///      slots covers partial and complete write-offs; the recovered stake carries no emissions,
+    ///      isolating the written-off principal from separately accruing yield.
+    function testFuzz_LateRecoveryCannotDiluteIncumbentByMoreThanFinalizedWriteOff(
+        uint256 incumbentDeposit,
+        uint256 recapitalizationDeposit,
+        uint256 hiddenSlotCount
+    ) public {
+        incumbentDeposit = bound(incumbentDeposit, 30 ether, 1_000_000 ether);
+        recapitalizationDeposit = bound(recapitalizationDeposit, 2e6, 1e9);
+        hiddenSlotCount = bound(hiddenSlotCount, 1, 3);
+
+        uint256 incumbentShares = _depositAndWrap(alice, NETUID1, incumbentDeposit);
+        uint256 backingBefore = lens.totalStake(TOKEN1);
+        (uint256 incumbentValueBefore,) = lens.previewUnwrap(TOKEN1, incumbentShares);
+
+        bytes32[3] memory recordedHotkeys;
+        recordedHotkeys[0] = hotkey1;
+        recordedHotkeys[1] = hotkey2;
+        recordedHotkeys[2] = hotkey3;
+        bytes32[3] memory strayHotkeys;
+        strayHotkeys[0] = hotkey4;
+        strayHotkeys[1] = hotkey5;
+        strayHotkeys[2] = keccak256("writeoff-bound-hotkey6");
+
+        uint256 hidden;
+        for (uint256 i; i < hiddenSlotCount; ++i) {
+            uint256 slotBalance = _getVaultStake(recordedHotkeys[i], NETUID1);
+            hidden += slotBalance;
+            _simulateOffVaultSwap(NETUID1, recordedHotkeys[i], strayHotkeys[i]);
+        }
+
+        _runOutRecoveryWindow(TOKEN1);
+        uint256 backingAfterWriteOff = lens.totalStake(TOKEN1);
+        uint256 finalizedWriteOff = backingBefore - backingAfterWriteOff;
+        assertEq(finalizedWriteOff, hidden, "the finalized deficit is exactly the hidden principal");
+
+        uint256 recapitalizerShares = _depositAndWrap(bob, NETUID1, recapitalizationDeposit);
+        for (uint256 i; i < hiddenSlotCount; ++i) {
+            vm.prank(bob);
+            vault.recoverStray(TOKEN1, strayHotkeys[i]);
+        }
+
+        assertEq(
+            lens.totalStake(TOKEN1),
+            backingBefore + recapitalizationDeposit,
+            "recovery restores only the written-off principal plus the new deposit"
+        );
+
+        (uint256 incumbentValueAfter,) = lens.previewUnwrap(TOKEN1, incumbentShares);
+        uint256 incumbentLoss =
+            incumbentValueBefore > incumbentValueAfter ? incumbentValueBefore - incumbentValueAfter : 0;
+        assertLe(incumbentLoss, finalizedWriteOff, "incumbents cannot lose accounted backing");
+
+        (uint256 recapitalizerValue,) = lens.previewUnwrap(TOKEN1, recapitalizerShares);
+        uint256 recapitalizerGain =
+            recapitalizerValue > recapitalizationDeposit ? recapitalizerValue - recapitalizationDeposit : 0;
+        assertLe(recapitalizerGain, finalizedWriteOff, "the recapitalizer cannot capture more than the write-off");
+    }
+
     // -------------------- Mailboxes ----------------------------------------------
 
     /// @dev A hotkey swap carries a waiting mailbox deposit along with everyone else's stake, and
