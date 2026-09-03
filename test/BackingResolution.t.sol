@@ -39,7 +39,7 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.wrap(NETUID1, hotkey1, 0);
         vm.prank(alice);
         vm.expectPartialRevert(BackingShortfall.selector);
-        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice), 0);
         vm.prank(bob);
         vm.expectPartialRevert(BackingShortfall.selector);
         vault.unwrapForTao(TOKEN1, shares / 4, 0);
@@ -126,7 +126,7 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
 
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice), 0);
     }
 
     /// @dev A swap can carry one slot's alpha onto a key another slot has itself moved off. Nothing
@@ -143,7 +143,7 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "the whole position is counted once");
         uint256 quarter = vault.balanceOf(alice, TOKEN1) / 4;
         vm.prank(alice);
-        vault.unwrap(TOKEN1, quarter, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, quarter, _toSubstrate(alice), 0);
     }
 
     /// @dev A swap can leave one validator's alpha sitting under another validator's attested
@@ -259,7 +259,7 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         _runOutRecoveryWindow(TOKEN1);
 
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
         assertEq(vault.totalSupply(TOKEN1), 0, "the shares retire against what is left");
 
         _depositAndWrap(bob, NETUID1, 30 ether);

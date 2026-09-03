@@ -47,7 +47,7 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
         uint256 shares = _depositAndWrap(alice, NETUID1, 10 ether);
 
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
         assertEq(vault.totalSupply(TOKEN1), 0, "the exit must retire the whole supply");
 
         (uint256 alpha, uint256 tao) = lens.previewUnwrap(TOKEN1, 1);
@@ -67,7 +67,7 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
         uint256 shares = _depositAndWrap(alice, NETUID1, 10 ether);
 
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
         _donateToClone(vault.subnetClone(TOKEN1), 5 ether);
 
         assertEq(lens.claimableTaoOf(alice, TOKEN1), 0);

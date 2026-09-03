@@ -132,7 +132,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         _setAlphaPriceReadsZero(NETUID1);
 
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
 
         uint256 received = _userStakeAcrossHotkeys(alice, NETUID1);
         assertEq(received, previewedAssets, "zero oracle read falls through to the chain floor");
@@ -154,7 +154,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         uint256 shares = vault.balanceOf(alice, tokenId);
         vm.prank(alice);
         vm.expectRevert(ConsolidationBelowFloor.selector);
-        vault.unwrap(tokenId, shares, _toSubstrate(alice));
+        vault.unwrap(tokenId, shares, _toSubstrate(alice), 0);
     }
 
     // The rail ConsolidationBelowFloor points at: the same dust-only vault exits in full via the
@@ -194,7 +194,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertGt(previewAssets, 10 ether, "request must exceed any single slot to force a gather");
 
         vm.prank(alice);
-        vault.unwrap(TOKEN1, burnShares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, burnShares, _toSubstrate(alice), 0);
 
         uint256 received = _userStakeAcrossHotkeys(alice, NETUID1);
         assertEq(received, previewAssets, "delivery is exact and matches the preview");
@@ -216,7 +216,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         emit Unwrapped(alice, TOKEN1, shares, expectedAlphaOut);
 
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
 
         assertEq(_userStakeAcrossHotkeys(_toSubstrate(alice), NETUID1), expectedAlphaOut);
     }

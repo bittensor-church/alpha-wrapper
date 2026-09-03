@@ -107,8 +107,8 @@ def test_min_stake_floor(env):
     dust_burn = dust_shares * 5 // 6
     env.vault_send(
         2_500_000, "Dust consolidation: partial unwrap failed",
-        "unwrap(uint256,uint256,bytes32)",
-        dust_token_id, dust_burn, env.wrapper_substrate_coldkey,
+        "unwrap(uint256,uint256,bytes32,uint256)",
+        dust_token_id, dust_burn, env.wrapper_substrate_coldkey, 1,
     )
     dust_residue = env.stake(dust_hotkey_pubkey, dust_clone_coldkey, dust_netuid)
     assert dust_residue * dust_price // 10**18 < chain_min_stake, (

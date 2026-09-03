@@ -265,7 +265,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         bytes32 dest = keccak256("dest");
         vm.prank(alice);
         vm.expectRevert();
-        vault.unwrap(TOKEN1, shares, dest);
+        vault.unwrap(TOKEN1, shares, dest, 0);
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
@@ -407,7 +407,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
 
         bytes32 bobDest = keccak256("bobDest");
         vm.prank(bob);
-        vault.unwrap(TOKEN1, bobShares, bobDest);
+        vault.unwrap(TOKEN1, bobShares, bobDest, 0);
 
         assertEq(vault.balanceOf(bob, TOKEN1), 0);
         uint256 bobReceived = _userStakeAcrossHotkeys(bobDest, NETUID1);
@@ -487,7 +487,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
 
         bytes32 dest = keccak256("alice-substrate");
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares - half, dest);
+        vault.unwrap(TOKEN1, shares - half, dest, 0);
 
         assertEq(vault.balanceOf(alice, TOKEN1), 0);
         uint256 received = _userStakeAcrossHotkeys(dest, NETUID1);

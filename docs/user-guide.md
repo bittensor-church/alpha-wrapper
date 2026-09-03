@@ -71,17 +71,27 @@ There are two exits from a live subnet, and a third path once a subnet is
 gone. **`unwrap` is the default - use `unwrapForTao` only when `unwrap`
 cannot serve you.**
 
-`unwrap(tokenId, shares, yourColdkey)` returns staked alpha. The vault
+`unwrap(tokenId, shares, yourColdkey, minAlphaOut)` returns staked alpha. The vault
 burns the shares and transfers your pro-rata alpha to `yourColdkey` in a
 single transfer. The alpha arrives still staked on the subnet, under one
 of the current validators; unstake it yourself if you want liquid TAO.
 Because nothing here trades against the subnet's pool, an exit through
 this rail costs exactly your pro-rata share and leaves every other
-holder's backing untouched. Delivery is all-or-nothing: you receive the
-full quote, to within a few RAO of chain-side rounding, or the call
-reverts. A request below the chain's minimum stake size reverts
+holder's backing untouched. Use `previewUnwrap` to choose `minAlphaOut`:
+the call reverts `SlippageExceeded` if the amount actually credited to
+your destination stake is lower. If you
+only need to rule out a zero-alpha retirement, use `1`. A few RAO can be
+lost to chain-side stake-share rounding, so leave only the tolerance you
+actually accept. A request below the chain's minimum stake size reverts
 (`WithdrawTooSmall`); see the TAO exit below for the way out. Double-check
 the coldkey argument - the chain delivers to whatever key you name.
+
+Do not pass `minAlphaOut = 0` by default. Zero waives the alpha check and
+has two deliberate uses. First, after a complete backing write-off,
+`previewUnwrap` returns zero and a zero-floor `unwrap` burns the shares for
+zero alpha. Those shares then have no claim on alpha found later; a positive
+floor preserves them for a possible recovery. Second, a dissolved-subnet
+`unwrap` pays TAO rather than alpha, so its alpha floor must be zero.
 
 `unwrapForTao(tokenId, shares, minTaoOut)` sells your share of the backing
 into the subnet's pool and pays you native TAO on your EVM address. Treat
@@ -108,10 +118,12 @@ comes back as shares for another try. With other holders in the token a
 sub-minimum burn is refused (`WithdrawTooSmall`); top your position up
 with one more deposit, then exit.
 
-After a subnet dissolves, `unwrap(tokenId, shares, anything)` pays your
+After a subnet dissolves, `unwrap(tokenId, shares, anything, 0)` pays your
 pro-rata part of the subnet's TAO refund in native TAO; the coldkey
-argument is unused there. See [edge-cases.md](edge-cases.md) for the
-dissolution timeline.
+argument is unused there. A positive `minAlphaOut` reverts instead, which
+protects a transaction prepared for a live alpha exit from unexpectedly
+burning for TAO after dissolution. See [edge-cases.md](edge-cases.md) for
+the dissolution timeline.
 
 `previewUnwrap(tokenId, shares)` quotes the alpha exit on a live subnet
 and the TAO payout on a dissolved one; the TAO market order is priced

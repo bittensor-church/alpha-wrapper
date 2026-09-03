@@ -50,12 +50,12 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         // guard (not NothingToUnwrap, totalAlpha is still > 0), no shares burned.
         vm.prank(alice);
         vm.expectRevert(ZeroAmount.selector);
-        vault.unwrap(TOKEN1, 1, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, 1, _toSubstrate(alice), 0);
         assertEq(vault.balanceOf(alice, TOKEN1), shares);
 
         // A real share amount pays out its proportional value.
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice), 0);
         uint256 received = _userStakeAcrossHotkeys(alice, NETUID1);
         assertApproxEqAbs(received, 5 ether, 1e9);
     }
@@ -85,12 +85,12 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         uint256 aliceExpected = (pot * aliceShares) / (aliceShares + bobShares);
         uint256 aliceBefore = alice.balance;
         vm.prank(alice);
-        vault.unwrap(tokenId, aliceShares, _toSubstrate(alice));
+        vault.unwrap(tokenId, aliceShares, _toSubstrate(alice), 0);
         assertEq(alice.balance - aliceBefore, aliceExpected);
 
         uint256 bobBefore = bob.balance;
         vm.prank(bob);
-        vault.unwrap(tokenId, bobShares, _toSubstrate(bob));
+        vault.unwrap(tokenId, bobShares, _toSubstrate(bob), 0);
         assertEq(bob.balance - bobBefore, pot - aliceExpected);
 
         assertEq(clone.balance, 0);
@@ -116,7 +116,7 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
 
         uint256 before = alice.balance;
         vm.prank(alice);
-        vault.unwrap(tokenId, shares, _toSubstrate(alice));
+        vault.unwrap(tokenId, shares, _toSubstrate(alice), 0);
         assertEq(alice.balance - before, taoQuote);
     }
 
@@ -135,13 +135,13 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         assertEq(clone.balance, 0);
         vm.prank(alice);
         vm.expectRevert(NothingToUnwrap.selector);
-        vault.unwrap(tokenId, shares, _toSubstrate(alice));
+        vault.unwrap(tokenId, shares, _toSubstrate(alice), 0);
 
         // Shares survived: once the dissolution TAO lands, the same position pays out.
         vm.deal(clone, 7 ether);
         uint256 before = alice.balance;
         vm.prank(alice);
-        vault.unwrap(tokenId, shares, _toSubstrate(alice));
+        vault.unwrap(tokenId, shares, _toSubstrate(alice), 0);
         assertEq(alice.balance - before, 7 ether);
         assertEq(vault.balanceOf(alice, tokenId), 0);
     }

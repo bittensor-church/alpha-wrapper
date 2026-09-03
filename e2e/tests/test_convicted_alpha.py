@@ -153,8 +153,8 @@ def test_convicted_alpha(env):
 
     env.vault_send(
         2_000_000, "unwrap to a lock-holding coldkey failed",
-        "unwrap(uint256,uint256,bytes32)",
-        test_token_id, half_shares, config.ALICE_COLDKEY_PUBKEY,
+        "unwrap(uint256,uint256,bytes32,uint256)",
+        test_token_id, half_shares, config.ALICE_COLDKEY_PUBKEY, 1,
     )
 
     alice_received_alpha = alice_subnet_alpha() - alice_subnet_alpha_before_unwrap

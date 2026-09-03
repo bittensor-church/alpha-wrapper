@@ -111,8 +111,8 @@ def test_full_flow(env):
 
         env.vault_send(
             2_000_000, f"unwrap for netuid {netuid} failed",
-            "unwrap(uint256,uint256,bytes32)",
-            token_id, shares, env.wrapper_substrate_coldkey,
+            "unwrap(uint256,uint256,bytes32,uint256)",
+            token_id, shares, env.wrapper_substrate_coldkey, 1,
         )
         remaining_shares = env.vault_shares(token_id)
         assert remaining_shares == 0, (
@@ -377,8 +377,8 @@ def test_full_flow(env):
     )
     env.vault_send(
         2_000_000, "Phase 13 unwrap failed",
-        "unwrap(uint256,uint256,bytes32)",
-        emission_token_id, emission_shares, env.wrapper_substrate_coldkey,
+        "unwrap(uint256,uint256,bytes32,uint256)",
+        emission_token_id, emission_shares, env.wrapper_substrate_coldkey, 1,
     )
     delivered_after = env.total_stake_across(
         env.wrapper_substrate_coldkey, emission_netuid, emission_hotkeys,
@@ -424,8 +424,8 @@ def test_full_flow(env):
     )
     env.vault_send(
         2_000_000, "Phase 14 unwrap failed",
-        "unwrap(uint256,uint256,bytes32)",
-        rotation_token_id, rotation_shares, env.wrapper_substrate_coldkey,
+        "unwrap(uint256,uint256,bytes32,uint256)",
+        rotation_token_id, rotation_shares, env.wrapper_substrate_coldkey, 1,
     )
     delivered_after = env.total_stake_across(
         env.wrapper_substrate_coldkey, rotation_netuid, rotation_hotkeys,

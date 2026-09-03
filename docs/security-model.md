@@ -68,9 +68,9 @@ over several sales.
 - First-depositor share-price inflation is blunted with virtual shares
   and assets (the ERC-4626 pattern), and a share-supply cap keeps the
   TAO claim index exact.
-- Market-order exits are slippage-bounded by the caller's `minTaoOut`,
-  and the mint by their `minSharesOut`, so a rate that moves between the
-  quote and the call costs the caller no more than they allowed.
+- Alpha exits are bounded by the caller's `minAlphaOut`, market-order exits
+  by `minTaoOut`, and mints by `minSharesOut`, so an execution below the
+  caller's chosen floor reverts atomically.
 - Backing the vault cannot account for shuts every share-pricing and
   alpha-moving path rather than being priced around, so an understated
   total can never be minted or redeemed against. Recovery is open to
@@ -123,6 +123,16 @@ It requires active monitoring: watchers should start the window promptly,
 identify erased or multi-hop successors off chain, and recover them before the
 deadline whenever possible. After finalization, neither recovery nor a new
 validator attestation can reconstruct the prior cohort's entitlement.
+
+A complete write-off makes the current alpha value of every outstanding share
+zero. `previewUnwrap` reports that zero explicitly. `unwrap` accepts a
+`minAlphaOut`: any positive value preserves the shares, while zero explicitly
+authorizes burning them for no alpha. A holder who does so gives up only a
+contingent claim on backing already written off, not located backing or accrued
+TAO; claimable TAO survives the burn. If the missing alpha is found later, it is
+distributed across only the shares still outstanding then. This zero-floor
+retirement is the liveness endpoint of the same final write-off policy, not an
+additional loss imposed on the caller.
 
 ## Known tradeoffs
 

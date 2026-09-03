@@ -153,16 +153,20 @@ contract AlphaVaultLens {
     ///         (a replaced position pays through its successor's cleanup, as `unwrap` does),
     ///         `SubnetDissolved` for a dissolved position whose clone holds no TAO refund, and
     ///         `BackingShortfall` while any backing is unaccounted for, exactly as `unwrap` would.
-    ///         Live-path delivery is exact to within a few RAO of chain-side share rounding: unwrap
-    ///         delivers this amount or reverts, so a sub-floor total is not deliverable here and
-    ///         must be exited via unwrapForTao. That voluntary alpha-for-TAO sell is a market order
-    ///         with no preview of its own: its payout is bounded by the caller's minTaoOut, not
-    ///         quoted here. `tao` is non-zero only for the dissolved-subnet payout. The caller's
+    ///         The live-path quote is the nominal pro-rata entitlement; chain-side share rounding
+    ///         can make the observed recipient credit a few RAO lower. Using this quote as
+    ///         `minAlphaOut` therefore delivers at least the quote or reverts. A sub-floor total is
+    ///         not deliverable here and must be exited via unwrapForTao. A zero alpha quote with
+    ///         shares outstanding means all backing was written off: `unwrap` then retires shares
+    ///         for zero only when the caller explicitly passes a zero floor. Keeping a positive floor
+    ///         preserves the shares for any later recovery. That voluntary alpha-for-TAO sell is a
+    ///         market order with no preview of its own: its payout is bounded by the caller's
+    ///         minTaoOut, not quoted here. `tao` is non-zero only for the dissolved-subnet payout. The caller's
     ///         claimable-TAO entitlement is never part of this quote: it survives unwrapping and
     ///         is quoted by `claimableTaoOf`.
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @param  shares  Shares being previewed.
-    /// @return alpha   Alpha delivered on the live path.
+    /// @return alpha   Nominal pro-rata alpha requested on the live path.
     /// @return tao     Native TAO paid on the dissolved path.
     function previewUnwrap(uint256 tokenId, uint256 shares) external view returns (uint256 alpha, uint256 tao) {
         if (shares == 0) return (0, 0);

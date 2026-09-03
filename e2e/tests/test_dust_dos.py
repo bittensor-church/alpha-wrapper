@@ -57,7 +57,7 @@ def test_rotated_out_dust_cannot_lock_the_vault(env):
     partial_burn = env.vault_shares(token_id) * 5 // 6
     env.vault_send(
         2_500_000, "Rotated-out dust: partial unwrap failed",
-        "unwrap(uint256,uint256,bytes32)", token_id, partial_burn, env.wrapper_substrate_coldkey,
+        "unwrap(uint256,uint256,bytes32,uint256)", token_id, partial_burn, env.wrapper_substrate_coldkey, 1,
     )
     dust_residue = env.stake(rotated_out_hotkey_pubkey, clone_coldkey, netuid)
     assert env.alpha_value_tao(netuid, dust_residue) < chain_min_stake, (
@@ -73,8 +73,8 @@ def test_rotated_out_dust_cannot_lock_the_vault(env):
     refusal_receipt = env.assert_vault_reverts_with(
         "ConsolidationBelowFloor()", 1_500_000,
         "Rotated-out dust: alpha exit did NOT revert as ConsolidationBelowFloor",
-        "unwrap(uint256,uint256,bytes32)",
-        token_id, remaining_shares, env.wrapper_substrate_coldkey,
+        "unwrap(uint256,uint256,bytes32,uint256)",
+        token_id, remaining_shares, env.wrapper_substrate_coldkey, 0,
     )
     assert_gas_within(
         refusal_receipt, config.REVERT_GAS_BOUND, "Rotated-out dust: alpha-exit refusal",
@@ -121,8 +121,8 @@ def test_rotated_out_dust_cannot_lock_the_vault(env):
     )
     env.vault_send(
         2_500_000, "Rotated-out dust: follow-up unwrap failed",
-        "unwrap(uint256,uint256,bytes32)",
-        token_id, env.vault_shares(token_id), env.wrapper_substrate_coldkey,
+        "unwrap(uint256,uint256,bytes32,uint256)",
+        token_id, env.vault_shares(token_id), env.wrapper_substrate_coldkey, 1,
     )
     print("  Round-trip after the dust episode: wrap and unwrap both clean")
 
@@ -161,8 +161,8 @@ def test_price_crash_cannot_lock_exits(env):
     refusal_receipt = env.assert_vault_reverts_with(
         "WithdrawTooSmall()", 1_500_000,
         "Price crash: alpha exit did NOT revert as WithdrawTooSmall",
-        "unwrap(uint256,uint256,bytes32)",
-        token_id, crashed_shares, env.wrapper_substrate_coldkey,
+        "unwrap(uint256,uint256,bytes32,uint256)",
+        token_id, crashed_shares, env.wrapper_substrate_coldkey, 0,
     )
     assert_gas_within(refusal_receipt, config.REVERT_GAS_BOUND, "Price crash: alpha-exit refusal")
     print("  Alpha exit refused up front as WithdrawTooSmall, without burning the gas budget")
@@ -201,8 +201,8 @@ def test_price_crash_cannot_lock_exits(env):
     quoted_alpha, _ = env.preview_unwrap(token_id, post_crash_shares)
     env.vault_send(
         2_500_000, "Price crash: post-crash unwrap failed",
-        "unwrap(uint256,uint256,bytes32)",
-        token_id, post_crash_shares, env.wrapper_substrate_coldkey,
+        "unwrap(uint256,uint256,bytes32,uint256)",
+        token_id, post_crash_shares, env.wrapper_substrate_coldkey, 1,
     )
     delivered = env.total_stake_across(
         env.wrapper_substrate_coldkey, netuid,
@@ -285,7 +285,7 @@ def test_sub_floor_co_holder_cannot_be_locked_in_or_leak_the_other_holder(env):
     alpha_refusal_receipt = env.assert_vault_reverts_with(
         "WithdrawTooSmall()", 1_500_000,
         "Co-holder: sub-floor alpha exit did NOT revert as WithdrawTooSmall",
-        "unwrap(uint256,uint256,bytes32)", token_id, small_holder_shares, second_holder_coldkey,
+        "unwrap(uint256,uint256,bytes32,uint256)", token_id, small_holder_shares, second_holder_coldkey, 0,
         private_key=config.SECOND_HOLDER_PRIVATE_KEY, sender=config.SECOND_HOLDER_ADDRESS,
     )
     assert_gas_within(
@@ -316,8 +316,8 @@ def test_sub_floor_co_holder_cannot_be_locked_in_or_leak_the_other_holder(env):
     small_holder_quote, _ = env.preview_unwrap(token_id, small_holder_shares)
     env.vault_send(
         2_500_000, "Co-holder: post-top-up exit failed",
-        "unwrap(uint256,uint256,bytes32)",
-        token_id, small_holder_shares, second_holder_coldkey,
+        "unwrap(uint256,uint256,bytes32,uint256)",
+        token_id, small_holder_shares, second_holder_coldkey, 1,
         private_key=config.SECOND_HOLDER_PRIVATE_KEY,
     )
     assert env.vault_shares(token_id, config.SECOND_HOLDER_ADDRESS) == 0, (

@@ -69,7 +69,7 @@ contract BackingHandler is Test {
         uint256 balance = vault.balanceOf(actor, tokenId);
         if (balance == 0) return;
         vm.prank(actor);
-        try vault.unwrap(tokenId, bound(shareSeed, 1, balance), keccak256(abi.encode(actor))) { } catch { }
+        try vault.unwrap(tokenId, bound(shareSeed, 1, balance), keccak256(abi.encode(actor)), 0) { } catch { }
     }
 
     function unwrapForTao(uint256 actorSeed, uint256 shareSeed) external {

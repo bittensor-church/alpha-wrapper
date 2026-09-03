@@ -41,7 +41,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
     function _exitCompletely(address user, uint256 tokenId) internal {
         uint256 shares = vault.balanceOf(user, tokenId);
         vm.prank(user);
-        vault.unwrap(tokenId, shares, _toSubstrate(user));
+        vault.unwrap(tokenId, shares, _toSubstrate(user), 0);
     }
 
     // -------------------- Index accrual ------------------------------------------
@@ -274,7 +274,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         uint256 supply = vault.totalSupply(TOKEN1);
         (, uint256 previewTao) = lens.previewUnwrap(TOKEN1, aliceShares);
         vm.prank(alice);
-        vault.unwrap(TOKEN1, aliceShares, bytes32(0));
+        vault.unwrap(TOKEN1, aliceShares, bytes32(0), 0);
 
         assertEq(alice.balance, previewTao);
         assertApproxEqAbs(alice.balance, (refund * aliceShares) / supply, 2);
@@ -298,7 +298,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
     }
 
     // A raised chain threshold can force-sell the whole position while shares remain outstanding;
-    // the zero-backing unwrap retires those shares and the sale proceeds stay claimable.
+    // an explicit zero minAlphaOut retires those shares and the sale proceeds stay claimable.
     function test_UnwrapAfterFullSweep_RetiresSharesAndKeepsClaim() public {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
         uint256 proceeds = 7 ether;
@@ -314,7 +314,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         vm.expectEmit(true, true, false, true, address(vault));
         emit Unwrapped(alice, TOKEN1, shares, 0);
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
 
         assertEq(vault.totalSupply(TOKEN1), 0);
         uint256 paid = _claimQuotedAmount(alice, TOKEN1);
