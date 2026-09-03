@@ -1,24 +1,23 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import { Vm } from "forge-std/Test.sol";
+import { Vm, Test } from "forge-std/Test.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { VaultReads } from "src/libraries/VaultReads.sol";
 import { AlphaVaultLens } from "src/AlphaVaultLens.sol";
 import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
-import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
 import { MockStaking, CHAIN_MIN_STAKE, CHAIN_MIN_TRANSFER, CHAIN_NOMINATOR_MIN_STAKE } from "./mocks/MockStaking.sol";
 import { MockAddressMapping } from "./mocks/MockAddressMapping.sol";
 import { MockSubnetPrecompile } from "./mocks/MockSubnetPrecompile.sol";
 import { MockAlpha } from "./mocks/MockAlpha.sol";
-import { AttestationHelper } from "./helpers/AttestationHelper.sol";
+import { MockValidatorRegistry } from "./mocks/MockValidatorRegistry.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 import { ADDRESS_MAPPING_PRECOMPILE } from "src/interfaces/IAddressMapping.sol";
 import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 import { SUBNET_PRECOMPILE } from "src/interfaces/ISubnet.sol";
 
-abstract contract AlphaVaultTestBase is AttestationHelper {
+abstract contract AlphaVaultTestBase is Test {
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
@@ -30,7 +29,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     AlphaVaultLens public lens;
     DepositMailbox public mailboxLogic;
     SubnetClone public subnetLogic;
-    ValidatorRegistry public registry;
+    MockValidatorRegistry public registry;
 
     address public alice = makeAddr("alice");
     address public bob = makeAddr("bob");
@@ -40,10 +39,6 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     bytes32 public hotkey3 = keccak256("hotkey3");
     bytes32 public hotkey4 = keccak256("hotkey4");
     bytes32 public hotkey5 = keccak256("hotkey5");
-
-    uint256 internal constant SIGNER_PK_1 = 0xA11CE;
-    uint256 internal constant SIGNER_PK_2 = 0xB0B;
-    uint256[] internal signerPks;
 
     string internal constant VAULT_URI = "https://api.tao20.io/{id}.json";
     uint256 internal constant RECOVERY_WINDOW = 3 hours;
@@ -86,14 +81,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         mailboxLogic = new DepositMailbox();
         subnetLogic = new SubnetClone();
 
-        // vm.addr(SIGNER_PK_2) < vm.addr(SIGNER_PK_1); the registry requires sigs sorted
-        // ascending by recovered address, so attestations sign in this order.
-        signerPks.push(SIGNER_PK_2);
-        signerPks.push(SIGNER_PK_1);
-        address[] memory signers = new address[](2);
-        signers[0] = vm.addr(signerPks[0]);
-        signers[1] = vm.addr(signerPks[1]);
-        registry = new ValidatorRegistry(address(this), signers, 2);
+        registry = new MockValidatorRegistry();
 
         // validatorRegistry is immutable, so it must exist before the vault is constructed.
         (vault, lens) = _deployVaultAndLens(address(registry));
@@ -123,8 +111,30 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         freshLens = new AlphaVaultLens(freshVault);
     }
 
+    function _hotkeysFrom(string memory salt, uint256 count) internal pure returns (bytes32[] memory hotkeys) {
+        hotkeys = new bytes32[](count);
+        for (uint256 i; i < count; ++i) {
+            hotkeys[i] = keccak256(abi.encodePacked(salt, i));
+        }
+    }
+
+    /// @dev Even split with the rounding remainder on the last slot, matching how the vault assigns
+    ///      targets.
+    function _evenWeights(uint256 count) internal pure returns (uint16[] memory weights) {
+        weights = new uint16[](count);
+        // A validator set holds at most 64 entries, so the count fits uint16 and every share it
+        // divides 10000 into is smaller still.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        uint16 slots = uint16(count);
+        uint16 share = 10_000 / slots;
+        for (uint16 i; i + 1 < slots; ++i) {
+            weights[i] = share;
+        }
+        weights[slots - 1] = 10_000 - share * (slots - 1);
+    }
+
     function _setValidators(uint256 netuid, bytes32[] memory hks, uint16[] memory wts) internal {
-        _submitAttestation(registry, netuid, hks, wts, signerPks);
+        registry.setRaw(netuid, hks, wts);
     }
 
     function _hotkeys(bytes32 a) internal pure returns (bytes32[] memory arr) {

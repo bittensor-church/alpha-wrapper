@@ -14,7 +14,7 @@ import { AlphaVaultLens } from "src/AlphaVaultLens.sol";
 ///         Used standalone; the tao20 repo has its own deploy script that wires these up
 ///         with the rest of the index protocol.
 /// @dev    The validator registry is an immutable constructor dependency, supplied via the
-///         `VALIDATOR_REGISTRY` env var (deploy/configure `ValidatorRegistry` separately first).
+///         `VALIDATOR_REGISTRY` env var (deploy a `FixedValidator` pinned to your hotkey first).
 ///         `VAULT_URI` overrides the metadata URI; the vault cannot change it after deployment.
 ///         `RECOVERY_WINDOW` overrides how long (in seconds) a recorded backing loss stays
 ///         recoverable before it may be written off; it too is immutable once deployed.

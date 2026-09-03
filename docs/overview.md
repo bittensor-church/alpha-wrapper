@@ -29,10 +29,9 @@ and then telling the vault to collect it. The mailbox is what makes a
 deposit attributable: the vault only ever credits you for stake sitting in
 your own mailbox.
 
-`ValidatorRegistry` says which validators the vault should stake under,
-per subnet, and in what proportions. Its entries are set by a threshold of
-off-chain signers (see [attester-guide.md](attester-guide.md)), and the
-vault takes its validator sets from the registry alone.
+`FixedValidator` says which validator the vault should stake under: one
+immutable hotkey, pinned at deployment, at full weight for every subnet.
+The vault takes its validator set from that contract alone.
 
 ## Token ids
 
