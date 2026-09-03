@@ -35,7 +35,7 @@ def main() -> None:
     parser.add_argument("--vault-address", required=True, help="AlphaVault contract address")
     parser.add_argument("--lens-address", required=True,
                         help="AlphaVaultLens contract address, from the same trusted source as the vault")
-    parser.add_argument("--registry-address", help="Optional ValidatorRegistry address (enables validator columns)")
+    parser.add_argument("--registry-address", help="Optional IValidatorRegistry address (enables validator columns)")
     parser.add_argument("--rpc-url", required=True, help="HTTP RPC URL of the Subtensor EVM endpoint")
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--token-id", type=int, help="Packed tokenId")
@@ -60,7 +60,7 @@ def main() -> None:
     if args.registry_address:
         registry = w3.eth.contract(
             address=w3.to_checksum_address(args.registry_address),
-            abi=load_abi("ValidatorRegistry"),
+            abi=load_abi("IValidatorRegistry"),
         )
 
     token_id = args.token_id if args.token_id is not None else lookup_token_id(vault, args.netuid)

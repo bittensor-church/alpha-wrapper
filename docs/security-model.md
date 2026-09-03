@@ -7,14 +7,10 @@ function is either open to everyone or acts only on the caller's own
 balance and mailbox. Its code and registry address are final at
 deployment.
 
-The only privileged parties live in `ValidatorRegistry`:
-
-- The signers, threshold-of-N, choose validator sets and weights per
-  subnet by co-signing attestations
-  ([attester-guide.md](attester-guide.md)).
-- The registry admin rotates the signer set and threshold. The role
-  administers itself, so an admin can also add or remove admins; it has
-  no other power.
+The validator source, `FixedValidator`, has no privileged parties at
+all: the hotkey every subnet stakes under is immutable, pinned at
+deployment. Changing the validator means deploying a fresh
+`FixedValidator` and a fresh vault against it.
 
 ## What the privileged parties cannot do
 
@@ -34,7 +30,7 @@ over several sales.
 ## What holders trust
 
 - The Bittensor chain. The staking, alpha, subnet and address-mapping
-  precompiles, plus the `ValidatorRegistry` it reads validator sets
+  precompiles, plus the `FixedValidator` it reads validator sets
   from, are the vault's only external dependencies, and all accounting
   reads stake balances straight from the chain.
 - The performance of the attested validators: emissions accrue, or do
