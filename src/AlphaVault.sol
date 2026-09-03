@@ -112,8 +112,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
     // -------------------- Events ------------------------------------------------
     event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
-    /// @notice A live-subnet alpha unwrap. `alphaOut` is the alpha RAO sent by the successful
-    ///         transfer, capped at the backing available after gather rounding.
+    /// @notice A live-subnet alpha unwrap. `alphaOut` is the alpha RAO credited to the recipient,
+    ///         measured around the successful transfer.
     event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaOut);
     /// @notice A dissolved-subnet unwrap. `taoOut` is native TAO paid in EVM wei.
     event DissolvedSubnetUnwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 taoOut);
@@ -285,16 +285,16 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///         Then dispatches on subnet state:
     ///           - permanently dissolved (tokenId's registrationBlock no longer current): pays pro-rata
     ///             native TAO from the clone's refund balance.
-    ///           - live: consolidates the position onto one hotkey and delivers the full pro-rata
-    ///             alpha to `userSubstrateColdkey` in a single transfer (exact to within a few RAO
-    ///             of chain-side share rounding, or reverting - never partial), then re-splits the
-    ///             remainder toward the attested weights.
+    ///           - live: consolidates the position onto one hotkey and requests the full pro-rata
+    ///             alpha for `userSubstrateColdkey` in a single transfer, then re-splits the
+    ///             remainder toward the attested weights. The observed recipient credit can be a
+    ///             few RAO lower because of chain-side stake-share rounding.
     ///             At a readable price, reverts `WithdrawTooSmall` when the request is below the
     ///             chain's floor, `GatherBelowFloor` when the gather's largest slot provably cannot
     ///             clear it, and `ConsolidationBelowFloor` when pending rotated-out stake cannot be
     ///             consolidated above it; such positions exit via `unwrapForTao`.
     ///             Reverts `ZeroColdkey` when the live-path destination is the zero Substrate account.
-    ///             `minAlphaOut` bounds the alpha sent. A positive bound also protects
+    ///             `minAlphaOut` bounds the alpha credited to the recipient. A positive bound also protects
     ///             a caller whose transaction crosses into dissolution, where this function pays
     ///             TAO rather than alpha. Passing zero explicitly permits that payout and permits
     ///             retiring shares for zero alpha after all backing has been written off; any alpha
@@ -304,7 +304,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @param  tokenId              ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @param  shares               Shares to burn.
     /// @param  userSubstrateColdkey Destination coldkey for alpha on the live path (unused on dissolved path).
-    /// @param  minAlphaOut           Slippage floor; revert if alpha sent is less. Set to zero to
+    /// @param  minAlphaOut           Slippage floor; revert if recipient alpha credit is less. Set to zero to
     ///                               accept a dissolved TAO payout or a zero-backing share retirement.
     function unwrap(uint256 tokenId, uint256 shares, bytes32 userSubstrateColdkey, uint256 minAlphaOut)
         external
@@ -546,9 +546,15 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             }
             deliverable = IStaking(STAKING_PRECOMPILE).getStake(hotkeys[deliveryIndex], coldkey, netuid);
         }
-        // Deliver the entitlement, capped at what the gathered slot holds after the gather's rounding.
-        alphaOut = assets < deliverable ? assets : deliverable;
-        SubnetClone(payable(clone)).flush(userColdkey, hotkeys[deliveryIndex], netuid, alphaOut);
+        // Request the entitlement, capped at what the gathered slot holds after the gather's
+        // rounding. A same-subnet transfer can credit the recipient a few RAO short because both
+        // sides are finite-precision share-pool entries, so report the observed increase rather
+        // than the nominal request. No other state transition can interleave these two reads.
+        uint256 requested = assets < deliverable ? assets : deliverable;
+        uint256 recipientBefore = IStaking(STAKING_PRECOMPILE).getStake(hotkeys[deliveryIndex], userColdkey, netuid);
+        SubnetClone(payable(clone)).flush(userColdkey, hotkeys[deliveryIndex], netuid, requested);
+        uint256 recipientAfter = IStaking(STAKING_PRECOMPILE).getStake(hotkeys[deliveryIndex], userColdkey, netuid);
+        alphaOut = recipientAfter > recipientBefore ? recipientAfter - recipientBefore : 0;
         // Re-read live balances so the weight re-split never moves more than a slot holds.
         uint256[] memory postBalances = VaultReads.fetchBalances(hotkeys, coldkey, netuid);
         _alignToWeights(tokenId, clone, hotkeys, weights, postBalances, alphaPriceE18);

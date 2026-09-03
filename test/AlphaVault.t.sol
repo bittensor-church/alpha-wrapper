@@ -35,6 +35,7 @@ import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 contract AlphaVaultTest is AlphaVaultTestBase {
     event DissolvedSubnetUnwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 taoOut);
+    event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaOut);
 
     // ------------------ Constructor ------------------------------------------
 
@@ -215,6 +216,41 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(vault.balanceOf(alice, TOKEN1), shares, "slippage burned shares");
         assertEq(lens.totalStake(TOKEN1), backing, "slippage moved backing");
         assertEq(_userStakeAcrossHotkeys(alice, NETUID1), 0, "slippage delivered alpha");
+    }
+
+    function test_RevertWhen_RecipientCreditIsBelowMinAlphaOut() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        uint256 backing = lens.totalStake(TOKEN1);
+        (uint256 quotedAlpha,) = lens.previewUnwrap(TOKEN1, shares);
+        bytes32 aliceSub = _toSubstrate(alice);
+
+        MockStaking(STAKING_PRECOMPILE).setTransferStakeRoundingLoss(1);
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(SlippageExceeded.selector, quotedAlpha - 1));
+        vault.unwrap(TOKEN1, shares, aliceSub, quotedAlpha);
+
+        assertEq(vault.balanceOf(alice, TOKEN1), shares, "slippage burned shares");
+        assertEq(lens.totalStake(TOKEN1), backing, "slippage moved backing");
+        assertEq(_userStakeAcrossHotkeys(alice, NETUID1), 0, "slippage credited alpha");
+    }
+
+    function test_UnwrapReportsActualRecipientCredit() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        (uint256 quotedAlpha,) = lens.previewUnwrap(TOKEN1, shares);
+        bytes32 aliceSub = _toSubstrate(alice);
+        uint256 creditedAlpha = quotedAlpha - 1;
+
+        MockStaking(STAKING_PRECOMPILE).setTransferStakeRoundingLoss(1);
+        vm.expectEmit(true, true, false, true, address(vault));
+        emit Unwrapped(alice, TOKEN1, shares, creditedAlpha);
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares, aliceSub, creditedAlpha);
+
+        assertEq(_userStakeAcrossHotkeys(alice, NETUID1), creditedAlpha);
     }
 
     function test_WrapSyncsStakeBeforeMintingShares() public {

@@ -78,7 +78,8 @@ of the current validators; unstake it yourself if you want liquid TAO.
 Because nothing here trades against the subnet's pool, an exit through
 this rail costs exactly your pro-rata share and leaves every other
 holder's backing untouched. Use `previewUnwrap` to choose `minAlphaOut`:
-the call reverts `SlippageExceeded` if the amount sent is lower. If you
+the call reverts `SlippageExceeded` if the amount actually credited to
+your destination stake is lower. If you
 only need to rule out a zero-alpha retirement, use `1`. A few RAO can be
 lost to chain-side stake-share rounding, so leave only the tolerance you
 actually accept. A request below the chain's minimum stake size reverts

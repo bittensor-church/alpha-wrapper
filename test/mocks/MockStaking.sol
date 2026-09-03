@@ -21,6 +21,7 @@ uint256 constant CHAIN_NOMINATOR_MIN_STAKE = 20e6;
 contract MockStaking {
     mapping(bytes32 => mapping(bytes32 => mapping(uint256 => uint256))) public stakes;
     uint256 public moveStakeRoundingLoss;
+    uint256 public transferStakeRoundingLoss;
     bool public transferStakeReverts;
     bool public consumeAllGasOnFailure;
     /// @dev Floors the unstake rail, and the only minimum the chain exposes a getter for.
@@ -100,7 +101,12 @@ contract MockStaking {
             _fail("MockStaking: AmountTooLow");
         }
         stakes[hotkey][_senderColdkey()][origin_netuid] -= amount;
-        stakes[hotkey][destination_coldkey][destination_netuid] += amount;
+        uint256 credited = amount > transferStakeRoundingLoss ? amount - transferStakeRoundingLoss : 0;
+        stakes[hotkey][destination_coldkey][destination_netuid] += credited;
+    }
+
+    function setTransferStakeRoundingLoss(uint256 loss) external {
+        transferStakeRoundingLoss = loss;
     }
 
     function setMoveStakeRoundingLoss(uint256 loss) external {
