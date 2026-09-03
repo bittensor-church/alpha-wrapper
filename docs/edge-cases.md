@@ -124,6 +124,9 @@ whoever holds shares then. Both halves of that are deliberate - the
 alternative is a token that stays shut indefinitely. The resulting
 late-recovery attack is documented in the
 [security model](security-model.md#recovery-window-tradeoff-and-late-recovery-attack).
+After a complete write-off, `previewUnwrap` quotes zero: passing a positive
+`minAlphaOut` keeps the shares, while zero explicitly retires them for no alpha
+and gives up their claim on any later recovery.
 
 ## A hotkey nobody owns
 

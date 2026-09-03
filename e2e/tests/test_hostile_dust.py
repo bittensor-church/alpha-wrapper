@@ -99,7 +99,7 @@ def test_hostile_dust(env):
     quoted_first, _ = env.preview_unwrap(token_id, unwrap_burn)
     withdrawal_receipt = env.vault_send(
         2_500_000, "Hostile dust: withdrawal over the hostile plant failed",
-        "unwrap(uint256,uint256,bytes32)", token_id, unwrap_burn, env.wrapper_substrate_coldkey,
+        "unwrap(uint256,uint256,bytes32,uint256)", token_id, unwrap_burn, env.wrapper_substrate_coldkey, 1,
     )
     assert_gas_within(
         withdrawal_receipt, config.UNWRAP_GAS_BOUND,
@@ -128,8 +128,8 @@ def test_hostile_dust(env):
     refusal_receipt = env.assert_vault_reverts_with(
         "WithdrawTooSmall()", 1_500_000,
         "Hostile dust: sub-floor remainder did NOT revert as WithdrawTooSmall",
-        "unwrap(uint256,uint256,bytes32)",
-        token_id, env.vault_shares(token_id), env.wrapper_substrate_coldkey,
+        "unwrap(uint256,uint256,bytes32,uint256)",
+        token_id, env.vault_shares(token_id), env.wrapper_substrate_coldkey, 0,
     )
     assert_gas_within(
         refusal_receipt, config.REVERT_GAS_BOUND, "Hostile dust: sub-floor remainder refusal",
@@ -190,8 +190,8 @@ def test_hostile_dust(env):
     quoted_final, _ = env.preview_unwrap(token_id, final_shares)
     final_exit_receipt = env.vault_send(
         2_500_000, "Hostile dust: final exit failed",
-        "unwrap(uint256,uint256,bytes32)",
-        token_id, final_shares, env.wrapper_substrate_coldkey,
+        "unwrap(uint256,uint256,bytes32,uint256)",
+        token_id, final_shares, env.wrapper_substrate_coldkey, 1,
     )
     assert_gas_within(final_exit_receipt, config.UNWRAP_GAS_BOUND, "Hostile dust: final exit")
     delivered_total = env.total_stake_across(env.wrapper_substrate_coldkey, netuid, all_hotkeys)

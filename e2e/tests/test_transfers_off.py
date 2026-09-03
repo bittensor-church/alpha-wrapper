@@ -84,8 +84,8 @@ def test_transfers_off(env):
     shares_before_revert = env.vault_shares(position_token_id)
     env.vault_send_expect_revert(
         2_000_000, "unwrap (alpha rail) did NOT revert with transfers off",
-        "unwrap(uint256,uint256,bytes32)",
-        position_token_id, shares_before_revert, env.wrapper_substrate_coldkey,
+        "unwrap(uint256,uint256,bytes32,uint256)",
+        position_token_id, shares_before_revert, env.wrapper_substrate_coldkey, 0,
     )
     shares_after_revert = env.vault_shares(position_token_id)
     assert shares_after_revert == shares_before_revert, (

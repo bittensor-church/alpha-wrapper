@@ -196,7 +196,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         (uint256 previewAlpha,) = lens.previewUnwrap(TOKEN1, shares);
 
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
 
         assertEq(_stakeAcross(hks, _toSubstrate(alice), NETUID1), previewAlpha, "delivery matches the quote");
         assertEq(lens.totalStake(TOKEN1), amount - previewAlpha, "only the delivered alpha left the vault");

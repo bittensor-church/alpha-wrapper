@@ -294,12 +294,22 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///             clear it, and `ConsolidationBelowFloor` when pending rotated-out stake cannot be
     ///             consolidated above it; such positions exit via `unwrapForTao`.
     ///             Reverts `ZeroColdkey` when the live-path destination is the zero Substrate account.
+    ///             `minAlphaOut` bounds the alpha sent. A positive bound also protects
+    ///             a caller whose transaction crosses into dissolution, where this function pays
+    ///             TAO rather than alpha. Passing zero explicitly permits that payout and permits
+    ///             retiring shares for zero alpha after all backing has been written off; any alpha
+    ///             recovered later belongs to the shares still outstanding at recovery time.
     ///             Reverts `BackingShortfall` while the position holds backing it cannot account
     ///             for; `syncBacking` reopens the token by booking the loss.
     /// @param  tokenId              ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @param  shares               Shares to burn.
     /// @param  userSubstrateColdkey Destination coldkey for alpha on the live path (unused on dissolved path).
-    function unwrap(uint256 tokenId, uint256 shares, bytes32 userSubstrateColdkey) external nonReentrant {
+    /// @param  minAlphaOut           Slippage floor; revert if alpha sent is less. Set to zero to
+    ///                               accept a dissolved TAO payout or a zero-backing share retirement.
+    function unwrap(uint256 tokenId, uint256 shares, bytes32 userSubstrateColdkey, uint256 minAlphaOut)
+        external
+        nonReentrant
+    {
         if (shares == 0) revert ZeroAmount();
         if (balanceOf(msg.sender, tokenId) < shares) revert InsufficientShares();
         uint16 netuid = VaultMath.netuidOf(tokenId);
@@ -307,10 +317,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         address clone = subnetClone[tokenId];
 
         if (VaultReads.isIssuedForDissolvedSubnet(tokenId)) {
+            if (minAlphaOut != 0) revert SlippageExceeded(0);
             _unwrapFromDissolvedSubnet(tokenId, shares, clone);
         } else {
             if (userSubstrateColdkey == bytes32(0)) revert ZeroColdkey();
-            _unwrapFromLiveSubnet(tokenId, shares, userSubstrateColdkey, clone, netuid);
+            _unwrapFromLiveSubnet(tokenId, shares, userSubstrateColdkey, clone, netuid, minAlphaOut);
         }
     }
 
@@ -437,7 +448,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 shares,
         bytes32 userSubstrateColdkey,
         address clone,
-        uint16 netuid
+        uint16 netuid,
+        uint256 minAlphaOut
     ) private {
         (bytes32[] memory hotkeys, uint16[] memory weights) = VaultReads.resolveValidators(validatorRegistry, netuid);
         bytes32 coldkey = VaultReads.coldkeyOf(clone);
@@ -451,9 +463,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // their balances count everything.
         uint256[] memory balances = VaultReads.fetchBalances(actives, coldkey, netuid);
         uint256 totalAlpha = VaultMath.sumBalances(balances);
-        // A fully swept position cannot regain alpha, and the burn's checkpoint keeps any
-        // swept-sale proceeds claimable, so the shares are retired instead of trapped.
+        // After a complete write-off these shares have no current alpha entitlement. A zero floor
+        // explicitly accepts their retirement; a positive one preserves them for a possible late
+        // recovery. The burn's checkpoint keeps any swept-sale proceeds claimable either way.
         if (totalAlpha == 0) {
+            if (minAlphaOut != 0) revert SlippageExceeded(0);
             _settle(tokenId, coldkey, hotkeys, actives);
             _burn(msg.sender, tokenId, shares);
             emit Unwrapped(msg.sender, tokenId, shares, 0);
@@ -462,6 +476,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
         uint256 assets = VaultMath.assetsFor(totalAlpha, totalSupply(tokenId), shares);
         if (assets == 0) revert ZeroAmount();
+        if (assets < minAlphaOut) revert SlippageExceeded(assets);
 
         // A sub-floor request is undeliverable on the alpha rail (the chain rejects the transfer);
         // reverting keeps delivery exact and points dust positions at unwrapForTao. A zero read
@@ -474,6 +489,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 alphaOut = _deliverAndAlign(
             tokenId, clone, actives, weights, balances, coldkey, userSubstrateColdkey, assets, alphaPriceE18
         );
+        if (alphaOut < minAlphaOut) revert SlippageExceeded(alphaOut);
         _settle(tokenId, coldkey, hotkeys, actives);
 
         emit Unwrapped(msg.sender, tokenId, shares, alphaOut);

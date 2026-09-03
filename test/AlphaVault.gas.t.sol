@@ -37,7 +37,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         uint256 shares = vault.balanceOf(alice, TOKEN1);
 
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice), 0);
         vm.snapshotGasLastCall("AlphaVault", "unwrap: partial");
     }
 
@@ -47,7 +47,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         uint256 shares = vault.balanceOf(alice, TOKEN1);
 
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
         vm.snapshotGasLastCall("AlphaVault", "unwrap: full");
     }
 
@@ -150,7 +150,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         uint256 shares = vault.balanceOf(alice, TOKEN1);
 
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice), 0);
         vm.snapshotGasLastCall("AlphaVault", "unwrap: partial (64 validators)");
     }
 
@@ -161,7 +161,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         uint256 shares = vault.balanceOf(alice, TOKEN1);
 
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
         vm.snapshotGasLastCall("AlphaVault", "unwrap: full (64 validators)");
     }
 

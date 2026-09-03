@@ -165,11 +165,11 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         // On exit alice realizes her share of the emission (~20), bob only ~his deposit (~10).
         vm.prank(alice);
-        vault.unwrap(TOKEN1, aliceShares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, aliceShares, _toSubstrate(alice), 0);
         uint256 aliceReceived = _userStakeAcrossHotkeys(alice, NETUID1);
 
         vm.prank(bob);
-        vault.unwrap(TOKEN1, bobShares, _toSubstrate(bob));
+        vault.unwrap(TOKEN1, bobShares, _toSubstrate(bob), 0);
         uint256 bobReceived = _userStakeAcrossHotkeys(bob, NETUID1);
 
         assertApproxEqAbs(aliceReceived, 20 ether, 1e12);
@@ -185,15 +185,36 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         bytes32 aliceSub = _toSubstrate(alice);
+        (uint256 quotedAlpha,) = lens.previewUnwrap(TOKEN1, shares);
 
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, aliceSub);
+        vault.unwrap(TOKEN1, shares, aliceSub, quotedAlpha);
 
         assertEq(vault.balanceOf(alice, TOKEN1), 0);
         // Withdrawal comes from hotkeys with vault stake
         uint256 totalReceived = _userStakeAcrossHotkeys(alice, NETUID1);
         assertApproxEqAbs(totalReceived, 10 ether, 1e9);
         assertEq(lens.totalStake(TOKEN1), 0);
+    }
+
+    /// @dev The final check uses what can actually be delivered after a gather. Even though the
+    ///      check follows precompile calls, its revert rolls the burn and every stake move back.
+    function test_RevertWhen_GatherDeliversLessThanMinAlphaOut() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        uint256 backing = lens.totalStake(TOKEN1);
+        (uint256 quotedAlpha,) = lens.previewUnwrap(TOKEN1, shares);
+        bytes32 aliceSub = _toSubstrate(alice);
+
+        MockStaking(STAKING_PRECOMPILE).setMoveStakeRoundingLoss(1);
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(SlippageExceeded.selector, quotedAlpha - 2));
+        vault.unwrap(TOKEN1, shares, aliceSub, quotedAlpha - 1);
+
+        assertEq(vault.balanceOf(alice, TOKEN1), shares, "slippage burned shares");
+        assertEq(lens.totalStake(TOKEN1), backing, "slippage moved backing");
+        assertEq(_userStakeAcrossHotkeys(alice, NETUID1), 0, "slippage delivered alpha");
     }
 
     function test_WrapSyncsStakeBeforeMintingShares() public {
@@ -236,7 +257,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         bytes32 aliceSub = _toSubstrate(alice);
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, aliceSub);
+        vault.unwrap(TOKEN1, shares, aliceSub, 0);
 
         uint256 totalReceived = _userStakeAcrossHotkeys(alice, NETUID1);
         assertTrue(totalReceived > 10 ether, "Should receive deposit + rewards");
@@ -246,7 +267,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         bytes32 aliceSub = _toSubstrate(alice);
         vm.prank(alice);
         vm.expectRevert(ZeroAmount.selector);
-        vault.unwrap(TOKEN1, 0, aliceSub);
+        vault.unwrap(TOKEN1, 0, aliceSub, 0);
     }
 
     function test_RevertWhen_LiveUnwrapToZeroColdkey() public {
@@ -257,7 +278,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(ZeroColdkey.selector);
-        vault.unwrap(TOKEN1, shares, bytes32(0));
+        vault.unwrap(TOKEN1, shares, bytes32(0), 0);
 
         assertEq(vault.balanceOf(alice, TOKEN1), shares, "zero destination burned shares");
         assertEq(lens.totalStake(TOKEN1), backing, "zero destination moved backing");
@@ -325,7 +346,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         // Unwrap half
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares / 2, aliceSub);
+        vault.unwrap(TOKEN1, shares / 2, aliceSub, 0);
 
         // Should still have ~half the shares
         assertApproxEqAbs(vault.balanceOf(alice, TOKEN1), shares / 2, 1);
@@ -352,7 +373,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         // Alice unwraps everything
         bytes32 aliceSub = _toSubstrate(alice);
         vm.prank(alice);
-        vault.unwrap(TOKEN1, aliceShares, aliceSub);
+        vault.unwrap(TOKEN1, aliceShares, aliceSub, 0);
         assertEq(vault.balanceOf(alice, TOKEN1), 0);
 
         // Bob should still have his shares, totalStake should be ~20
@@ -362,7 +383,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         // Bob unwraps
         bytes32 bobSub = _toSubstrate(bob);
         vm.prank(bob);
-        vault.unwrap(TOKEN1, bobShares, bobSub);
+        vault.unwrap(TOKEN1, bobShares, bobSub, 0);
         assertEq(vault.balanceOf(bob, TOKEN1), 0);
         assertEq(lens.totalStake(TOKEN1), 0);
     }
@@ -554,7 +575,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         emit Rebalanced(TOKEN2, hotkey1, hotkey2, expectedMove);
 
         vm.prank(alice);
-        vault.unwrap(TOKEN2, shares / 2, _toSubstrate(alice));
+        vault.unwrap(TOKEN2, shares / 2, _toSubstrate(alice), 0);
     }
 
     function test_UnwrapEmitsNoRebalancedWhenFullyDrained() public {
@@ -568,7 +589,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 shares = vault.balanceOf(alice, tokenId);
         vm.recordLogs();
         vm.prank(alice);
-        vault.unwrap(tokenId, shares, _toSubstrate(alice));
+        vault.unwrap(tokenId, shares, _toSubstrate(alice), 0);
         assertEq(_countRebalancedLogs(vm.getRecordedLogs()), 0);
     }
 
@@ -668,7 +689,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         bytes32 aliceSub = _toSubstrate(alice);
 
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, aliceSub);
+        vault.unwrap(TOKEN1, shares, aliceSub, 0);
         assertEq(lens.totalStake(TOKEN1), 0);
     }
 
@@ -988,7 +1009,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(InsufficientShares.selector);
-        vault.unwrap(tokenId, shares + 1, _toSubstrate(alice));
+        vault.unwrap(tokenId, shares + 1, _toSubstrate(alice), 0);
     }
 
     // --------- unwrap (dissolved subnet path) ------------------------------------------
@@ -1008,10 +1029,28 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         emit DissolvedSubnetUnwrapped(alice, tokenId, shares, 50 ether);
 
         vm.prank(alice);
-        vault.unwrap(tokenId, shares, _toSubstrate(alice));
+        vault.unwrap(tokenId, shares, _toSubstrate(alice), 0);
         assertEq(alice.balance - aliceBefore, 50 ether);
         // A full single-holder unwrap also burns every share (orthogonal to the payout amount).
         assertEq(vault.totalSupply(tokenId), 0);
+    }
+
+    function test_RevertWhen_DissolvedUnwrapHasPositiveMinAlphaOut() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 tokenId = vault.currentTokenId(NETUID1);
+        uint256 shares = vault.balanceOf(alice, tokenId);
+
+        _simulateDissolutionStarted(NETUID1);
+        _simulateTaoAwardedOnDissolution(tokenId, 50 ether);
+        _simulateDissolutionCompleted(NETUID1);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(SlippageExceeded.selector, 0));
+        vault.unwrap(tokenId, shares, bytes32(0), 1);
+
+        assertEq(vault.balanceOf(alice, tokenId), shares, "alpha floor burned dissolved shares");
+        assertEq(alice.balance, 0, "alpha floor paid TAO instead");
     }
 
     function test_UnwrapFromDissolvedSubnetTwoHoldersProRata() public {
@@ -1032,12 +1071,12 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 aliceExpected = (80 ether * aliceShares) / supply;
         uint256 aliceBefore = alice.balance;
         vm.prank(alice);
-        vault.unwrap(tokenId, aliceShares, _toSubstrate(alice));
+        vault.unwrap(tokenId, aliceShares, _toSubstrate(alice), 0);
         assertEq(alice.balance - aliceBefore, aliceExpected);
 
         uint256 bobBefore = bob.balance;
         vm.prank(bob);
-        vault.unwrap(tokenId, bobShares, _toSubstrate(bob));
+        vault.unwrap(tokenId, bobShares, _toSubstrate(bob), 0);
         // bob gets the rest including dust
         assertEq(bob.balance - bobBefore, 80 ether - aliceExpected);
     }
@@ -1052,7 +1091,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         uint256 aliceBefore = alice.balance;
         vm.prank(alice);
-        vault.unwrap(tokenId, shares, _toSubstrate(alice));
+        vault.unwrap(tokenId, shares, _toSubstrate(alice), 0);
         assertEq(alice.balance - aliceBefore, 5 ether);
     }
 
@@ -1083,12 +1122,12 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         uint256 before = alice.balance;
         vm.prank(alice);
-        vault.unwrap(gen2, gen2Shares, _toSubstrate(alice));
+        vault.unwrap(gen2, gen2Shares, _toSubstrate(alice), 0);
         assertEq(alice.balance - before, 20 ether);
 
         before = alice.balance;
         vm.prank(alice);
-        vault.unwrap(gen1, gen1Shares, _toSubstrate(alice));
+        vault.unwrap(gen1, gen1Shares, _toSubstrate(alice), 0);
         assertEq(alice.balance - before, 50 ether);
     }
 
@@ -1101,7 +1140,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         uint256 aliceBefore = alice.balance;
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
         assertEq(alice.balance - aliceBefore, 5 ether);
     }
 
@@ -1115,7 +1154,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(SubnetInDissolutionBlackoutPeriod.selector);
-        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
     }
 
     /// @dev The TAO rail and the value quotes answer a replaced token with its permanent state
@@ -1155,7 +1194,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         uint256 aliceBefore = alice.balance;
         vm.prank(alice);
-        vault.unwrap(tokenId, shares, _toSubstrate(alice));
+        vault.unwrap(tokenId, shares, _toSubstrate(alice), 0);
 
         assertEq(alice.balance - aliceBefore, 5 ether + 1);
     }
@@ -1179,7 +1218,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(SubnetInDissolutionBlackoutPeriod.selector);
-        vault.unwrap(tokenId, shares, _toSubstrate(alice));
+        vault.unwrap(tokenId, shares, _toSubstrate(alice), 0);
     }
 
     /// @dev Pins the late window: cleanup has already removed the registration block but the
@@ -1197,7 +1236,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(SubnetInDissolutionBlackoutPeriod.selector);
-        vault.unwrap(tokenId, shares, _toSubstrate(alice));
+        vault.unwrap(tokenId, shares, _toSubstrate(alice), 0);
     }
 
     function test_RevertWhen_UnwrapForTaoDuringBlackout() public {
@@ -1317,7 +1356,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         bytes32 aliceSub = _toSubstrate(alice);
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, aliceSub);
+        vault.unwrap(TOKEN1, shares, aliceSub, 0);
 
         uint256 actualAlpha = _userStakeAcrossHotkeys(alice, NETUID1);
 
@@ -1341,7 +1380,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         bytes32 aliceSub = _toSubstrate(alice);
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, aliceSub);
+        vault.unwrap(TOKEN1, shares, aliceSub, 0);
 
         uint256 actualAlpha = _userStakeAcrossHotkeys(alice, NETUID1);
 
@@ -1361,7 +1400,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         bytes32 aliceSub = _toSubstrate(alice);
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, aliceSub);
+        vault.unwrap(TOKEN1, shares, aliceSub, 0);
 
         uint256 actualAlpha = _userStakeAcrossHotkeys(alice, NETUID1);
 
@@ -1383,7 +1422,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         bytes32 aliceSub = _toSubstrate(alice);
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, aliceSub);
+        vault.unwrap(TOKEN1, shares, aliceSub, 0);
 
         uint256 actualAlpha = _userStakeAcrossHotkeys(alice, NETUID1);
 
@@ -1488,7 +1527,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         uint256 aliceBalBefore = alice.balance;
         vm.prank(alice);
-        vault.unwrap(tokenId, shares, _toSubstrate(alice));
+        vault.unwrap(tokenId, shares, _toSubstrate(alice), 0);
 
         assertEq(alice.balance - aliceBalBefore, 15 ether, "sole holder captures legit refund + attacker's donation");
     }
@@ -1513,7 +1552,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         uint256 aliceBalBefore = alice.balance;
         vm.prank(alice);
-        vault.unwrap(tokenId, aliceShares, _toSubstrate(alice));
+        vault.unwrap(tokenId, aliceShares, _toSubstrate(alice), 0);
         assertEq(alice.balance - aliceBalBefore, aliceExpected, "alice gets pro-rata of legit pot");
 
         // attacker donates 3 ether between withdrawals
@@ -1521,7 +1560,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         uint256 bobBalBefore = bob.balance;
         vm.prank(bob);
-        vault.unwrap(tokenId, bobShares, _toSubstrate(bob));
+        vault.unwrap(tokenId, bobShares, _toSubstrate(bob), 0);
         uint256 bobGain = bob.balance - bobBalBefore;
 
         // Bob, unwrapping last, captures all residual including attacker's donation.
@@ -1637,12 +1676,12 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         uint256 aliceBefore = alice.balance;
         vm.prank(alice);
-        vault.unwrap(tokenId, aliceShares, _toSubstrate(alice));
+        vault.unwrap(tokenId, aliceShares, _toSubstrate(alice), 0);
         assertEq(alice.balance - aliceBefore, aliceExpected);
 
         uint256 bobBefore = bob.balance;
         vm.prank(bob);
-        vault.unwrap(tokenId, bobShares, _toSubstrate(bob));
+        vault.unwrap(tokenId, bobShares, _toSubstrate(bob), 0);
         assertEq(bob.balance - bobBefore, 80 ether - aliceExpected);
 
         assertEq(vault.subnetClone(tokenId).balance, 0);
@@ -1665,12 +1704,12 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 aliceShares = vault.balanceOf(alice, oldTokenId);
         uint256 aliceBefore = alice.balance;
         vm.prank(alice);
-        vault.unwrap(oldTokenId, aliceShares, _toSubstrate(alice));
+        vault.unwrap(oldTokenId, aliceShares, _toSubstrate(alice), 0);
         assertEq(alice.balance - aliceBefore, 3 ether);
 
         uint256 bobShares = vault.balanceOf(bob, newTokenId);
         vm.prank(bob);
-        vault.unwrap(newTokenId, bobShares, _toSubstrate(bob));
+        vault.unwrap(newTokenId, bobShares, _toSubstrate(bob), 0);
         uint256 bobTotal = _userStakeAcrossHotkeys(bob, NETUID1);
         assertEq(bobTotal, 20 ether);
     }
@@ -1913,7 +1952,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         bytes32 aliceSub = _toSubstrate(alice);
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, aliceSub);
+        vault.unwrap(TOKEN1, shares, aliceSub, 0);
 
         uint256 received = _userStakeAcrossHotkeys(alice, NETUID1);
         assertApproxEqAbs(received, 30 ether, 10, "user must receive full deposit including rotated-out stake");
@@ -1962,7 +2001,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         bytes32 aliceSub = _toSubstrate(alice);
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, aliceSub);
+        vault.unwrap(TOKEN1, shares, aliceSub, 0);
 
         uint256 received = _userStakeAcrossHotkeys(alice, NETUID1);
         assertApproxEqAbs(received, 35 ether, 1e9, "sole holder receives deposit + emissions");
@@ -1980,7 +2019,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 aliceShares = vault.balanceOf(alice, TOKEN1);
         bytes32 aliceSub = _toSubstrate(alice);
         vm.prank(alice);
-        vault.unwrap(TOKEN1, aliceShares, aliceSub);
+        vault.unwrap(TOKEN1, aliceShares, aliceSub, 0);
 
         uint256 aliceReceived = _userStakeAcrossHotkeys(alice, NETUID1);
         assertApproxEqAbs(aliceReceived, 40 ether, 1e9, "alice gets her 30 + half of 20 emissions");
@@ -1988,7 +2027,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 bobShares = vault.balanceOf(bob, TOKEN1);
         bytes32 bobSub = _toSubstrate(bob);
         vm.prank(bob);
-        vault.unwrap(TOKEN1, bobShares, bobSub);
+        vault.unwrap(TOKEN1, bobShares, bobSub, 0);
 
         uint256 bobReceived = _userStakeAcrossHotkeys(bob, NETUID1);
         assertApproxEqAbs(bobReceived, 40 ether, 1e9, "bob gets his 30 + half of 20 emissions");
@@ -2003,7 +2042,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         bytes32 aliceSub = _toSubstrate(alice);
         vm.prank(alice);
-        vault.unwrap(TOKEN1, aliceShares / 2, aliceSub);
+        vault.unwrap(TOKEN1, aliceShares / 2, aliceSub, 0);
 
         uint256 aliceReceived = _userStakeAcrossHotkeys(alice, NETUID1);
         assertApproxEqAbs(aliceReceived, 20 ether, 1e9, "alice gets half of 40 = 20");
@@ -2089,7 +2128,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         bytes32 aliceSub = _toSubstrate(alice);
 
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, aliceSub);
+        vault.unwrap(TOKEN1, shares, aliceSub, 0);
 
         uint256 received = _userStakeAcrossHotkeys(alice, NETUID1);
 
@@ -2152,12 +2191,12 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         if (expectedAssets < minAmt) {
             vm.prank(alice);
             vm.expectRevert(WithdrawTooSmall.selector);
-            vault.unwrap(TOKEN1, burnShares, aliceSub);
+            vault.unwrap(TOKEN1, burnShares, aliceSub, 0);
             return;
         }
 
         vm.prank(alice);
-        vault.unwrap(TOKEN1, burnShares, aliceSub);
+        vault.unwrap(TOKEN1, burnShares, aliceSub, 0);
 
         uint256 userReceived = _userStakeAcrossHotkeys(alice, NETUID1);
         uint256 vaultAfter = _totalVaultStakeAcrossHotkeys(NETUID1);

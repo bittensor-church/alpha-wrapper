@@ -72,7 +72,7 @@ def test_stranded_holder_exits_after_watcher_associates_without_registration(env
     exit_shares = shares // 2
     env.vault_send_expect_revert(
         2_500_000, "Parked: the exit should be refused while the hotkey has no owner",
-        "unwrap(uint256,uint256,bytes32)", token_id, exit_shares, env.wrapper_substrate_coldkey,
+        "unwrap(uint256,uint256,bytes32,uint256)", token_id, exit_shares, env.wrapper_substrate_coldkey, 1,
     )
 
     # Anyone may take an abandoned hotkey. Funding the claimant here keeps the test
@@ -95,7 +95,7 @@ def test_stranded_holder_exits_after_watcher_associates_without_registration(env
     delivered_before = env.total_stake_across(env.wrapper_substrate_coldkey, netuid, hotkeys)
     env.vault_send(
         2_500_000, "Parked: the exit should succeed once the hotkey is owned again",
-        "unwrap(uint256,uint256,bytes32)", token_id, exit_shares, env.wrapper_substrate_coldkey,
+        "unwrap(uint256,uint256,bytes32,uint256)", token_id, exit_shares, env.wrapper_substrate_coldkey, 1,
     )
     delivered = env.total_stake_across(env.wrapper_substrate_coldkey, netuid, hotkeys) - delivered_before
 

@@ -13,6 +13,7 @@ import {
     NothingToUnwrap,
     RecoveryBelowFloor,
     RecoveryIncomplete,
+    SlippageExceeded,
     SubnetInDissolutionBlackoutPeriod,
     ZeroAmount
 } from "src/VaultErrors.sol";
@@ -114,7 +115,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
         uint256 quarter = vault.balanceOf(alice, TOKEN1) / 4;
         vm.prank(alice);
-        vault.unwrap(TOKEN1, quarter, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, quarter, _toSubstrate(alice), 0);
     }
 
     /// @dev Starting a clock persists followed swaps and settles nothing else, so it takes the same
@@ -209,7 +210,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertTrue(lens.isBackingIntact(TOKEN1), "the exit reopens without the vault owning anything");
         uint256 quarter = vault.balanceOf(alice, TOKEN1) / 4;
         vm.prank(alice);
-        vault.unwrap(TOKEN1, quarter, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, quarter, _toSubstrate(alice), 0);
     }
 
     /// @dev Pins the cover guard against a split the chain's whole-entry moves cannot produce: a
@@ -470,7 +471,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
         // Alice exits at the written-off valuation and takes none of what turns up later.
         vm.prank(alice);
-        vault.unwrap(TOKEN1, aliceShares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, aliceShares, _toSubstrate(alice), 0);
         uint256 bobShares = _depositAndWrap(bob, NETUID1, 10 ether);
         uint256 navBefore = lens.totalStake(TOKEN1);
 
@@ -481,6 +482,40 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         (uint256 bobsAlpha,) = lens.previewUnwrap(TOKEN1, bobShares);
         assertGt(bobsAlpha, 10 ether, "and it belongs to whoever holds shares now");
         assertEq(vault.balanceOf(alice, TOKEN1), 0, "not to the cohort that bore the loss");
+    }
+
+    /// @dev A complete write-off leaves outstanding shares with a zero alpha quote. A positive
+    ///      floor preserves their contingent claim on a late recovery; zero explicitly gives that
+    ///      claim up, retires the shares for no alpha, and leaves a later find to the remaining cohort.
+    function test_FullWriteOff_ZeroMinAlphaOutExplicitlyRetiresShares() public {
+        uint256 aliceShares = _depositAndWrap(alice, NETUID1, 15 ether);
+        uint256 bobShares = _depositAndWrap(bob, NETUID1, 15 ether);
+        bytes32[] memory recordedHotkeys = _hotkeys(hotkey1, hotkey2, hotkey3);
+        bytes32[] memory strayHotkeys = new bytes32[](recordedHotkeys.length);
+        for (uint256 i; i < recordedHotkeys.length; ++i) {
+            strayHotkeys[i] = keccak256(abi.encode("full-write-off-stray", i));
+            _simulateOffVaultSwap(NETUID1, recordedHotkeys[i], strayHotkeys[i]);
+        }
+        _runOutRecoveryWindow(TOKEN1);
+
+        (uint256 aliceQuote,) = lens.previewUnwrap(TOKEN1, aliceShares);
+        assertEq(aliceQuote, 0, "the written-off shares should quote zero alpha");
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(SlippageExceeded.selector, 0));
+        vault.unwrap(TOKEN1, aliceShares, _toSubstrate(alice), 1);
+        assertEq(vault.balanceOf(alice, TOKEN1), aliceShares, "positive floor did not preserve shares");
+
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, aliceShares, _toSubstrate(alice), 0);
+        assertEq(vault.balanceOf(alice, TOKEN1), 0, "zero floor did not retire shares");
+        assertEq(_userStakeAcrossHotkeys(alice, NETUID1), 0, "zero-backed exit delivered alpha");
+
+        for (uint256 i; i < strayHotkeys.length; ++i) {
+            vault.recoverStray(TOKEN1, strayHotkeys[i]);
+        }
+        (uint256 bobQuote,) = lens.previewUnwrap(TOKEN1, bobShares);
+        assertApproxEqAbs(bobQuote, 30 ether, 3, "late recovery belongs to the remaining shares");
     }
 
     /// @dev A post-write-off depositor can capture alpha found later, but cannot reach into the
@@ -749,7 +784,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
         vm.prank(alice);
         vm.expectPartialRevert(BackingShortfall.selector);
-        vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice), 0);
 
         vm.expectEmit(true, true, false, true, address(vault));
         emit BackingWrittenOff(TOKEN1, hotkey1, owed, 0);
@@ -759,7 +794,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertEq(lens.totalStake(TOKEN1), located, "the quote answers on what is there");
         assertEq(lens.frozenUntil(TOKEN1), 0, "and no clock is left running");
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice), 0);
     }
 
     /// @dev A balance the resolver already answers for is not stray. Left shufflable, anyone could

@@ -90,7 +90,7 @@ contract BackingRecordTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, NETUID1, 10 ether, hotkey2);
         _wrapHotkey(alice, NETUID1, hotkey2);
         vm.prank(bob);
-        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(bob));
+        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(bob), 0);
         vm.prank(bob);
         vault.unwrapForTao(TOKEN1, shares / 4, 0);
         vault.rebalance(NETUID1);
@@ -168,7 +168,7 @@ contract BackingRecordTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
         vm.expectRevert(SwappedHotkeyStillAttested.selector);
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice), 0);
 
         vm.prank(alice);
         vault.unwrapForTao(TOKEN1, shares / 4, 0);
@@ -194,7 +194,7 @@ contract BackingRecordTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
         _depositAndWrap(bob, NETUID1, 25 ether);
         vm.prank(alice);
-        vault.unwrap(TOKEN1, aliceShares / 3, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, aliceShares / 3, _toSubstrate(alice), 0);
         vault.rebalance(NETUID1);
         vm.prank(alice);
         vault.unwrapForTao(TOKEN1, aliceShares / 3, 0);
@@ -210,7 +210,7 @@ contract BackingRecordTest is AlphaVaultTestBase {
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
 
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice), 0);
 
         VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
         for (uint256 i; i < slots.length; ++i) {
@@ -221,7 +221,7 @@ contract BackingRecordTest is AlphaVaultTestBase {
     function test_SwapAfterWithdrawal_IsStillFollowed() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice), 0);
 
         _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
 

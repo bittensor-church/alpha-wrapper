@@ -151,8 +151,8 @@ def test_subnet_dissolved(env):
     first_user_tao_before = env.user_tao_wei()
     env.vault_send(
         2_000_000, "user1 dissolved unwrap failed",
-        "unwrap(uint256,uint256,bytes32)",
-        dissolved_token_id, first_user_shares, env.wrapper_substrate_coldkey,
+        "unwrap(uint256,uint256,bytes32,uint256)",
+        dissolved_token_id, first_user_shares, env.wrapper_substrate_coldkey, 0,
     )
     assert env.vault_shares(dissolved_token_id) == 0, (
         "user1 shares not burned after the dissolved unwrap"
@@ -165,8 +165,8 @@ def test_subnet_dissolved(env):
     second_user_tao_before = chain.cast_balance_wei(second_user_address)
     env.vault_send(
         2_000_000, "user2 dissolved unwrap failed",
-        "unwrap(uint256,uint256,bytes32)",
-        dissolved_token_id, second_user_shares, env.wrapper_substrate_coldkey,
+        "unwrap(uint256,uint256,bytes32,uint256)",
+        dissolved_token_id, second_user_shares, env.wrapper_substrate_coldkey, 0,
         private_key=second_user_private_key,
     )
     assert env.vault_shares(dissolved_token_id, second_user_address) == 0, (

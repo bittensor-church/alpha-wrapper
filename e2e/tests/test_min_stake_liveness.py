@@ -61,8 +61,8 @@ class ChurnLedger:
         quoted_alpha, _ = self.env.preview_unwrap(self.token_id, burn)
         receipt = self.env.vault_send(
             2_500_000, f"{label}: unwrap failed",
-            "unwrap(uint256,uint256,bytes32)",
-            self.token_id, burn, self.env.wrapper_substrate_coldkey,
+            "unwrap(uint256,uint256,bytes32,uint256)",
+            self.token_id, burn, self.env.wrapper_substrate_coldkey, 1,
         )
         assert_gas_within(receipt, config.UNWRAP_GAS_BOUND, f"{label}: unwrap")
         delivered = self.delivered_alpha_total() - delivered_before

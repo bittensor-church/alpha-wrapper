@@ -101,7 +101,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         vm.prank(alice);
         vm.expectRevert(GatherBelowFloor.selector);
-        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
     }
 
     function test_RevertWhen_UnwrapRequestBelowFloor() public {
@@ -114,7 +114,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(WithdrawTooSmall.selector);
-        vault.unwrap(TOKEN1, burnShares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, burnShares, _toSubstrate(alice), 0);
     }
 
     function test_Unwrap_DeliversExactlyAtFloorValue() public {
@@ -122,7 +122,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         uint256 shares = _sharesForExactAssets(TOKEN1, CHAIN_MIN_STAKE, 40e6);
 
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
 
         assertEq(_userStakeAcrossHotkeys(alice, NETUID1), CHAIN_MIN_STAKE, "a request worth exactly the floor delivers");
     }
@@ -147,7 +147,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         uint256 shares = _sharesForExactAssets(TOKEN1, 3e6, 40e6);
         vm.prank(alice);
         vm.expectRevert(WithdrawTooSmall.selector);
-        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
     }
 
     // The chain would move this deposit; the vault refuses it, because the only minimum it can
@@ -279,7 +279,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         uint256 shares = _sharesForExactAssets(TOKEN1, 25e6, 40e6);
         vm.prank(alice);
         vm.expectRevert(GatherBelowFloor.selector);
-        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
     }
 
     // The alpha rail quotes dust it will not deliver: previewUnwrap prices the shares while unwrap
@@ -295,7 +295,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(WithdrawTooSmall.selector);
-        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
     }
 
     // The skip decision is exact across the whole (price, balances) plane: a move the label passes
@@ -374,7 +374,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
         vm.prank(alice);
         (bool ok, bytes memory ret) =
-            address(vault).call(abi.encodeCall(vault.unwrap, (TOKEN1, shares, _toSubstrate(alice))));
+            address(vault).call(abi.encodeCall(vault.unwrap, (TOKEN1, shares, _toSubstrate(alice), expected)));
 
         if (ok) {
             assertEq(_userStakeAcrossHotkeys(alice, NETUID1), expected, "delivery is exact");
@@ -440,7 +440,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         uint256 sharesBefore = vault.balanceOf(alice, TOKEN1);
         vm.prank(alice);
         vm.expectRevert(bytes("MockStaking: transferStake reverted"));
-        vault.unwrap(TOKEN1, sharesBefore, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, sharesBefore, _toSubstrate(alice), 0);
 
         assertEq(vault.balanceOf(alice, TOKEN1), sharesBefore, "shares intact after bubbled failure");
     }
@@ -459,7 +459,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         (uint256 previewAlpha,) = lens.previewUnwrap(TOKEN1, shares);
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
 
         uint256 received = _userStakeAcrossHotkeys(alice, NETUID1);
         assertEq(received, previewAlpha, "delivery is exact - no shortfall above the floor");
@@ -475,7 +475,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         (uint256 previewAlpha,) = lens.previewUnwrap(TOKEN1, shares);
         vm.prank(alice);
-        vault.unwrap(TOKEN1, shares, _toSubstrate(alice));
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
 
         assertEq(_userStakeAcrossHotkeys(alice, NETUID1), previewAlpha, "the gather delivered the full preview");
     }
