@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { VaultReads } from "src/libraries/VaultReads.sol";
 import { BackingShortfall } from "src/VaultErrors.sol";
-import { MockStaking } from "./mocks/MockStaking.sol";
+import { CHAIN_MIN_TRANSFER, MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 /// @dev Covers what the one-hop resolver refuses: trails it will not walk, edges the chain never
@@ -110,20 +110,23 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
     }
 
-    /// @dev Pins the resolver's zero-residual guard against a split the chain's whole-entry moves
-    ///      cannot produce: a slot spread across two keys is more than the record can carry, so
-    ///      the case goes to the watcher rather than down the follow.
-    function test_SuccessorWithAResidualLeftBehind_FailsClosed() public {
-        _depositAndWrap(alice, NETUID1, 30 ether);
+    /// @dev Stake transferred under a retired key cannot block a valid swap. The successor alone
+    ///      covers the slot, while the residual stays outside the accounted backing.
+    function test_SuccessorWithAResidualLeftBehind_StaysOperable() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
+        uint256 accounted = lens.totalStake(TOKEN1);
         bytes32 coldkey = _subnetColdkey(NETUID1);
         uint256 owed = _getVaultStake(hotkey1, NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, owed / 4);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, CHAIN_MIN_TRANSFER);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, coldkey, NETUID1, owed);
         MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey4);
 
-        assertFalse(lens.isBackingIntact(TOKEN1), "two piles for one slot is not a clean swap");
-        vm.expectPartialRevert(BackingShortfall.selector);
+        assertTrue(lens.isBackingIntact(TOKEN1), "stray stake cannot block the recorded successor");
+        assertEq(lens.totalStake(TOKEN1), accounted, "the residual is not counted twice");
         vault.rebalance(NETUID1);
+
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice));
     }
 
     /// @dev A swap can carry one slot's alpha onto a key another slot has itself moved off. Nothing
