@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { CHAIN_MIN_STAKE } from "./mocks/MockStaking.sol";
-import { MAX_VALIDATORS } from "src/ValidatorRegistry.sol";
+import { MAX_VALIDATORS } from "src/interfaces/IValidatorRegistry.sol";
 
 /// @dev A subnet's validator set is any size from 1 to 64 and changes size between calls. Three is
 ///      the expected size; these tests hold the two ends, the transitions between them, and the

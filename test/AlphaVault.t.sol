@@ -27,7 +27,6 @@ import {
 import { CloneBase } from "src/CloneBase.sol";
 import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
-import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
 import { CHAIN_MIN_STAKE, MockStaking } from "./mocks/MockStaking.sol";
 import { MockValidatorRegistry } from "./mocks/MockValidatorRegistry.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
@@ -579,10 +578,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_RevertWhen_RegistryWhenNoValidatorsSet() public {
-        address[] memory s = new address[](2);
-        s[0] = vm.addr(SIGNER_PK_1);
-        s[1] = vm.addr(SIGNER_PK_2);
-        (, AlphaVaultLens freshLens) = _deployVaultAndLens(address(new ValidatorRegistry(address(this), s, 2)));
+        (, AlphaVaultLens freshLens) = _deployVaultAndLens(address(new MockValidatorRegistry()));
 
         vm.expectRevert(NoValidatorFound.selector);
         freshLens.getCurrentValidators(NETUID1);
