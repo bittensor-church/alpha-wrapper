@@ -142,7 +142,7 @@ library VaultReads {
             uint256 balance = IStaking(STAKING_PRECOMPILE).getStake(backing.keys[i], coldkey, netuid);
             if (!coversTracked(balance, tracked)) {
                 (bool followed, bytes32 successor, uint256 successorBalance) =
-                    _followSwap(backing.keys, i, balance, tracked, coldkey, netuid);
+                    _followSwap(backing.keys, i, tracked, coldkey, netuid);
                 if (followed) {
                     backing.keys[i] = successor;
                     balance = successorBalance;
@@ -159,20 +159,16 @@ library VaultReads {
     }
 
     /// @dev The one shortfall that resolves itself: a validator hotkey swap, accepted only when the
-    ///      successor explains the whole slot. A residual left behind is refused because a slot
-    ///      spread across two keys is more than the record can carry, and a successor another slot
-    ///      answers for is refused because one balance may never back two expectations. Exactly one
-    ///      edge is read, and no price: judging a past event by today's valuation gets it wrong in
-    ///      both directions.
-    function _followSwap(
-        bytes32[] memory keys,
-        uint256 index,
-        uint256 balance,
-        uint256 tracked,
-        bytes32 coldkey,
-        uint16 netuid
-    ) private view returns (bool, bytes32, uint256) {
-        if (balance != 0) return (false, bytes32(0), 0);
+    ///      successor explains the whole slot. Any residual under the retired key is left uncounted
+    ///      instead of letting stray stake block the follow. A successor another slot answers for
+    ///      is still refused because one balance may never back two expectations. Exactly one edge
+    ///      is read, and no price: judging a past event by today's valuation gets it wrong in both
+    ///      directions.
+    function _followSwap(bytes32[] memory keys, uint256 index, uint256 tracked, bytes32 coldkey, uint16 netuid)
+        private
+        view
+        returns (bool, bytes32, uint256)
+    {
         bytes32 successor = hotkeySuccessor(keys[index], netuid);
         if (successor == bytes32(0)) return (false, bytes32(0), 0);
         if (VaultMath.contains(keys, successor)) return (false, bytes32(0), 0);

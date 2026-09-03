@@ -966,9 +966,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     // -------------------- Backing record ----------------------------------------
 
     /// @notice Move alpha of the vault's own back under the key of the slot it makes whole.
-    /// @dev    Safe to leave permissionless: only the subnet clone can stake under its own
-    ///         coldkey, so a balance found there is already holders' backing, and moving it
-    ///         between the clone's keys can only bring it into view.
+    /// @dev    Safe to leave permissionless: only the subnet clone can move stake held under its
+    ///         coldkey. Third parties can transfer stake in, but moving any balance found there
+    ///         between the clone's keys can only bring it into view as holders' backing.
     ///         The chain moves stake entries whole - a swap migrates the full balance, the dust
     ///         sweep removes an entire entry - so a slot's loss sits under exactly one key. The
     ///         vault aims the find at the short slot with the largest expectation it covers; a
