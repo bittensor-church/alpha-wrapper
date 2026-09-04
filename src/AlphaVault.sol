@@ -1136,10 +1136,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///      holds anything, and otherwise a key the chain will still accept for that validator -
     ///      the attested name while the chain has an owner for it, the successor of a name a swap
     ///      has retired. No two entries may land on one key, so an emptied entry whose name
-    ///      carries another slot's alpha keeps its resolved key, and an entry left with no key of
-    ///      its own reverts `SwappedHotkeyStillAttested` - only the attesters can untangle a set
-    ///      listing a swapped-away name beside its successor. An entry left with no key the chain
-    ///      still has an owner for reverts `AttestedHotkeyRetired`.
+    ///      another attested slot answers under keeps its resolved key, and an entry left with no
+    ///      key of its own reverts `SwappedHotkeyStillAttested` - only the attesters can untangle
+    ///      a set listing a swapped-away name beside its successor. An entry left with no key the
+    ///      chain still has an owner for reverts `AttestedHotkeyRetired`.
     function _assignActives(
         VaultReads.Slot[] memory slots,
         VaultReads.Backing memory backing,
@@ -1182,11 +1182,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
     }
 
-    /// @dev Whether a slot other than `ownSlot` answers under `key` and will keep it. A slot holds
-    ///      its key while its validator stays attested and it has alpha to account for; emptied, it
-    ///      gives the key up - unless another slot answers under its own name and leaves it nowhere
-    ///      else to sit. That last test is deliberately coarse - it does not ask whether that other
-    ///      slot could move on in turn - so a chain of emptied slots is refused rather than unpicked.
+    /// @dev Whether a slot other than `ownSlot` answers under `key`. A slot keeps its key while its
+    ///      validator stays attested, even while empty, and releases it once dropped.
     function _keyHeldElsewhere(
         VaultReads.Backing memory backing,
         bytes32[] memory logicals,
@@ -1196,10 +1193,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ) private pure returns (bool) {
         uint256 holder = VaultMath.indexOf(backing.keys, key);
         if (holder == type(uint256).max || holder == ownSlot) return false;
-        if (!VaultMath.contains(currentSet, logicals[holder])) return false;
-        if (backing.balances[holder] != 0) return true;
-        uint256 onTheHoldersName = VaultMath.indexOf(backing.keys, logicals[holder]);
-        return onTheHoldersName != type(uint256).max && onTheHoldersName != holder;
+        return VaultMath.contains(currentSet, logicals[holder]);
     }
 
     /// @dev Where an entry the position holds nothing for is staked: the attested name while the

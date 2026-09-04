@@ -201,10 +201,9 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         assertApproxEqAbs(lens.totalStake(TOKEN1), held, 0.01 ether, "and the total counts each balance once");
     }
 
-    /// @dev The first validator's slot, emptied and with its own attested name carrying the
-    ///      neighbouring slot's alpha: it has nowhere else to sit and holds on to the key it
-    ///      answers under.
-    function _positionWithAStuckEmptiedSlot() private {
+    /// @dev The first validator's slot, emptied while its own attested name carries the
+    ///      neighbouring slot's alpha: it stays on the key it resolved to.
+    function _positionWithAnEmptiedSlotOnAnotherKey() private {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
         vault.rebalance(NETUID1);
@@ -213,10 +212,10 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         _drainTheFirstSlot(alice, NETUID1);
     }
 
-    /// @dev Attesting the key that slot holds on to as a validator of its own would leave the two
+    /// @dev Attesting the key that slot stays on as a validator of its own would leave the two
     ///      entries on one balance, so the set is refused until the attesters untangle it.
-    function test_SetNamingTheKeyAStuckSlotHoldsOnTo_Refuses() public {
-        _positionWithAStuckEmptiedSlot();
+    function test_SetNamingTheKeyAnEmptiedSlotStaysOn_Refuses() public {
+        _positionWithAnEmptiedSlotOnAnotherKey();
 
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey4, hotkey2), _weights(3334, 3333, 3333));
 
@@ -227,8 +226,8 @@ contract BackingResolutionTest is AlphaVaultTestBase {
     /// @dev The chain can retire that key while the slot sits on it holding nothing. There is then
     ///      no key left to stake the validator's share under, and the rails say so rather than
     ///      forward a move the chain would reject at the cost of the whole budget.
-    function test_StuckSlotWhoseKeyIsRetired_RefusesTheRebalance() public {
-        _positionWithAStuckEmptiedSlot();
+    function test_EmptiedSlotWhoseKeyIsRetired_RefusesTheRebalance() public {
+        _positionWithAnEmptiedSlotOnAnotherKey();
 
         MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey4, true);
 

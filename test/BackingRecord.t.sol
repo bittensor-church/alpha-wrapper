@@ -309,24 +309,22 @@ contract BackingRecordTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
     }
 
-    /// @dev With the old key still one the chain answers for, that same set is servable once the
-    ///      slot has been sold out: the emptied slot goes back to its own name and releases the key
-    ///      the attesters gave an entry of its own.
-    function test_SetNamingADrainedSwapBesideItsLiveName_ServesBothEntries() public {
+    /// @dev The same holds while the old key is still one the chain answers for: an emptied slot
+    ///      keeps the key it resolved to for as long as its validator stays attested, so the
+    ///      successor's own entry has nowhere to sit until the attesters drop the old name.
+    function test_SetNamingADrainedSwapBesideItsLiveName_StillRefuses() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulatePerSubnetSwap(NETUID1, hotkey1, hotkey4);
         vault.rebalance(NETUID1);
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey4, hotkey2), _weights(3334, 3333, 3333));
         _drainTheFirstSlot(alice, NETUID1);
 
+        vm.expectRevert(SwappedHotkeyStillAttested.selector);
         vault.rebalance(NETUID1);
 
-        VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
-        assertEq(slots[0].active, hotkey1, "the emptied slot went back to its own name");
-        assertEq(slots[1].active, hotkey4, "and the key it released answers for its own entry");
-        assertGt(_getVaultStake(hotkey1, NETUID1), 0, "both are funded");
-        assertGt(_getVaultStake(hotkey4, NETUID1), 0, "both are funded");
-        assertTrue(lens.isBackingIntact(TOKEN1), "with the record accounting for the position");
+        _setValidators(NETUID1, _hotkeys(hotkey4, hotkey2), _weights(5000, 5000));
+        vault.rebalance(NETUID1);
+        assertTrue(lens.isBackingIntact(TOKEN1), "dropping the old name resumes service");
     }
 
     /// @dev However wide the set, re-serving a drained swap leaves every slot on a key of its own
