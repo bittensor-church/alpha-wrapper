@@ -158,11 +158,13 @@ contract BackingRecordTest is AlphaVaultTestBase {
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
         vault.rebalance(NETUID1);
-        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
 
+        // The set lands while the old name is still a key the chain owns; the swap that empties it
+        // of an owner comes after, which is the only order the registry admits.
         _setValidators(
             NETUID1, _hotkeys(hotkey1, hotkey4, hotkey2), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
         );
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
 
         vm.expectRevert(SwappedHotkeyStillAttested.selector);
         vault.rebalance(NETUID1);

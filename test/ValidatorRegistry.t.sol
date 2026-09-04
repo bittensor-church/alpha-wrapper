@@ -5,6 +5,8 @@ import { Test, Vm } from "forge-std/Test.sol";
 import { ValidatorRegistry, MAX_VALIDATORS } from "src/ValidatorRegistry.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 import { AttestationHelper } from "./helpers/AttestationHelper.sol";
+import { MockStaking } from "./mocks/MockStaking.sol";
+import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 contract ValidatorRegistryTest is AttestationHelper {
     event SignersUpdated(address[] newSigners, uint8 newThreshold);
@@ -32,6 +34,13 @@ contract ValidatorRegistryTest is AttestationHelper {
     ValidatorRegistry private registry;
 
     function setUp() public {
+        _etchStakingMock();
+        _recordHotkeyOwner(hk1);
+        _recordHotkeyOwner(hk2);
+        _recordHotkeyOwner(hk3);
+        // The widest salted set covers every narrower one, since a hotkey follows from its index.
+        _recordHotkeyOwners(_hotkeysFrom("validator", MAX_VALIDATORS));
+
         s1 = vm.addr(PK1);
         s2 = vm.addr(PK2);
         s3 = vm.addr(PK3);
@@ -575,6 +584,63 @@ contract ValidatorRegistryTest is AttestationHelper {
         bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
         vm.expectRevert(ValidatorRegistry.DuplicateValue.selector);
         registry.updateValidators(att, sigs);
+    }
+
+    /// @dev A hotkey nobody owns is a name the chain refuses to move stake into, and the vault has
+    ///      no set to fall back on, so committing one would shut the subnet's alpha rail.
+    function test_RevertWhen_HotkeyHasNoOwner() public {
+        bytes32 mistyped = keccak256("mistyped-hotkey");
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 2, 1);
+        att.hotkeys[1] = mistyped;
+        bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
+
+        vm.expectRevert(abi.encodeWithSelector(ValidatorRegistry.OwnerlessHotkey.selector, mistyped));
+        registry.updateValidators(att, sigs);
+    }
+
+    /// @dev An all-subnet swap takes the old key's owner record with it, so a set still naming that
+    ///      key is refused however recently it was a live validator.
+    function test_RevertWhen_HotkeyLostItsOwnerToASwap() public {
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hk2, true);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 2, 1);
+        bytes[] memory sigs = _sign(att, _pks2(PK2, PK1));
+
+        vm.expectRevert(abi.encodeWithSelector(ValidatorRegistry.OwnerlessHotkey.selector, hk2));
+        registry.updateValidators(att, sigs);
+    }
+
+    /// @dev One ownerless name takes the whole batch down, including the entries ahead of it.
+    function test_RevertWhen_BatchNamesAnOwnerlessHotkey() public {
+        bytes32 mistyped = keccak256("mistyped-hotkey");
+        ValidatorRegistry.WeightAttestation[] memory atts = new ValidatorRegistry.WeightAttestation[](2);
+        atts[0] = _att(SN1, 2, 1);
+        atts[1] = _att(SN2, 1, 1);
+        atts[1].hotkeys[0] = mistyped;
+
+        bytes[][] memory sigs = new bytes[][](2);
+        sigs[0] = _sign(atts[0], _pks2(PK2, PK1));
+        sigs[1] = _sign(atts[1], _pks2(PK2, PK1));
+
+        vm.expectRevert(abi.encodeWithSelector(ValidatorRegistry.OwnerlessHotkey.selector, mistyped));
+        registry.updateValidatorsBatch(atts, sigs);
+
+        assertEq(registry.nonces(SN1), 0, "the entry ahead of the bad one committed nothing");
+        assertEq(registry.nonces(SN2), 0);
+    }
+
+    function testFuzz_Update_CommitsAnyOwnedSet(uint256 count, uint256 saltSeed) public {
+        count = bound(count, 1, MAX_VALIDATORS);
+        bytes32[] memory hotkeys = _hotkeysFrom(vm.toString(saltSeed), count);
+        _recordHotkeyOwners(hotkeys);
+
+        ValidatorRegistry.WeightAttestation memory att = _buildAttestation(SN1, hotkeys, _evenWeights(count), 1);
+        registry.updateValidators(att, _sign(att, _pks2(PK2, PK1)));
+
+        (bytes32[] memory hks,) = registry.getValidators(SN1);
+        assertEq(hks.length, count);
+        for (uint256 i; i < count; ++i) {
+            assertEq(hks[i], hotkeys[i]);
+        }
     }
 
     function test_RevertWhen_WeightsSumBelowBpsBase() public {

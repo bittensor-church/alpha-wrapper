@@ -68,7 +68,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     uint256 public TOKEN2;
 
     function setUp() public virtual {
-        vm.etch(STAKING_PRECOMPILE, address(new MockStaking()).code);
+        _etchStakingMock();
         vm.etch(ADDRESS_MAPPING_PRECOMPILE, address(new MockAddressMapping()).code);
         vm.etch(SUBNET_PRECOMPILE, address(new MockSubnetPrecompile()).code);
         vm.etch(ALPHA_PRECOMPILE, address(new MockAlpha()).code);
