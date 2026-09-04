@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { VaultReads } from "src/libraries/VaultReads.sol";
-import { BackingShortfall } from "src/VaultErrors.sol";
+import { AttestedHotkeyRetired, BackingShortfall, SwappedHotkeyStillAttested } from "src/VaultErrors.sol";
 import { CHAIN_MIN_TRANSFER, MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
@@ -199,6 +199,41 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         assertEq(slots[0].active, hotkey4, "the emptied slot kept its resolved key");
         assertEq(slots[1].active, hotkey1, "beside the slot whose alpha its name carries");
         assertApproxEqAbs(lens.totalStake(TOKEN1), held, 0.01 ether, "and the total counts each balance once");
+    }
+
+    /// @dev The first validator's slot, emptied and with its own attested name carrying the
+    ///      neighbouring slot's alpha: it has nowhere else to sit and holds on to the key it
+    ///      answers under.
+    function _positionWithAStuckEmptiedSlot() private {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        vault.rebalance(NETUID1);
+        // hotkey2's alpha lands on hotkey1, a name its own slot has moved off.
+        _simulatePerSubnetSwap(NETUID1, hotkey2, hotkey1);
+        _drainTheFirstSlot(alice, NETUID1);
+    }
+
+    /// @dev Attesting the key that slot holds on to as a validator of its own would leave the two
+    ///      entries on one balance, so the set is refused until the attesters untangle it.
+    function test_SetNamingTheKeyAStuckSlotHoldsOnTo_Refuses() public {
+        _positionWithAStuckEmptiedSlot();
+
+        _setValidators(NETUID1, _hotkeys(hotkey1, hotkey4, hotkey2), _weights(3334, 3333, 3333));
+
+        vm.expectRevert(SwappedHotkeyStillAttested.selector);
+        vault.rebalance(NETUID1);
+    }
+
+    /// @dev The chain can retire that key while the slot sits on it holding nothing. There is then
+    ///      no key left to stake the validator's share under, and the rails say so rather than
+    ///      forward a move the chain would reject at the cost of the whole budget.
+    function test_StuckSlotWhoseKeyIsRetired_RefusesTheRebalance() public {
+        _positionWithAStuckEmptiedSlot();
+
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey4, true);
+
+        vm.expectRevert(abi.encodeWithSelector(AttestedHotkeyRetired.selector, hotkey1));
+        vault.rebalance(NETUID1);
     }
 
     // -------------------- Emptyings the chain does not explain -------------------

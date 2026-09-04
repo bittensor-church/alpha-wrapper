@@ -41,3 +41,7 @@ error RecoveryIncomplete();
 /// @dev The attested set lists a swapped-away hotkey beside its successor; the vault cannot
 ///      serve it until the attesters drop the old name.
 error SwappedHotkeyStillAttested();
+/// @dev No key the chain still has an owner for remains to stake an attested validator's share
+///      under, and the chain rejects every operation naming one it does not; the attesters must
+///      replace that validator.
+error AttestedHotkeyRetired(bytes32 hotkey);

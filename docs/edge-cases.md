@@ -95,6 +95,14 @@ the vault's alpha with it. The vault reads the chain's own successor
 edge and follows it one hop, so the ordinary swap resolves itself on the
 next call and holders never notice.
 
+A swap across every subnet also retires the old name, and the chain
+turns away every stake operation naming a key it has no owner for. The
+same edge decides where that validator's share is staked next, so its
+slot keeps being funded at the successor even once an exit has emptied
+it. An attested name the chain offers no live key for is refused by
+name, `AttestedHotkeyRetired`, until the attesters replace that
+validator; the TAO exit stays open meanwhile.
+
 One hop is all it reads. A validator that swapped twice before the vault
 looked, an edge the chain has since dropped, or two swaps converging on
 one key all leave backing the vault cannot account for.
