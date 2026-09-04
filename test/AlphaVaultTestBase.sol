@@ -435,6 +435,13 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         return VaultReads.activesOf(vault.recordedSlots(tokenId));
     }
 
+    /// @dev Puts a key on the simulated chain as one the chain answers for, whether it is new or a
+    ///      retired name someone has claimed again.
+    function _simulateHotkeyRegistered(bytes32 hotkey) internal {
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey, false);
+        _recordHotkeyOwner(hotkey);
+    }
+
     /// @dev Moves the clone's backing between hotkeys with no vault call and no lineage, standing
     ///      in for a swap this subnet recorded nothing for.
     function _simulateOffVaultSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
@@ -443,12 +450,22 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         uint256 alreadyThere = _getStakeForColdkey(toHotkey, coldkey, netuid);
         MockStaking(STAKING_PRECOMPILE).setStake(fromHotkey, coldkey, netuid, 0);
         MockStaking(STAKING_PRECOMPILE).setStake(toHotkey, coldkey, netuid, alreadyThere + amount);
+        // Stake only ever lands on a key the chain has an owner for.
+        _simulateHotkeyRegistered(toHotkey);
     }
 
-    /// @dev A swap as the chain records it: the stake moves and the successor edge points at it.
-    function _simulateFollowedSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
+    /// @dev A swap confined to one subnet: the stake moves, the successor edge points at it, and
+    ///      the old key keeps its owner.
+    function _simulatePerSubnetSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
         _simulateOffVaultSwap(netuid, fromHotkey, toHotkey);
         MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(fromHotkey, netuid, toHotkey);
+    }
+
+    /// @dev The ordinary validator swap, which covers every subnet at once: the stake moves, the
+    ///      successor edge points at it, and the chain is left with no owner for the old key.
+    function _simulateFollowedSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
+        _simulatePerSubnetSwap(netuid, fromHotkey, toHotkey);
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(fromHotkey, true);
     }
 
     /// @dev Chains `hops` swaps, leaving the backing at the far tip with the vault able to read
@@ -466,6 +483,19 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     /// @dev What a native transfer of `amount` wei can actually deliver.
     function _wholeRao(uint256 amount) internal pure returns (uint256) {
         return VaultMath.toNativeQuantum(amount);
+    }
+
+    /// @dev Sells the first slot out through the TAO exit, which reads no attested set, so the
+    ///      entry that followed a swap holds nothing and the next call has to decide for itself
+    ///      where that validator's share belongs.
+    function _drainTheFirstSlot(address holder, uint256 netuid) internal {
+        uint256 tokenId = vault.currentTokenId(netuid);
+        bytes32 followed = vault.recordedSlots(tokenId)[0].active;
+        uint256 burn =
+            (vault.balanceOf(holder, tokenId) * (_getVaultStake(followed, netuid) + 1e15)) / lens.locatedStake(tokenId);
+        vm.prank(holder);
+        vault.unwrapForTao(tokenId, burn, 0);
+        assertEq(_getVaultStake(followed, netuid), 0, "the slot has to be empty for this to mean anything");
     }
 
     /// @dev Puts the loss on file, runs its window out, and books it - the three steps that reopen

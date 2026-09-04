@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { VaultReads } from "src/libraries/VaultReads.sol";
-import { SwappedHotkeyStillAttested, ZeroAmount } from "src/VaultErrors.sol";
+import { AttestedHotkeyRetired, SwappedHotkeyStillAttested, ZeroAmount } from "src/VaultErrors.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
@@ -105,7 +105,9 @@ contract BackingRecordTest is AlphaVaultTestBase {
     ///      validator's alpha, and reordering the set must not shuffle them.
     function test_ReorderedSet_KeepsWeightsWithTheirValidators() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
-        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        // A swap the attesters can keep naming the old validator across, which is what makes the
+        // reordered set below attestable at all.
+        _simulatePerSubnetSwap(NETUID1, hotkey1, hotkey4);
         vault.rebalance(NETUID1);
 
         _setValidators(NETUID1, _hotkeys(hotkey3, hotkey1, hotkey2), _weights(5000, 3000, 2000));
@@ -156,7 +158,7 @@ contract BackingRecordTest is AlphaVaultTestBase {
     function test_SetNamingASwappedKeyAndItsSuccessor_RefusesCheaply() public {
         _setAlphaPrice(NETUID1, 1e18);
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
-        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        _simulatePerSubnetSwap(NETUID1, hotkey1, hotkey4);
         vault.rebalance(NETUID1);
 
         // The set lands while the old name is still a key the chain owns; the swap that empties it
@@ -180,6 +182,182 @@ contract BackingRecordTest is AlphaVaultTestBase {
         );
         vault.rebalance(NETUID1);
         assertTrue(lens.isBackingIntact(TOKEN1), "dropping the stale name resumes service");
+    }
+
+    // -------------------- Where an entry holding nothing is staked ---------------
+
+    /// @dev The position with its first validator swapped away, followed, and then sold out of:
+    ///      the slot holds nothing and its attested name is one the chain now refuses.
+    function _positionWithADrainedSwap() private {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        vault.rebalance(NETUID1);
+        _drainTheFirstSlot(alice, NETUID1);
+    }
+
+    function test_RebalanceAfterADrainedSwap_StakesTheShareAtTheSuccessor() public {
+        _positionWithADrainedSwap();
+
+        vault.rebalance(NETUID1);
+
+        assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey4, "the slot answers under the successor");
+        assertGt(_getVaultStake(hotkey4, NETUID1), 0, "which is where its share went");
+        assertEq(_getVaultStake(hotkey1, NETUID1), 0, "and nothing was aimed at the retired name");
+    }
+
+    function test_UnwrapAfterADrainedSwap_StakesTheShareAtTheSuccessor() public {
+        _positionWithADrainedSwap();
+
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice), 0);
+
+        assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey4, "the slot answers under the successor");
+        assertGt(_getVaultStake(hotkey4, NETUID1), 0, "which is where its share went");
+        assertGt(_userStakeAcrossHotkeys(alice, NETUID1), 0, "and the exit delivered");
+        assertTrue(lens.isBackingIntact(TOKEN1), "with the record accounting for what is left");
+    }
+
+    function test_WrapAfterADrainedSwap_StakesTheShareAtTheSuccessor() public {
+        _positionWithADrainedSwap();
+
+        _simulateAlphaDepositHotkey(bob, NETUID1, 6 ether, hotkey2);
+        _wrapHotkey(bob, NETUID1, hotkey2);
+
+        assertGt(vault.balanceOf(bob, TOKEN1), 0, "the deposit landed");
+        assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey4, "the slot answers under the successor");
+        assertGt(_getVaultStake(hotkey4, NETUID1), 0, "which is where its share went");
+    }
+
+    /// @dev A validator attested between two calls can swap before any of the position reaches it,
+    ///      leaving the record no slot to answer from and the attested name unusable.
+    function test_ValidatorSwappingBeforeItIsFunded_StakesItsShareAtTheSuccessor() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2, hotkey4), _weights(3334, 3333, 3333));
+        _simulateFollowedSwap(NETUID1, hotkey4, hotkey5);
+
+        vault.rebalance(NETUID1);
+
+        VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
+        assertEq(slots[2].logical, hotkey4, "the record names the attested validator");
+        assertEq(slots[2].active, hotkey5, "while its share sits at the successor");
+        assertGt(_getVaultStake(hotkey5, NETUID1), 0, "which is where the rebalance staked it");
+        assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "backing whole across the swap");
+    }
+
+    /// @dev A swap confined to one subnet leaves the old name a key the chain still answers for, so
+    ///      the validator's share goes on being staked under the name the attesters wrote down.
+    function test_PerSubnetSwapAfterADrain_StakesTheShareAtTheAttestedName() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulatePerSubnetSwap(NETUID1, hotkey1, hotkey4);
+        vault.rebalance(NETUID1);
+        _drainTheFirstSlot(alice, NETUID1);
+
+        vault.rebalance(NETUID1);
+
+        assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey1, "the slot answers under its own name again");
+        assertGt(_getVaultStake(hotkey1, NETUID1), 0, "which is where its share went");
+    }
+
+    /// @dev A name the chain has no owner for and no successor for has nowhere to send its
+    ///      validator's share. The rails say so by name rather than forward a move the chain would
+    ///      reject at the cost of the whole forwarded budget. The TAO exit reads no attested set
+    ///      and stays open.
+    function test_RetiredNameWithNoSuccessor_RefusesEveryAlphaRail() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
+        _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2, hotkey4), _weights(3334, 3333, 3333));
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey4, true);
+
+        vm.expectRevert(abi.encodeWithSelector(AttestedHotkeyRetired.selector, hotkey4));
+        vault.rebalance(NETUID1);
+
+        vm.expectRevert(abi.encodeWithSelector(AttestedHotkeyRetired.selector, hotkey4));
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice), 0);
+
+        _simulateAlphaDepositHotkey(bob, NETUID1, 6 ether, hotkey2);
+        vm.expectRevert(abi.encodeWithSelector(AttestedHotkeyRetired.selector, hotkey4));
+        _wrapHotkey(bob, NETUID1, hotkey2);
+
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares / 4, 0);
+    }
+
+    /// @dev One hop is all the vault reads, so that hop has to land on a key the chain will accept.
+    function test_RetiredNameWithARetiredSuccessor_RefusesTheRebalance() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2, hotkey4), _weights(3334, 3333, 3333));
+        _simulateFollowedSwap(NETUID1, hotkey4, hotkey5);
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey5, true);
+
+        vm.expectRevert(abi.encodeWithSelector(AttestedHotkeyRetired.selector, hotkey4));
+        vault.rebalance(NETUID1);
+    }
+
+    /// @dev Selling the slot out does not make a set listing a retired name beside its successor
+    ///      servable: the retired name has nowhere to go but the key its neighbour was given.
+    function test_SetNamingADrainedSwapAndItsSuccessor_StillRefuses() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulatePerSubnetSwap(NETUID1, hotkey1, hotkey4);
+        vault.rebalance(NETUID1);
+        _setValidators(NETUID1, _hotkeys(hotkey1, hotkey4, hotkey2), _weights(3334, 3333, 3333));
+        // The validator retires the old key across every subnet once the attesters have signed.
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
+        _drainTheFirstSlot(alice, NETUID1);
+
+        vm.expectRevert(SwappedHotkeyStillAttested.selector);
+        vault.rebalance(NETUID1);
+    }
+
+    /// @dev The same holds while the old key is still one the chain answers for: an emptied slot
+    ///      keeps the key it resolved to for as long as its validator stays attested, so the
+    ///      successor's own entry has nowhere to sit until the attesters drop the old name.
+    function test_SetNamingADrainedSwapBesideItsLiveName_StillRefuses() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulatePerSubnetSwap(NETUID1, hotkey1, hotkey4);
+        vault.rebalance(NETUID1);
+        _setValidators(NETUID1, _hotkeys(hotkey1, hotkey4, hotkey2), _weights(3334, 3333, 3333));
+        _drainTheFirstSlot(alice, NETUID1);
+
+        vm.expectRevert(SwappedHotkeyStillAttested.selector);
+        vault.rebalance(NETUID1);
+
+        _setValidators(NETUID1, _hotkeys(hotkey4, hotkey2), _weights(5000, 5000));
+        vault.rebalance(NETUID1);
+        assertTrue(lens.isBackingIntact(TOKEN1), "dropping the old name resumes service");
+    }
+
+    /// @dev However wide the set, re-serving a drained swap leaves every slot on a key of its own
+    ///      and the whole position under the keys the record names.
+    function testFuzz_DrainedSwap_LeavesEverySlotOnItsOwnKey(uint256 rawCount) public {
+        uint256 count = bound(rawCount, 2, 8);
+        uint256 netuid = 11;
+        _setRegBlock(netuid, 500);
+        bytes32[] memory hks = _setValidatorCount(netuid, count);
+        _simulateAlphaDepositHotkey(alice, netuid, 30 ether, hks[0]);
+        _wrapHotkey(alice, netuid, hks[0]);
+        uint256 tokenId = vault.currentTokenId(netuid);
+
+        bytes32 successor = keccak256("drained-swap-successor");
+        _simulateFollowedSwap(netuid, hks[0], successor);
+        vault.rebalance(netuid);
+        _drainTheFirstSlot(alice, netuid);
+
+        vault.rebalance(netuid);
+
+        VaultReads.Slot[] memory slots = vault.recordedSlots(tokenId);
+        for (uint256 i; i < slots.length; ++i) {
+            for (uint256 j = i + 1; j < slots.length; ++j) {
+                assertTrue(slots[i].active != slots[j].active, "no two slots answer for one key");
+            }
+        }
+        uint256 underTheRecord = _vaultStakeAcross(_lastSeen(tokenId), netuid);
+        assertEq(underTheRecord, lens.totalStake(tokenId), "the record's keys hold the whole position");
+        assertEq(
+            underTheRecord,
+            _vaultStakeAcross(hks, netuid) + _getVaultStake(successor, netuid),
+            "and nothing of it was left outside them"
+        );
     }
 
     // -------------------- Quiet changes never trip -------------------------------

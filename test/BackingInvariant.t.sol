@@ -197,6 +197,11 @@ contract BackingInvariantTest is AlphaVaultTestBase {
             assigned += weights[i];
         }
         weights[set.length - 1] = BPS_BASE - assigned;
+        // Only keys the chain answers for are attestable, so a name a swap retired reaches a set
+        // again only once someone has claimed it.
+        for (uint256 i; i < set.length; ++i) {
+            _simulateHotkeyRegistered(set[i]);
+        }
         _setValidators(NETUID1, set, weights);
         currentSet = set;
     }

@@ -98,7 +98,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
     ///      attesters never named, and a retired one would refuse every move aimed at it.
     function test_WriteOff_ReturnsAShortSlotToItsAttestedValidator() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
-        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        _simulatePerSubnetSwap(NETUID1, hotkey1, hotkey4);
         vault.rebalance(NETUID1);
         assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey4, "the record followed the swap");
 
@@ -704,7 +704,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
     ///      on that validator's key rather than sitting where the mailbox left it.
     function test_Wrap_LandsOnTheKeyTheRecordFollows() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
-        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        _simulatePerSubnetSwap(NETUID1, hotkey1, hotkey4);
         vault.rebalance(NETUID1);
 
         _simulateAlphaDepositHotkey(bob, NETUID1, 6 ether, hotkey1);
@@ -832,7 +832,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
     ///      validator instead - otherwise the rails aim at a key that refuses them.
     function test_BookedLoss_LeavesTheRailsAimingAtAnAttestedKey() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
-        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        _simulatePerSubnetSwap(NETUID1, hotkey1, hotkey4);
         vault.rebalance(NETUID1);
         assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey4, "the record persisted the swap");
 
