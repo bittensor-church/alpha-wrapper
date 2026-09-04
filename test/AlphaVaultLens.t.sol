@@ -60,9 +60,11 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
     }
 
     /// @dev With nothing recovered a written-off position's shares are worth nothing, and zero is
-    ///      the quote integrators should read for it.
-    function test_SharePrice_QuotesZeroAfterACompleteWriteOff() public {
-        _depositAndWrap(alice, NETUID1, 1e10);
+    ///      the quote integrators should read for it at any supply - the virtual offset must not
+    ///      price a share unit above zero when the supply is small.
+    function testFuzz_SharePrice_QuotesZeroAfterACompleteWriteOff(uint256 deposit) public {
+        deposit = bound(deposit, 1e7, 1e20);
+        _depositAndWrap(alice, NETUID1, deposit);
         bytes32[] memory recorded = _hotkeys(hotkey1, hotkey2, hotkey3);
         for (uint256 i; i < recorded.length; ++i) {
             _simulateOffVaultSwap(NETUID1, recorded[i], keccak256(abi.encode("stray", i)));

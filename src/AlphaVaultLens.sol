@@ -143,9 +143,10 @@ contract AlphaVaultLens {
         uint256 supply = vault.totalSupply(tokenId);
         if (supply == 0) revert NoSharesOutstanding();
         uint256 stake = totalStake(tokenId);
+        // With no backing the virtual offset alone would price a share unit above zero.
+        if (stake == 0) return 0;
         uint256 price = VaultMath.assetsFor(stake, supply, 1e18);
-        // Zero is the honest quote for a complete write-off; only backing the scale cannot express is refused.
-        if (price == 0 && stake != 0) revert SharePriceBelowPrecision();
+        if (price == 0) revert SharePriceBelowPrecision();
         return price;
     }
 
