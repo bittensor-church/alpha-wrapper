@@ -7,6 +7,7 @@ import { AlphaVault } from "src/AlphaVault.sol";
 import { AlphaVaultLens } from "src/AlphaVaultLens.sol";
 import {
     ChosenHotkeyNotInSet,
+    ClaimBelowNativePrecision,
     DepositTooSmall,
     InsufficientShares,
     NetuidOutOfRange,
@@ -1104,7 +1105,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateTaoAwardedOnDissolution(tokenId, 80 ether);
         _simulateDissolutionCompleted(NETUID1);
 
-        uint256 aliceExpected = (80 ether * aliceShares) / supply;
+        uint256 aliceExpected = _wholeRao((80 ether * aliceShares) / supply);
         uint256 aliceBefore = alice.balance;
         vm.prank(alice);
         vault.unwrap(tokenId, aliceShares, _toSubstrate(alice), 0);
@@ -1113,8 +1114,55 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 bobBefore = bob.balance;
         vm.prank(bob);
         vault.unwrap(tokenId, bobShares, _toSubstrate(bob), 0);
-        // bob gets the rest including dust
-        assertEq(bob.balance - bobBefore, 80 ether - aliceExpected);
+        // bob gets the rest, less the tail no transfer can carry
+        assertEq(bob.balance - bobBefore, _wholeRao(80 ether - aliceExpected));
+    }
+
+    // Native TAO moves in whole RAO, so the payout is rounded down to what the transfer delivers
+    // and the tail stays in the pot for the holders who remain.
+    function test_DissolvedUnwrap_PaysWholeRaoAndKeepsTheTail() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        uint256 tokenId = vault.currentTokenId(NETUID1);
+        uint256 shares = vault.balanceOf(alice, tokenId);
+        address clone = vault.subnetClone(tokenId);
+
+        _simulateDissolutionStarted(NETUID1);
+        _simulateTaoAwardedOnDissolution(tokenId, 50 ether + 5e8);
+        _simulateDissolutionCompleted(NETUID1);
+
+        (, uint256 quoted) = lens.previewUnwrap(tokenId, shares);
+        assertEq(quoted, 50 ether, "the quote is what the transfer delivers");
+
+        uint256 aliceBefore = alice.balance;
+        vm.expectEmit(true, true, false, true, address(vault));
+        emit DissolvedSubnetUnwrapped(alice, tokenId, shares, 50 ether);
+        vm.prank(alice);
+        vault.unwrap(tokenId, shares, bytes32(0), 0);
+
+        assertEq(alice.balance - aliceBefore, 50 ether, "paid in whole RAO");
+        assertEq(clone.balance, 5e8, "the sub-RAO tail stays behind");
+    }
+
+    function test_RevertWhen_DissolvedSliceIsBelowOneRao() public {
+        _simulateAlphaDeposit(alice, NETUID1, 1e7);
+        _wrap(alice, NETUID1);
+        _simulateAlphaDeposit(bob, NETUID1, 100 ether);
+        _wrap(bob, NETUID1);
+        uint256 tokenId = vault.currentTokenId(NETUID1);
+        uint256 aliceShares = vault.balanceOf(alice, tokenId);
+
+        _simulateDissolutionStarted(NETUID1);
+        _simulateTaoAwardedOnDissolution(tokenId, 1 ether);
+        _simulateDissolutionCompleted(NETUID1);
+
+        (, uint256 quoted) = lens.previewUnwrap(tokenId, aliceShares);
+        assertEq(quoted, 0, "a slice below one RAO quotes nothing");
+
+        vm.prank(alice);
+        vm.expectRevert(ClaimBelowNativePrecision.selector);
+        vault.unwrap(tokenId, aliceShares, bytes32(0), 0);
+        assertEq(vault.balanceOf(alice, tokenId), aliceShares, "the refusal keeps the shares");
     }
 
     function test_UnwrapFromDissolvedSubnetAfterNewSubnetRegistered() public {
@@ -1232,7 +1280,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vm.prank(alice);
         vault.unwrap(tokenId, shares, _toSubstrate(alice), 0);
 
-        assertEq(alice.balance - aliceBefore, 5 ether + 1);
+        assertEq(alice.balance - aliceBefore, 5 ether, "the force-sent wei is below one RAO and stays behind");
     }
 
     function test_RevertWhen_WrapDuringBlackout() public {

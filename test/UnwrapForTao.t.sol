@@ -11,6 +11,7 @@ import {
 } from "src/VaultErrors.sol";
 import { MockAlpha } from "./mocks/MockAlpha.sol";
 import { CHAIN_MIN_STAKE } from "./mocks/MockStaking.sol";
+import { VaultMath } from "src/libraries/VaultMath.sol";
 import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 import {
     RefundRejectingReceiver,
@@ -685,6 +686,47 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         assertEq(alice.balance - balanceBefore, 60 ether, "paid only for the alpha the chain swapped");
         assertEq(lens.totalStake(TOKEN1), 40 ether, "the chain kept the unswapped alpha staked");
         assertApproxEqAbs(_positionValue(alice), 40 ether, 2, "the caller still owns it, not the vault");
+    }
+
+    // Emissions lift the backing above the cost basis the first mint set, so a full burn's refund,
+    // minted at the empty-vault rate, can outnumber the shares burned. The exit still goes through
+    // and the event nets the burn to zero.
+    function test_FullBurnShortFillAfterAppreciation_NetsTheBurnToZero() public {
+        _setRemoveStakeRate(1, 1);
+        uint256 shares = _depositForAlice(100 ether);
+        _setVaultStakes(NETUID1, 300 ether, 0, 0);
+        _setRemoveStakeCap(60 ether);
+
+        uint256 balanceBefore = alice.balance;
+        vm.expectEmit(true, true, false, true, address(vault));
+        emit UnwrappedForTao(alice, TOKEN1, 0, 60 ether, 60 ether);
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares, 0);
+
+        assertEq(alice.balance - balanceBefore, 60 ether, "paid for the alpha the chain swapped");
+        assertGt(vault.balanceOf(alice, TOKEN1), shares, "the refund outnumbers the burn");
+        assertApproxEqAbs(_positionValue(alice), 240 ether, 2, "the unsold alpha is still the caller's");
+    }
+
+    function testFuzz_FullBurnShortFill_RefundsWhateverStaysStaked(uint256 growth, uint256 fill) public {
+        _setRemoveStakeRate(1, 1);
+        _depositForAlice(100 ether);
+        uint256 total = bound(growth, 100 ether, 1000 ether);
+        _setVaultStakes(NETUID1, total, 0, 0);
+        uint256 sold = bound(fill, 1 ether, total - 1 ether);
+        _setRemoveStakeCap(sold);
+
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        uint256 balanceBefore = alice.balance;
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares, 0);
+
+        assertEq(alice.balance - balanceBefore, sold, "paid for the alpha the chain swapped");
+        uint256 refund = vault.balanceOf(alice, TOKEN1);
+        assertEq(
+            refund, (total - sold) * VaultMath.VIRTUAL_SHARES, "the unsold alpha is refunded at the empty-vault rate"
+        );
+        assertEq(vault.totalSupply(TOKEN1), refund, "the refund is the whole supply");
     }
 
     // The chain keeps a RAO or so of every sale; a full exit must not come back holding it.

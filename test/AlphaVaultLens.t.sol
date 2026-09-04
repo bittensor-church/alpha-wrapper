@@ -10,7 +10,7 @@ pragma solidity ^0.8.20;
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { AlphaVaultLens } from "src/AlphaVaultLens.sol";
-import { ZeroAddress } from "src/VaultErrors.sol";
+import { SharePriceBelowPrecision, ZeroAddress } from "src/VaultErrors.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
@@ -39,6 +39,40 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
         assertEq(price, unitAlpha, "one share unit");
         (uint256 alpha,) = lens.previewUnwrap(TOKEN1, shares);
         assertLe((shares * price) / 1e18, alpha, "a balance valued at the price never overstates its exit");
+    }
+
+    /// @dev Recapitalizing a written-off position mints at the virtual rate, which can leave a
+    ///      share unit worth less than the 1e18-scaled quote expresses. The lens refuses rather
+    ///      than answer zero against real backing, while the burn quote still prices the position.
+    function test_SharePrice_RefusesToQuoteBelowItsPrecision() public {
+        _depositAndWrap(alice, NETUID1, 1e10);
+        bytes32[] memory recorded = _hotkeys(hotkey1, hotkey2, hotkey3);
+        for (uint256 i; i < recorded.length; ++i) {
+            _simulateOffVaultSwap(NETUID1, recorded[i], keccak256(abi.encode("stray", i)));
+        }
+        _runOutRecoveryWindow(TOKEN1);
+        uint256 bobShares = _depositAndWrap(bob, NETUID1, 1e10);
+
+        (uint256 alpha,) = lens.previewUnwrap(TOKEN1, bobShares);
+        assertApproxEqAbs(alpha, 1e10, 2, "the burn quote still prices the position");
+        vm.expectRevert(SharePriceBelowPrecision.selector);
+        lens.sharePrice(TOKEN1);
+    }
+
+    /// @dev With nothing recovered a written-off position's shares are worth nothing, and zero is
+    ///      the quote integrators should read for it at any supply - the virtual offset must not
+    ///      price a share unit above zero when the supply is small.
+    function testFuzz_SharePrice_QuotesZeroAfterACompleteWriteOff(uint256 deposit) public {
+        deposit = bound(deposit, 1e7, 1e20);
+        _depositAndWrap(alice, NETUID1, deposit);
+        bytes32[] memory recorded = _hotkeys(hotkey1, hotkey2, hotkey3);
+        for (uint256 i; i < recorded.length; ++i) {
+            _simulateOffVaultSwap(NETUID1, recorded[i], keccak256(abi.encode("stray", i)));
+        }
+        _runOutRecoveryWindow(TOKEN1);
+
+        assertEq(lens.totalStake(TOKEN1), 0, "the scenario needs the whole backing written off");
+        assertEq(lens.sharePrice(TOKEN1), 0);
     }
 
     /// @dev A position whose shares were all burned still has a clone, and integrators poll it.

@@ -16,6 +16,10 @@ error SubnetInDissolutionBlackoutPeriod();
 error SubnetDissolved();
 error NothingToUnwrap();
 error NoSharesOutstanding();
+/// @dev Backing exists but a share unit is worth less than the 1e18-scaled quote can express, which
+///      only a written-off position recapitalized at the virtual rate reaches; a burn quote still
+///      prices it.
+error SharePriceBelowPrecision();
 error DepositTooSmall();
 error WithdrawTooSmall();
 error ClaimBelowNativePrecision();

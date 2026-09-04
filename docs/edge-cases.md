@@ -18,11 +18,14 @@ Pricing mid-refund would distribute an incomplete amount.
 Once cleanup completes the position is permanently dissolved: the
 netuid's current registration block differs from the token id's. From
 then on `unwrap` pays native TAO pro-rata from the clone's refund
-balance. On the lens, `previewUnwrap` quotes that payout while
+balance, rounded down to whole RAO. On the lens, `previewUnwrap` quotes that payout while
 `sharePrice` and `previewWrap` revert with `SubnetDissolved`. Both payouts start once the
 refund sits on the clone: until it arrives - or while all of the clone's
 TAO is reserved for claims - `unwrap` reverts `NothingToUnwrap` and
-`previewUnwrap` reverts `SubnetDissolved`. `claimTao` works throughout.
+`previewUnwrap` reverts `SubnetDissolved`. A slice that rounds to less than
+one RAO is refused with `ClaimBelowNativePrecision` and the shares stay put;
+transferring them to a holder of the same id whose combined slice clears one
+RAO exits them. `claimTao` works throughout.
 
 The chain reports dissolution by netuid alone. An old, already-dissolved
 position on a reused netuid keeps paying its refund while its successor

@@ -119,8 +119,9 @@ sub-minimum burn is refused (`WithdrawTooSmall`); top your position up
 with one more deposit, then exit.
 
 After a subnet dissolves, `unwrap(tokenId, shares, anything, 0)` pays your
-pro-rata part of the subnet's TAO refund in native TAO; the coldkey
-argument is unused there. A positive `minAlphaOut` reverts instead, which
+pro-rata part of the subnet's TAO refund in native TAO, rounded down to
+whole RAO; a slice below one RAO is refused (`ClaimBelowNativePrecision`).
+The coldkey argument is unused there. A positive `minAlphaOut` reverts instead, which
 protects a transaction prepared for a live alpha exit from unexpectedly
 burning for TAO after dissolution. See [edge-cases.md](edge-cases.md) for
 the dissolution timeline.

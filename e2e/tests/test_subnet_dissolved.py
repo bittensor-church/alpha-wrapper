@@ -136,7 +136,8 @@ def test_subnet_dissolved(env):
     # --- Phase 11: both users recover their pro-rata slice as native TAO ----------
     clone_tao_before = chain.cast_balance_wei(dissolved_clone)
     total_shares = first_user_shares + second_user_shares
-    expected_first_user_tao = clone_tao_before * first_user_shares // total_shares
+    # Native TAO moves in whole RAO, so the vault floors each slice to that quantum.
+    expected_first_user_tao = clone_tao_before * first_user_shares // total_shares // checks.RAO_WEI * checks.RAO_WEI
 
     _, previewed_tao = env.preview_unwrap(dissolved_token_id, first_user_shares)
     assert previewed_tao == expected_first_user_tao, (
@@ -177,12 +178,14 @@ def test_subnet_dissolved(env):
         "user2 gained no TAO from the dissolved unwrap",
     )
 
-    assert chain.cast_balance_wei(dissolved_clone) == 0, (
-        "clone not fully drained after both users unwrapped"
+    clone_tail = chain.cast_balance_wei(dissolved_clone)
+    assert clone_tail < 2 * checks.RAO_WEI, (
+        f"clone kept {clone_tail} wei after both users unwrapped; "
+        "each exit may leave at most a sub-RAO tail"
     )
     print(f"  Pro-rata recovery: user1 +{first_user_gain} wei "
           f"(preview {expected_first_user_tao}), user2 +{second_user_gain} wei; "
-          "clone drained to 0")
+          f"clone tail {clone_tail} wei")
 
     volume_block_end = chain.cast_block_number()
     checks.assert_csv(
