@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/// @dev The widest validator set any implementation may return; AlphaVault sizes its
-///      per-hotkey loops and gas expectations against this bound.
+/// @dev The widest validator set any implementation may return; the `getValidators` contract
+///      below caps the set at this many entries. Implementations enforce it (the weighted
+///      registry rejects a larger set); the fixed single-hotkey source is trivially under it.
 uint256 constant MAX_VALIDATORS = 64;
 
 /// @title IValidatorRegistry
