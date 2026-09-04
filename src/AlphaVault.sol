@@ -125,6 +125,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
     /// @notice A live-subnet unwrap paid by selling the alpha. `shares` and `alphaSold` are net of
     ///         any refund, so both count only what left the vault; `taoOut` is native TAO in wei.
+    ///         A full burn refunds at the empty-vault rate, which can hand back more shares than
+    ///         were burned; `shares` then reads zero.
     event UnwrappedForTao(
         address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaSold, uint256 taoOut
     );
@@ -284,7 +286,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///         cleanup, except in its late window once the registration block reads zero.
     ///         Then dispatches on subnet state:
     ///           - permanently dissolved (tokenId's registrationBlock no longer current): pays pro-rata
-    ///             native TAO from the clone's refund balance.
+    ///             native TAO from the clone's refund balance, in whole native-transfer quantums;
+    ///             a slice below one quantum reverts `ClaimBelowNativePrecision`.
     ///           - live: consolidates the position onto one hotkey and requests the full pro-rata
     ///             alpha for `userSubstrateColdkey` in a single transfer, then re-splits the
     ///             remainder toward the attested weights. The observed recipient credit can be a
@@ -416,7 +419,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 refundShares = VaultMath.sharesFor(total - assets, supply - shares, unsold);
         if (refundShares != 0) _mint(msg.sender, tokenId, refundShares, "");
 
-        emit UnwrappedForTao(msg.sender, tokenId, shares - refundShares, sold, taoOut);
+        emit UnwrappedForTao(msg.sender, tokenId, refundShares < shares ? shares - refundShares : 0, sold, taoOut);
     }
 
     /// @notice Pay out the caller's accumulated TAO entitlement for `tokenId` to `recipient`.
@@ -564,10 +567,11 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 backing = VaultMath.unreservedTao(clone.balance, taoLiability[tokenId]);
         if (backing == 0) revert NothingToUnwrap();
 
-        uint256 supplyBefore = totalSupply(tokenId);
-        uint256 userTao = VaultMath.proRata(backing, shares, supplyBefore);
+        // The sub-quantum tail a transfer cannot carry stays in the pot for the holders who remain.
+        uint256 userTao = VaultMath.toNativeQuantum(VaultMath.proRata(backing, shares, totalSupply(tokenId)));
+        if (userTao == 0) revert ClaimBelowNativePrecision();
         _burn(msg.sender, tokenId, shares);
-        if (userTao > 0) SubnetClone(payable(clone)).unwrapTao(payable(msg.sender), userTao);
+        SubnetClone(payable(clone)).unwrapTao(payable(msg.sender), userTao);
         emit DissolvedSubnetUnwrapped(msg.sender, tokenId, shares, userTao);
     }
 

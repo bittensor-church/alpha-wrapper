@@ -5,7 +5,13 @@ import { AlphaVault } from "./AlphaVault.sol";
 import { IValidatorRegistry } from "./interfaces/IValidatorRegistry.sol";
 import { VaultMath } from "./libraries/VaultMath.sol";
 import { VaultReads } from "./libraries/VaultReads.sol";
-import { NetuidOutOfRange, NoSharesOutstanding, SubnetDissolved, ZeroAddress } from "./VaultErrors.sol";
+import {
+    NetuidOutOfRange,
+    NoSharesOutstanding,
+    SharePriceBelowPrecision,
+    SubnetDissolved,
+    ZeroAddress
+} from "./VaultErrors.sol";
 
 /// @title AlphaVaultLens
 /// @notice Every quote an `AlphaVault` integrator needs: backing, share price, deposit and exit
@@ -123,16 +129,24 @@ contract AlphaVaultLens {
     /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while the subnet is being dissolved,
     ///         `SubnetDissolved` once dissolution has completed or
     ///         the tokenId does not correspond to the currently-registered subnet,
-    ///         `BackingShortfall` while any backing is unaccounted for, and
+    ///         `BackingShortfall` while any backing is unaccounted for,
     ///         `NoSharesOutstanding` when no shares have been minted against this tokenId
-    ///         (a share price with zero supply has no meaningful value).
+    ///         (a share price with zero supply has no meaningful value), and
+    ///         `SharePriceBelowPrecision` when backing exists but a share unit is worth less than
+    ///         the scale can express - a written-off position recapitalized at the virtual rate -
+    ///         rather than quoting zero against real backing; `previewUnwrap` still prices any
+    ///         burn. A complete write-off with nothing recovered quotes zero.
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @return Price of one share scaled by 1e18.
     function sharePrice(uint256 tokenId) external view returns (uint256) {
         _requireCurrentRegistration(tokenId);
         uint256 supply = vault.totalSupply(tokenId);
         if (supply == 0) revert NoSharesOutstanding();
-        return VaultMath.assetsFor(totalStake(tokenId), supply, 1e18);
+        uint256 stake = totalStake(tokenId);
+        uint256 price = VaultMath.assetsFor(stake, supply, 1e18);
+        // Zero is the honest quote for a complete write-off; only backing the scale cannot express is refused.
+        if (price == 0 && stake != 0) revert SharePriceBelowPrecision();
+        return price;
     }
 
     /// @notice Preview how many shares would be minted for a deposit of `assets` alpha.
@@ -161,9 +175,11 @@ contract AlphaVaultLens {
     ///         for zero only when the caller explicitly passes a zero floor. Keeping a positive floor
     ///         preserves the shares for any later recovery. That voluntary alpha-for-TAO sell is a
     ///         market order with no preview of its own: its payout is bounded by the caller's
-    ///         minTaoOut, not quoted here. `tao` is non-zero only for the dissolved-subnet payout. The caller's
-    ///         claimable-TAO entitlement is never part of this quote: it survives unwrapping and
-    ///         is quoted by `claimableTaoOf`.
+    ///         minTaoOut, not quoted here. `tao` is the dissolved-subnet payout in whole
+    ///         native-transfer quantums, exactly what `unwrap` pays; a zero there means `unwrap`
+    ///         would refuse the slice as below one quantum. The caller's claimable-TAO
+    ///         entitlement is never part of this quote: it survives unwrapping and is quoted by
+    ///         `claimableTaoOf`.
     /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
     /// @param  shares  Shares being previewed.
     /// @return alpha   Nominal pro-rata alpha requested on the live path.
@@ -181,7 +197,7 @@ contract AlphaVaultLens {
         if (VaultReads.isIssuedForDissolvedSubnet(tokenId)) {
             uint256 backing = VaultMath.unreservedTao(clone.balance, vault.taoLiability(tokenId));
             if (backing == 0) revert SubnetDissolved();
-            return (0, VaultMath.proRata(backing, shares, supply));
+            return (0, VaultMath.toNativeQuantum(VaultMath.proRata(backing, shares, supply)));
         }
 
         VaultReads.resolveValidators(validatorRegistry, netuid);

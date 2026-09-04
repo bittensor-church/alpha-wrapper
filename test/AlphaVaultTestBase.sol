@@ -9,6 +9,7 @@ import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
 import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
 import { MockStaking, CHAIN_MIN_STAKE, CHAIN_MIN_TRANSFER, CHAIN_NOMINATOR_MIN_STAKE } from "./mocks/MockStaking.sol";
+import { VaultMath } from "src/libraries/VaultMath.sol";
 import { MockAddressMapping } from "./mocks/MockAddressMapping.sol";
 import { MockSubnetPrecompile } from "./mocks/MockSubnetPrecompile.sol";
 import { MockAlpha } from "./mocks/MockAlpha.sol";
@@ -460,6 +461,11 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
             previous = tip;
         }
         _simulateOffVaultSwap(netuid, fromHotkey, tip);
+    }
+
+    /// @dev What a native transfer of `amount` wei can actually deliver.
+    function _wholeRao(uint256 amount) internal pure returns (uint256) {
+        return VaultMath.toNativeQuantum(amount);
     }
 
     /// @dev Puts the loss on file, runs its window out, and books it - the three steps that reopen

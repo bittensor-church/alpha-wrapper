@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import { NothingToUnwrap, ZeroAmount } from "src/VaultErrors.sol";
+import { ClaimBelowNativePrecision, NothingToUnwrap, ZeroAmount } from "src/VaultErrors.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 
 /// @dev Rounding-to-zero and empty-state guards for the share math, split out of AlphaVault.t.sol.
@@ -60,9 +60,9 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         assertApproxEqAbs(received, 5 ether, 1e9);
     }
 
-    // The dissolved payout floors each holder's pro-rata cut, so earlier exits can round down;
-    // whatever they leave behind must land with the last holder and never exceed the pot. A
-    // one-wei pot also pins that a cut rounding to 0 still burns the shares and pays nothing.
+    // The dissolved payout floors each holder's pro-rata cut to whole RAO, so every exit can leave
+    // a sub-RAO tail in the pot; the payouts and the tails must add up to the pot exactly, and a
+    // cut that floors to nothing is refused rather than burned.
     function testFuzz_DissolvedUnwrapConservesRefundPot(uint256 aliceDeposit, uint256 bobDeposit, uint256 pot) public {
         aliceDeposit = bound(aliceDeposit, 1e7, 1e20);
         bobDeposit = bound(bobDeposit, 1e7, 1e20);
@@ -82,22 +82,26 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         _simulateTaoAwardedOnDissolution(tokenId, pot);
         _simulateDissolutionCompleted(NETUID1);
 
-        uint256 aliceExpected = (pot * aliceShares) / (aliceShares + bobShares);
+        uint256 aliceExpected = _wholeRao((pot * aliceShares) / (aliceShares + bobShares));
         uint256 aliceBefore = alice.balance;
         vm.prank(alice);
+        if (aliceExpected == 0) vm.expectRevert(ClaimBelowNativePrecision.selector);
         vault.unwrap(tokenId, aliceShares, _toSubstrate(alice), 0);
         assertEq(alice.balance - aliceBefore, aliceExpected);
 
+        uint256 bobExpected = _wholeRao(((pot - aliceExpected) * bobShares) / vault.totalSupply(tokenId));
         uint256 bobBefore = bob.balance;
         vm.prank(bob);
+        if (bobExpected == 0) vm.expectRevert(ClaimBelowNativePrecision.selector);
         vault.unwrap(tokenId, bobShares, _toSubstrate(bob), 0);
-        assertEq(bob.balance - bobBefore, pot - aliceExpected);
+        assertEq(bob.balance - bobBefore, bobExpected);
 
-        assertEq(clone.balance, 0);
-        assertEq(vault.totalSupply(tokenId), 0);
+        assertEq(clone.balance, pot - aliceExpected - bobExpected, "every wei is paid out or still in the pot");
+        assertLt(clone.balance, 2e9, "at most one sub-RAO tail per exit stays behind");
     }
 
-    // A quoted dissolved payout is a commitment: unwrapping the same shares must pay exactly it.
+    // A quoted dissolved payout is a commitment: unwrapping the same shares must pay exactly it,
+    // and a zero quote means the exit refuses the slice.
     function testFuzz_PreviewUnwrapMatchesDissolvedPayout(uint256 deposit, uint256 pot, uint256 shares) public {
         deposit = bound(deposit, 1e7, 1e20);
         pot = bound(pot, 1, 1e24);
@@ -116,6 +120,7 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
 
         uint256 before = alice.balance;
         vm.prank(alice);
+        if (taoQuote == 0) vm.expectRevert(ClaimBelowNativePrecision.selector);
         vault.unwrap(tokenId, shares, _toSubstrate(alice), 0);
         assertEq(alice.balance - before, taoQuote);
     }
