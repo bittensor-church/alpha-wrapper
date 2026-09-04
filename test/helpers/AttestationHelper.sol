@@ -3,8 +3,28 @@ pragma solidity ^0.8.20;
 
 import { Test } from "forge-std/Test.sol";
 import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
+import { MockStaking } from "../mocks/MockStaking.sol";
+import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 abstract contract AttestationHelper is Test {
+    /// @dev The registry reads the chain's owner record for every hotkey it is handed, so the
+    ///      staking precompile has to answer before any attestation can be submitted.
+    function _etchStakingMock() internal {
+        vm.etch(STAKING_PRECOMPILE, address(new MockStaking()).code);
+    }
+
+    /// @dev Puts a hotkey on the simulated chain as a key with an owner, which is what makes it
+    ///      attestable.
+    function _recordHotkeyOwner(bytes32 hotkey) internal {
+        MockStaking(STAKING_PRECOMPILE).setHotkeyOwned(hotkey, true);
+    }
+
+    function _recordHotkeyOwners(bytes32[] memory hotkeys) internal {
+        for (uint256 i; i < hotkeys.length; ++i) {
+            _recordHotkeyOwner(hotkeys[i]);
+        }
+    }
+
     function _domainSeparator(ValidatorRegistry registry) internal view returns (bytes32) {
         (, string memory name, string memory version, uint256 chainId, address verifyingContract,,) =
             registry.eip712Domain();
@@ -83,6 +103,8 @@ abstract contract AttestationHelper is Test {
         att = ValidatorRegistry.WeightAttestation({ netuid: netuid, hotkeys: hotkeys, weights: wts, nonce: nonce });
     }
 
+    /// @dev Records the hotkeys first: attesters name validators the chain knows, and the registry
+    ///      refuses the rest. A key a test has deleted stays deleted, so this cannot resurrect one.
     function _submitAttestation(
         ValidatorRegistry registry,
         uint256 netuid,
@@ -90,6 +112,7 @@ abstract contract AttestationHelper is Test {
         uint16[] memory weights,
         uint256[] memory signerPks
     ) internal {
+        _recordHotkeyOwners(hotkeys);
         ValidatorRegistry.WeightAttestation memory att =
             _buildAttestation(netuid, hotkeys, weights, registry.nonces(netuid) + 1);
         bytes32 digest = _attestationDigest(registry, att);

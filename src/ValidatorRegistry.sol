@@ -5,6 +5,7 @@ import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol"
 import { EIP712 } from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import { ECDSA } from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import { IValidatorRegistry } from "./interfaces/IValidatorRegistry.sol";
+import { IStaking, STAKING_PRECOMPILE } from "./interfaces/IStaking.sol";
 
 /// @dev The vault reads one stake balance per validator on every state-mutating call, and a
 ///      rotation settles every slot, so per-call work scales with this cap. 64 keeps the widest
@@ -14,7 +15,8 @@ uint256 constant MAX_VALIDATORS = 64;
 
 /// @title ValidatorRegistry
 /// @notice Per-subnet validator hotkeys + BPS weights, updated by threshold-of-N
-///         off-chain attesters via EIP-712 signed payloads.
+///         off-chain attesters via EIP-712 signed payloads. Every hotkey a payload
+///         names must be one the chain has an owner for.
 contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     bytes32 public constant ATTESTATION_TYPEHASH =
         keccak256("WeightAttestation(uint256 netuid,bytes32[] hotkeys,uint256[] weights,uint256 nonce)");
@@ -57,6 +59,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     error StaleNonce();
     error NotEnoughSignatures();
     error UnknownSigner(address signer);
+    error OwnerlessHotkey(bytes32 hotkey);
     error SignersNotSorted();
     error InsufficientSigners();
     error TooManySigners();
@@ -144,21 +147,29 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         emit SignersUpdated(newSigners, newThreshold);
     }
 
-    function _validatePayload(WeightAttestation calldata attestation, uint256 validatorCount) private pure {
+    /// @dev Every hotkey is checked against the chain's owner record, one read apiece. The vault
+    ///      holds no fallback set: it aims its stake rails at whatever stands here, and the chain
+    ///      turns away every operation naming a hotkey it has no owner for, taking the gas with it.
+    ///      A single such name - a typo, or a key deregistered or swapped away before the signatures
+    ///      landed - would therefore shut that subnet's alpha rail until a corrected set commits.
+    function _validatePayload(WeightAttestation calldata attestation, uint256 validatorCount) private view {
         if (attestation.netuid > type(uint16).max) revert NetuidOutOfRange();
         if (validatorCount == 0 || validatorCount > MAX_VALIDATORS) revert InvalidValidatorCount();
         if (validatorCount != attestation.weights.length) revert LengthMismatch();
 
         uint256 sum;
         for (uint256 i; i < validatorCount;) {
-            if (attestation.hotkeys[i] == bytes32(0)) revert ZeroValue();
+            bytes32 hotkey = attestation.hotkeys[i];
+            if (hotkey == bytes32(0)) revert ZeroValue();
             if (attestation.weights[i] == 0) revert ZeroWeight();
             for (uint256 j = i + 1; j < validatorCount;) {
-                if (attestation.hotkeys[i] == attestation.hotkeys[j]) revert DuplicateValue();
+                if (hotkey == attestation.hotkeys[j]) revert DuplicateValue();
                 unchecked {
                     ++j;
                 }
             }
+            (bool exists,) = IStaking(STAKING_PRECOMPILE).getHotkeyOwner(hotkey);
+            if (!exists) revert OwnerlessHotkey(hotkey);
             sum += attestation.weights[i];
             unchecked {
                 ++i;

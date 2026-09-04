@@ -25,6 +25,12 @@ interface IStaking {
 
     function getStake(bytes32 hotkey, bytes32 coldkey, uint256 netuid) external view returns (uint256);
 
+    /// @notice The coldkey the chain records as owning `hotkey`, and whether it holds such a record
+    ///         at all. A hotkey with no owner names no account: every stake operation aiming at one
+    ///         is rejected, and an all-subnet swap leaves the key it moved on from in exactly that
+    ///         state.
+    function getHotkeyOwner(bytes32 hotkey) external view returns (bool exists, bytes32 owner);
+
     /// @notice The hotkey `hotkey` on `netuid` was swapped for, if any. Keyed with a narrower
     ///         netuid type than the rest of this interface, matching the chain.
     /// @dev    The edge is dropped once the old key is registered again, so its absence proves

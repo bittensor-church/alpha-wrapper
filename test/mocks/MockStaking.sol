@@ -152,6 +152,22 @@ contract MockStaking {
         hotkeyDeleted[hotkey] = deleted;
     }
 
+    /// @dev Which hotkeys the simulated chain has ever recorded an owner for. Balances here are
+    ///      seeded rather than staked, so this is opt-in: a suite records the keys it means the
+    ///      chain to know about, and everything else reads as a name the chain never issued.
+    mapping(bytes32 => bool) private _hotkeyOwned;
+
+    function setHotkeyOwned(bytes32 hotkey, bool owned) external {
+        _hotkeyOwned[hotkey] = owned;
+    }
+
+    /// @dev Owner entries and deletions are the same chain fact from two sides: a key exists once
+    ///      it has been recorded and until a swap takes it away.
+    function getHotkeyOwner(bytes32 hotkey) external view returns (bool, bytes32) {
+        bool exists = _hotkeyOwned[hotkey] && !hotkeyDeleted[hotkey];
+        return (exists, exists ? keccak256(abi.encodePacked("owner:", hotkey)) : bytes32(0));
+    }
+
     mapping(bytes32 => mapping(uint256 => bytes32)) private _successor;
     mapping(bytes32 => mapping(uint256 => bool)) private _successorSet;
 

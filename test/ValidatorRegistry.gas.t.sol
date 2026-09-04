@@ -21,6 +21,8 @@ contract ValidatorRegistryGasTest is AttestationHelper {
     ValidatorRegistry private registry;
 
     function setUp() public {
+        _etchStakingMock();
+
         address[] memory initialSigners = new address[](2);
         initialSigners[0] = vm.addr(PK_LOW);
         initialSigners[1] = vm.addr(PK_HIGH);
@@ -47,12 +49,10 @@ contract ValidatorRegistryGasTest is AttestationHelper {
         bytes[][] memory signatures = new bytes[][](netuids.length);
 
         for (uint256 i; i < netuids.length; ++i) {
-            attestations[i] = _buildAttestation(
-                netuids[i],
-                _hotkeysFrom(string.concat("batch", vm.toString(netuids[i])), validatorCount),
-                _evenWeights(validatorCount),
-                registry.nonces(netuids[i]) + 1
-            );
+            bytes32[] memory hotkeys = _hotkeysFrom(string.concat("batch", vm.toString(netuids[i])), validatorCount);
+            _recordHotkeyOwners(hotkeys);
+            attestations[i] =
+                _buildAttestation(netuids[i], hotkeys, _evenWeights(validatorCount), registry.nonces(netuids[i]) + 1);
             signatures[i] = _sign(_attestationDigest(registry, attestations[i]), _thresholdPks());
         }
 
