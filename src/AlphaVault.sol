@@ -768,7 +768,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @notice Return untracked stake under the vault's coldkey to a recorded slot.
     /// @dev Permissionless, but never transfers to the caller. Source and destination need owner records.
     ///      Requires full coverage of a short slot; with no shortfall, credits slot zero as new backing.
-    ///      A merged find reassigns other short slots' expectations to the recovered backing.
     ///      Does not associate hotkeys or update the registry. Late recovery benefits current holders.
     function recoverStray(uint256 tokenId, bytes32 sourceHotkey) external nonReentrant {
         address clone = subnetClone[tokenId];
@@ -804,9 +803,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         emit BackingRecovered(tokenId, target, amount);
     }
 
-    /// @dev Transfer expectations only against the destination's measured surplus, never rounding slack.
-    ///      Persist every resolved key, even after the surplus runs out: a reduced expectation must not
-    ///      claim a successor already covering another slot and move the shortfall onto a fresh clock.
     function _reassignRecoveredBacking(
         uint256 tokenId,
         VaultReads.Backing memory backing,
@@ -816,6 +812,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         VaultReads.Slot[] storage tokenSlots = _slots[tokenId];
         for (uint256 i; i < tokenSlots.length;) {
             VaultReads.Slot storage slot = tokenSlots[i];
+            // Persist keys even after surplus runs out; otherwise a reduced expectation could
+            // claim a sibling's successor and move the shortfall onto a fresh clock.
             if (slot.active != backing.keys[i]) slot.active = backing.keys[i];
             if (i != chosen && backing.short[i] && surplus != 0) {
                 uint256 credit = Math.min(slot.tracked - backing.balances[i], surplus);

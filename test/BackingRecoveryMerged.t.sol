@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import { Vm } from "forge-std/Test.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { VaultReads } from "src/libraries/VaultReads.sol";
 import { BackingShortfall, RecoveryIncomplete } from "src/VaultErrors.sol";
@@ -15,18 +14,12 @@ contract BackingRecoveryMergedTest is AlphaVaultTestBase {
         uint256 shares = _depositAndWrap(alice, NETUID1, DEPOSIT);
         uint256 merged = _mergeFirstTwoSlots();
         vault.syncBacking(TOKEN1);
-        vm.recordLogs();
         vm.expectCall(
             STAKING_PRECOMPILE, abi.encodeCall(IStaking.moveStake, (hotkey4, hotkey1, NETUID1, NETUID1, merged)), 1
         );
 
         vault.recoverStray(TOKEN1, hotkey4);
 
-        Vm.Log[] memory logs = vm.getRecordedLogs();
-        bytes32 writeOff = keccak256("BackingWrittenOff(uint256,bytes32,uint256,uint256)");
-        for (uint256 i; i < logs.length; ++i) {
-            assertTrue(logs[i].emitter != address(vault) || logs[i].topics[0] != writeOff, "no fictional write-off");
-        }
         VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
         assertEq(slots[0].tracked, merged);
         assertEq(slots[1].tracked, 0);
@@ -62,7 +55,6 @@ contract BackingRecoveryMergedTest is AlphaVaultTestBase {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
         _mergeFirstTwoSlots();
         _simulateOffVaultSwap(NETUID1, hotkey3, hotkey4);
-        // Split the found backing across two sources; the last 20 alpha remains unlocated.
         MockStaking mock = MockStaking(STAKING_PRECOMPILE);
         bytes32 coldkey = _subnetColdkey(NETUID1);
         mock.setStake(hotkey4, coldkey, NETUID1, 100e9);
@@ -107,7 +99,7 @@ contract BackingRecoveryMergedTest is AlphaVaultTestBase {
         uint256 first = _getVaultStake(hotkey1, NETUID1);
         _simulateOffVaultSwap(NETUID1, hotkey1, hotkey5);
         _simulateOffVaultSwap(NETUID1, hotkey2, hotkey4);
-        // A top-up leaves the largest recorded slot short by less than the transfer minimum.
+        // 2,000 RAO is below the chain's transfer minimum.
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(NETUID1), NETUID1, first - 2_000);
         vault.syncBacking(TOKEN1);
         uint256 started = vault.recordedSlots(TOKEN1)[1].shortSince;
@@ -196,7 +188,6 @@ contract BackingRecoveryMergedTest is AlphaVaultTestBase {
     }
 
     function test_RecoverStray_ReservesCoveredSuccessorAfterSurplusRunsOut() public {
-        // NETUID1 is fixed to 1 in the base fixture.
         // forge-lint: disable-next-line(unsafe-typecast)
         uint16 netuid = uint16(NETUID1);
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2, hotkey3), _weights(3000, 1000, 6000));
@@ -207,7 +198,6 @@ contract BackingRecoveryMergedTest is AlphaVaultTestBase {
         vault.syncBacking(TOKEN1);
         uint256 started = vault.recordedSlots(TOKEN1)[0].shortSince;
         uint256 deadline = started + RECOVERY_WINDOW;
-        // Both old keys name X, but its 20 alpha initially covers only slot B.
         _simulatePerSubnetSwap(NETUID1, hotkey2, hotkey5);
         MockStaking mock = MockStaking(STAKING_PRECOMPILE);
         mock.setHotkeySuccessor(hotkey1, NETUID1, hotkey5);

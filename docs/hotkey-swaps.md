@@ -86,8 +86,8 @@ find once, then reassigns other short slots' expectations to the measured surplu
 at the receiving slot. Each alpha is counted once, without splitting the find
 into potentially sub-minimum transfers. Any remaining shortage keeps its original
 clock. Recovery also saves all resolved keys so a reduced expectation cannot
-take a successor already covering another slot. Reassignment emits a recovery
-event, not a loss write-off; surplus beyond all shortages becomes new backing.
+take a successor already covering another slot. Recovery emits `BackingRecovered`;
+surplus beyond all shortages becomes new backing.
 
 ## Exit behavior and accepted tradeoffs
 

@@ -201,8 +201,7 @@ contract BackingInvariantTest is AlphaVaultTestBase {
         currentSet = set;
     }
 
-    /// @dev Fixed replay of the merged-source counterexample; runs with the invariant suite in CI.
-    function test_ReplayMergedStrayRecovery() public {
+    function test_ReplayMergedStrayRecovery_PreservesBackingInvariants() public {
         handler.swapWithoutAnEdge(3920, 702498195375104724870804370661893358612984996200603330987954554);
         handler.swapWithoutAnEdge(21936, 9555);
         handler.swapWithoutAnEdge(0, 46484125467125653278869020054723548665048815226470);
