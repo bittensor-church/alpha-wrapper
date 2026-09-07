@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-// Tests that random sequences of deposits, exits, rebalances, validator hotkey swaps, registry
-// rotations and recoveries never leave two record slots leaning on one balance, and never let the
-// position report more backing than the chain actually holds under its coldkey.
-
 import { Test } from "forge-std/Test.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
@@ -18,8 +14,7 @@ contract BackingHandler is Test {
     uint256 public immutable netuid;
     address[] public actors;
 
-    /// @dev Every hotkey the run has ever staked under, so the harness can total the position's
-    ///      real holding independently of anything the vault records.
+    /// @dev Independent chain-total oracle, including keys no longer tracked by the vault.
     bytes32[] public touchedHotkeys;
     mapping(bytes32 => bool) public touched;
 
@@ -88,8 +83,6 @@ contract BackingHandler is Test {
         try vault.syncBacking(tokenId) { } catch { }
     }
 
-    /// @dev A validator swapping its hotkey, as the chain records it: the stake moves and the
-    ///      successor edge points at where it went.
     function swapHotkey(uint256 fromSeed, uint256 toSeed) external {
         bytes32 from = touchedHotkeys[bound(fromSeed, 0, touchedHotkeys.length - 1)];
         bytes32 to = keccak256(abi.encode("swapped", toSeed));
@@ -97,8 +90,6 @@ contract BackingHandler is Test {
         harness.simulateSwap(from, to);
     }
 
-    /// @dev The same move with no edge behind it - the shape a dust sweep and an erased swap trail
-    ///      both leave.
     function swapWithoutAnEdge(uint256 fromSeed, uint256 toSeed) external {
         bytes32 from = touchedHotkeys[bound(fromSeed, 0, touchedHotkeys.length - 1)];
         bytes32 to = keccak256(abi.encode("stray", toSeed));
@@ -129,7 +120,6 @@ contract BackingHandler is Test {
         bytes32[] memory set = new bytes32[](bound(seed, 1, 3));
         for (uint256 i; i < set.length; ++i) {
             set[i] = touchedHotkeys[bound(uint256(keccak256(abi.encode(seed, i))), 0, touchedHotkeys.length - 1)];
-            // The registry rejects duplicates, so a repeat picks a fresh name instead.
             for (uint256 j; j < i; ++j) {
                 if (set[j] == set[i]) set[i] = keccak256(abi.encode("rotated", seed, i));
             }
@@ -164,7 +154,6 @@ contract BackingInvariantTest is AlphaVaultTestBase {
         return currentSet;
     }
 
-    /// @dev Which slots the resolver can currently account for.
     function coveredSlots() external view returns (bool[] memory covered) {
         VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
         covered = new bool[](slots.length);
@@ -197,8 +186,6 @@ contract BackingInvariantTest is AlphaVaultTestBase {
             assigned += weights[i];
         }
         weights[set.length - 1] = BPS_BASE - assigned;
-        // Only keys the chain answers for are attestable, so a name a swap retired reaches a set
-        // again only once someone has claimed it.
         for (uint256 i; i < set.length; ++i) {
             _simulateHotkeyRegistered(set[i]);
         }
@@ -206,9 +193,6 @@ contract BackingInvariantTest is AlphaVaultTestBase {
         currentSet = set;
     }
 
-    /// @dev The property the record exists to hold: one balance backs one expectation. Two slots
-    ///      naming one key would report that balance twice and price exits against backing that is
-    ///      not there.
     function invariant_NoTwoSlotsAnswerForOneKey() public view {
         VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
         for (uint256 i; i < slots.length; ++i) {
@@ -218,8 +202,6 @@ contract BackingInvariantTest is AlphaVaultTestBase {
         }
     }
 
-    /// @dev What the position reports can fall short of what the chain holds - that is a loss being
-    ///      chased - but it may never exceed it.
     function invariant_ReportedBackingNeverExceedsWhatTheChainHolds() public view {
         uint256 held;
         bytes32[] memory keys = handler.knownHotkeys();
@@ -229,8 +211,6 @@ contract BackingInvariantTest is AlphaVaultTestBase {
         assertLe(lens.locatedStake(TOKEN1), held, "the position reports backing the chain does not hold");
     }
 
-    /// @dev Every expectation the record still stands behind has to be one the chain could still
-    ///      satisfy, or the write-off would give up on more than ever went missing.
     function invariant_NoSlotIsOwedMoreThanTheChainEverHeld() public view {
         VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
         uint256 owed;

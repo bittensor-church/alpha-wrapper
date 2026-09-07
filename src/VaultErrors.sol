@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/// @dev The failure vocabulary of the alpha vault, declared once at file level so the vault, the
-///      lens that quotes it, and the libraries they share all fail with the same selector.
-
 error ZeroAmount();
 error ZeroAddress();
 error ZeroHotkey();
@@ -16,9 +13,7 @@ error SubnetInDissolutionBlackoutPeriod();
 error SubnetDissolved();
 error NothingToUnwrap();
 error NoSharesOutstanding();
-/// @dev Backing exists but a share unit is worth less than the 1e18-scaled quote can express, which
-///      only a written-off position recapitalized at the virtual rate reaches; a burn quote still
-///      prices it.
+/// @dev Positive backing below share-price precision; use `previewUnwrap` for a larger burn.
 error SharePriceBelowPrecision();
 error DepositTooSmall();
 error WithdrawTooSmall();
@@ -29,19 +24,15 @@ error ChosenHotkeyNotInSet();
 error SlippageExceeded(uint256 amountOut);
 error ConsolidationBelowFloor();
 error GatherBelowFloor();
-/// @dev The vault cannot account for backing a slot is owed; `tracked` is what the named key was
-///      expected to hold. Clears when the alpha is found or the loss is written off.
+/// @dev Located backing falls short of the recorded expectation, allowing for accounting dust.
 error BackingShortfall(uint16 netuid, bytes32 hotkey, uint256 tracked);
 error BackingUnchanged();
 error NothingToRecover();
 error RecoveryBelowFloor();
-/// @dev The chain moves stake entries whole, so a slot's loss sits under one key; a source that
-///      cannot cover the whole expectation is not where the backing went.
+/// @dev The recovered balance must cover the selected slot's full expectation.
 error RecoveryIncomplete();
-/// @dev The attested set lists a swapped-away hotkey beside its successor; the vault cannot
-///      serve it until the attesters drop the old name.
+/// @dev Two attested entries would share one backing key; attesters must resolve the collision.
 error SwappedHotkeyStillAttested();
-/// @dev No key the chain still has an owner for remains to stake an attested validator's share
-///      under, and the chain rejects every operation naming one it does not; the attesters must
-///      replace that validator.
+/// @dev No owned receiving key was resolved for this attested name.
+///      Restore an owner record or replace the registry entry; the backing timer cannot fix ownership.
 error AttestedHotkeyRetired(bytes32 hotkey);

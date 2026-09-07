@@ -4,30 +4,22 @@ pragma solidity ^0.8.20;
 import { MockAlpha } from "./MockAlpha.sol";
 import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 
-/// @dev The simulated chain's minimum for unstaking. `vm.etch` copies only code, so every suite
-///      that etches this mock must seed both minimums - an unseeded zero silently accepts amounts
-///      the chain would reject.
+/// @dev Fixtures must seed minimums after `vm.etch`, which copies code but not storage.
 uint256 constant CHAIN_MIN_STAKE = 2e6;
 
-/// @dev The simulated chain's minimum for shifting stake inside a subnet, twenty times lower than
-///      the unstake minimum above. Apart, they let a test tell the vault's refusals from the chain's.
 uint256 constant CHAIN_MIN_TRANSFER = 1e5;
 
-/// @dev The simulated chain's nominator dust threshold; aliased by the test base the same way.
 uint256 constant CHAIN_NOMINATOR_MIN_STAKE = 20e6;
 
-/// @dev Uses keccak256("evm:", h160) for coldkey derivation instead of the real
-///      blake2b, matching the test helper `_toSubstrate`.
+/// @dev Uses keccak256, not Frontier's blake2b; amounts are simplified for unit tests.
 contract MockStaking {
     mapping(bytes32 => mapping(bytes32 => mapping(uint256 => uint256))) public stakes;
     uint256 public moveStakeRoundingLoss;
     uint256 public transferStakeRoundingLoss;
     bool public transferStakeReverts;
     bool public consumeAllGasOnFailure;
-    /// @dev Floors the unstake rail, and the only minimum the chain exposes a getter for.
     uint256 private _chainMinStakeTao;
 
-    /// @dev Floors moves and transfers within a subnet.
     uint256 private _chainMinTransferTao;
 
     function setTransferStakeReverts(bool v) external {
@@ -38,9 +30,7 @@ contract MockStaking {
         consumeAllGasOnFailure = v;
     }
 
-    // The real staking precompile surfaces a rejected dispatch as an EVM error, which consumes all
-    // gas forwarded to its frame; a plain revert refunds it. Opt in when a test must observe the
-    // gas consequences of a rejected call.
+    // Real precompile rejection consumes forwarded gas; plain Solidity revert would refund it.
     function _fail(string memory reason) private view {
         if (consumeAllGasOnFailure) {
             assembly {
@@ -58,10 +48,7 @@ contract MockStaking {
         return keccak256(abi.encodePacked("evm:", msg.sender));
     }
 
-    // Thresholds are tao-denominated: the chain values alpha at the chain-side (full-precision)
-    // price, which is unaffected by the EVM getAlphaPrice quantization, so a sub-1e-9 subnet whose
-    // EVM price reads 0 still has binding chain thresholds. Price is scaled 1e18 to match the
-    // precompile.
+    // Chain minimums use full-precision prices even when the EVM reader rounds to zero.
     function _belowTaoValue(uint256 amount, uint256 netuid, uint256 thresholdTao) private view returns (bool) {
         // forge-lint: disable-next-line(unsafe-typecast)
         uint256 alphaPriceE18 = MockAlpha(ALPHA_PRECOMPILE).chainAlphaPrice(uint16(netuid));
@@ -143,26 +130,20 @@ contract MockStaking {
         return stakes[hotkey][coldkey][netuid];
     }
 
-    /// @dev A swap that keeps its stake leaves the old key with no recorded owner, after which the
-    ///      chain rejects every stake operation naming it - move origin, move destination, transfer
-    ///      source or unstake source alike.
+    /// @dev Models a missing owner record, not deletion of the hotkey identifier or its stake.
     mapping(bytes32 => bool) public hotkeyDeleted;
 
     function setHotkeyDeleted(bytes32 hotkey, bool deleted) external {
         hotkeyDeleted[hotkey] = deleted;
     }
 
-    /// @dev Which hotkeys the simulated chain has ever recorded an owner for. Balances here are
-    ///      seeded rather than staked, so this is opt-in: a suite records the keys it means the
-    ///      chain to know about, and everything else reads as a name the chain never issued.
+    /// @dev Seed owner presence separately from balances so tests can model ownerless stake.
     mapping(bytes32 => bool) private _hotkeyOwned;
 
     function setHotkeyOwned(bytes32 hotkey, bool owned) external {
         _hotkeyOwned[hotkey] = owned;
     }
 
-    /// @dev Owner entries and deletions are the same chain fact from two sides: a key exists once
-    ///      it has been recorded and until a swap takes it away.
     function getHotkeyOwner(bytes32 hotkey) external view returns (bool, bytes32) {
         bool exists = _hotkeyOwned[hotkey] && !hotkeyDeleted[hotkey];
         return (exists, exists ? keccak256(abi.encodePacked("owner:", hotkey)) : bytes32(0));
@@ -176,7 +157,6 @@ contract MockStaking {
         _successorSet[from][netuid] = true;
     }
 
-    /// @dev The mock never folds an absent entry to self; the caller does, matching the chain.
     function getHotkeySuccessor(bytes32 hotkey, uint16 netuid) external view returns (bool, bytes32) {
         return (_successorSet[hotkey][netuid], _successor[hotkey][netuid]);
     }
@@ -186,7 +166,7 @@ contract MockStaking {
     bool public removeStakeReverts;
     mapping(bytes32 => bool) public removeStakeRevertsFor;
     uint256 public nominatorMinRequiredStake;
-    /// @dev Most alpha one unstake can swap before the pool hits its price floor; 0 is uncapped.
+    /// @dev Zero means uncapped.
     uint256 public removeStakeCap;
 
     function setNominatorMinRequiredStake(uint256 thresholdTao) external {
@@ -202,8 +182,6 @@ contract MockStaking {
         taoPerAlphaDenom = denom;
     }
 
-    /// @notice The one payout formula behind removeStake, the sweep, and the alpha mock's sim
-    ///         quotes, so they cannot drift apart.
     function quoteTaoOut(uint256 alpha) public view returns (uint256) {
         return (alpha * taoPerAlpha) / taoPerAlphaDenom;
     }
@@ -228,20 +206,15 @@ contract MockStaking {
             _fail("MockStaking: hotkey has no owner");
         }
         uint256 staked = stakes[hotkey][_senderColdkey()][netuid];
-        // Unit seam: proceeds are credited 1:1 (rao as wei) for test readability; the real chain
-        // credits rao * 1e9 wei. Wei-denominated payouts are asserted by the e2e run.
-        // As on the chain, a capped swap leaves the rest of the request staked.
+        // Unit-test seam: credit one wei per TAO RAO, not the real chain's 1e9 wei. e2e covers conversion.
         uint256 consumed = removeStakeCap != 0 && alphaAmount > removeStakeCap ? removeStakeCap : alphaAmount;
         uint256 taoOut = quoteTaoOut(consumed);
-        // As on the chain, the floor binds only when stake remains, and is checked before the swap.
         if (alphaAmount != staked && quoteTaoOut(alphaAmount) < _chainMinStakeTao) {
             _fail("MockStaking: AmountTooLow");
         }
         uint256 remainder = staked - consumed;
-        // As on the chain, a remainder spot-valued below the nominator threshold is force-sold and
-        // credited to the unstaker within the same call; a zero threshold disables the sweep. The
-        // threshold gates first: standalone suites etch this mock alone, and only an armed sweep
-        // may reach the alpha mock's price.
+        // A dust remainder is force-sold into this payout; standalone fixtures may omit the alpha mock
+        // when the threshold is zero.
         if (remainder != 0 && nominatorMinRequiredStake != 0) {
             if (_belowTaoValue(remainder, netuid, nominatorMinRequiredStake)) {
                 taoOut += quoteTaoOut(remainder);

@@ -3,8 +3,6 @@ pragma solidity ^0.8.20;
 
 import { AlphaVault } from "src/AlphaVault.sol";
 
-/// @dev Accepts ERC1155 mints (required because the vault path mints shares to the caller)
-///      and rejects any native TAO payment.
 contract RevertingReceiver {
     function onERC1155Received(address, address, uint256, uint256, bytes calldata) external pure returns (bytes4) {
         return this.onERC1155Received.selector;
@@ -15,7 +13,6 @@ contract RevertingReceiver {
     }
 }
 
-/// @dev Accepts ERC1155 mints until armed, then refuses the refund an exit mints back.
 contract RefundRejectingReceiver {
     bool private rejecting;
 
@@ -31,9 +28,7 @@ contract RefundRejectingReceiver {
     receive() external payable { }
 }
 
-/// @dev On receiving TAO, re-enters `unwrapForTao` and captures the revert (instead of
-///      propagating it) so the outer call completes and the test can assert the reentrancy guard
-///      specifically rejected the re-entry. Holds ERC1155 shares so it needs the acceptance hook.
+/// @dev Capture the re-entry error so tests can distinguish the guard from incidental failures.
 contract UnwrapForTaoReentrantReceiver {
     AlphaVault target;
     uint256 tokenId;
@@ -63,9 +58,7 @@ contract UnwrapForTaoReentrantReceiver {
     }
 }
 
-/// @dev On receiving TAO, re-enters `reclaimMailboxAlphaAsTao` and captures the revert (instead of
-///      propagating it) so the outer call completes and the test can assert the reentrancy guard
-///      specifically rejected the re-entry. No ERC1155 mints occur on this path.
+/// @dev Capture the re-entry error without reverting the outer payout.
 contract ReclaimMailboxReentrantReceiver {
     AlphaVault target;
     uint256 netuid;
@@ -91,9 +84,6 @@ contract ReclaimMailboxReentrantReceiver {
     }
 }
 
-/// @dev On receiving shares, tries to withdraw TAO entitlement from inside the transfer
-///      acceptance callback and records whether it collected anything, so tests can assert a
-///      mid-transfer claim cannot cash out entitlement for shares just received.
 contract ClaimDuringTransferReceiver {
     AlphaVault public immutable vault;
     bool public claimSucceeded;

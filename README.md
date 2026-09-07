@@ -1,38 +1,28 @@
 # alpha-wrapper
 
-Bittensor alpha-token wrapper (ERC-1155 vault + staking precompile integration).
-
-## Contents
-- `src/AlphaVault.sol` - ERC-1155 vault that wraps staked alpha
-- `src/AlphaVaultLens.sol` - read-only companion answering every quote about a position
-- `src/DepositMailbox.sol` - minimal-proxy mailbox for per-user deposits
-- `src/SubnetClone.sol` - minimal-proxy stake holder for a single subnet
-- `src/CloneBase.sol` - shared base of both clones: vault-only access, one-shot initialization
-- `src/ValidatorRegistry.sol` - registry of target validator weights per subnet, attested by a threshold of signers whose membership the admin manages
-- `src/libraries/` - share math and chain reads shared by the vault and the lens (VaultMath, VaultReads)
-- `src/VaultErrors.sol` - the failure vocabulary both contracts revert with
-- `src/interfaces/` - Bittensor precompile interfaces (IStaking, IAlpha, ISubnet, IAddressMapping) + IValidatorRegistry
-- `test/` - Foundry tests + mocks for the precompiles
+ERC-1155 shares of Bittensor staked alpha, with alpha and native-TAO exits.
 
 ## Documentation
 
-- [How it works](docs/overview.md) - the mental model: mailboxes, clones,
-  token ids, share price, the validator registry
-- [User guide](docs/user-guide.md) - wrapping, exiting, fixing mistakes
-- [Attester guide](docs/attester-guide.md) - producing and submitting
-  validator-weight attestations
-- [Edge cases](docs/edge-cases.md) - dissolution, disabled transfers, the
-  chain's minimums, stray TAO
-- [Security model](docs/security-model.md) - roles, trust boundaries,
-  safeguards
+- [Overview](docs/overview.md): contracts, shares and allocation.
+- [User guide](docs/user-guide.md): deposits, exits and mailbox recovery.
+- [Hotkey swaps](docs/hotkey-swaps.md): the empty-slot issue, automatic handling
+  and watcher-assisted recovery.
+- [Attester guide](docs/attester-guide.md): signed validator weights.
+- [Edge cases](docs/edge-cases.md): dissolution, minimums, disabled transfers and dust.
+- [Security model](docs/security-model.md): authority, liveness dependencies and loss policy.
 
-Tooling docs: [`scripts/README.md`](scripts/README.md) for the on-chain
-observability scripts, [`e2e/README.md`](e2e/README.md) for the end-to-end
-suite.
+## Layout
 
-## Build
+- `src/`: vault, read-only lens, clones, registry, shared math and precompile interfaces.
+- `test/`: Foundry tests and chain mocks.
+- `script/DeployAlpha.s.sol`: deployment; configure the registry separately first.
+- [scripts/](scripts/README.md): read-only chain observability.
+- [e2e/](e2e/README.md): localnet scenarios and their Python harness.
 
-Dependencies are vendored as git submodules:
+## Build and test
+
+Dependencies are git submodules:
 
 ```bash
 git submodule update --init --recursive
@@ -40,30 +30,19 @@ forge build
 forge test
 ```
 
-## Gas
+## Gas snapshots
 
-`snapshots/AlphaVault.json` and `snapshots/AlphaVaultLens.json` record what each
-entry point costs, and CI fails on a change, so a regression shows up in review.
+CI checks `.gas-snapshot` and per-call files in `snapshots/`. These use mocked
+precompiles: compare regressions here, but use e2e transaction receipts to size
+live-chain gas.
 
-**Read them as approximations.** The unit tests mock every chain call, and a mock
-costs what it costs rather than what the chain charges. Measured against a live
-localnet at three validators: `wrap` and `unwrap` land within about a tenth of the
-recorded figures, while `unwrapForTao` runs half again dearer than shown - it leans
-hardest on the swap and unstake calls the mock makes cheap. The sixty-four-validator
-entries have no measured counterpart at all and are the least trustworthy, since that
-is where per-validator chain reads dominate.
-
-For a real figure, read the gas the end-to-end run prints for every call it makes.
-Each run collects them into its GitHub Actions summary, one row per broadcast call.
-
-Regenerate the snapshots with the profile and thread count CI checks them under:
+Regenerate using CI's profile and thread count:
 
 ```bash
 FOUNDRY_PROFILE=ci FOUNDRY_GAS_SNAPSHOT_CHECK=false FOUNDRY_GAS_SNAPSHOT_EMIT=true \
   forge snapshot --tolerance 1 --no-match-contract Invariant --threads 4
 ```
 
-The thread count matters: the fuzzer's dictionary is shared across concurrently
-running tests, so a different one produces different inputs and a snapshot CI will
-reject. Run `forge coverage` only after regenerating, never before - it builds
-unoptimized and overwrites the recorded numbers.
+Thread count affects the shared fuzz dictionary and recorded results. Coverage
+uses a different optimization mode and can overwrite snapshots; regenerate them
+with the command above before committing.

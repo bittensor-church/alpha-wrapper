@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-// Tests the vault's claimable-TAO bookkeeping: when a subnet clone receives native TAO that no
-// vault operation paid out (forced dust sales on the chain, direct donations), the vault tracks
-// who was holding shares at that moment and lets exactly those holders withdraw it later.
-
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { ClaimBelowNativePrecision, SupplyCapExceeded, ZeroAddress, ZeroAmount } from "src/VaultErrors.sol";
 import { ClaimDuringTransferReceiver } from "./helpers/TaoRailReceivers.sol";
@@ -15,7 +11,6 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
 
     uint256 internal constant DEPOSIT = 30 ether;
 
-    // Native TAO moves in whole multiples of this quantum, so quotes and payouts are floored to it.
     uint256 internal constant NATIVE_TRANSFER_QUANTUM = 1e9;
 
     function _donateToTokenClone(uint256 tokenId, uint256 amount) internal {
@@ -32,7 +27,6 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         assertGe(clone.balance, vault.taoLiability(tokenId));
     }
 
-    // A balance-neutral touch that runs the settlement hook for the caller.
     function _touch(address user, uint256 tokenId) internal {
         vm.prank(user);
         vault.safeTransferFrom(user, user, tokenId, 0, "");
@@ -43,8 +37,6 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         vm.prank(user);
         vault.unwrap(tokenId, shares, _toSubstrate(user), 0);
     }
-
-    // -------------------- Index accrual ------------------------------------------
 
     function test_DonationBeforeSecondWrap_AccruesOnlyToFirstHolder() public {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
@@ -111,8 +103,6 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         assertEq(lens.claimableTaoOf(alice, TOKEN1), entitlementBefore);
     }
 
-    // -------------------- Claims -------------------------------------------------
-
     function test_ClaimTao_PaysSettledEntitlement() public {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
         uint256 donated = 5 ether;
@@ -128,7 +118,6 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
 
         assertEq(alice.balance, expected);
         assertEq(lens.claimableTaoOf(alice, TOKEN1), 0);
-        // The sub-quantum remainder is retained for the claimant, not erased with the payout.
         assertEq(vault.claimableTao(TOKEN1, alice), storedBefore - expected);
         assertEq(vault.taoLiability(TOKEN1), liabilityBefore - expected);
         _assertCloneCoversReservedTao(TOKEN1);
@@ -144,8 +133,6 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
         _donateToTokenClone(TOKEN1, NATIVE_TRANSFER_QUANTUM - 1);
 
-        // Too small to deliver: the quote promises nothing and the claim refuses rather than
-        // clearing an entitlement no transfer can pay out.
         assertEq(lens.claimableTaoOf(alice, TOKEN1), 0);
         vm.expectRevert(ClaimBelowNativePrecision.selector);
         _claimAs(alice);
@@ -217,8 +204,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         _depositAndWrap(bob, NETUID1, bobDeposit);
         _donateToTokenClone(TOKEN1, donation);
 
-        // A transfer settles the first donation while the second stays unsynchronized, so the
-        // claims exercise both settled storage and the simulated fold of pending TAO.
+        // Exercise both checkpointed entitlement and still-unindexed TAO.
         uint256 aliceShares = vault.balanceOf(alice, TOKEN1);
         vm.prank(alice);
         vault.safeTransferFrom(alice, bob, TOKEN1, aliceShares / 2, "");
@@ -228,12 +214,10 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         uint256 arrived = donation + secondDonation;
         uint256 paid = _claimQuotedAmount(alice, TOKEN1) + _claimQuotedAmount(bob, TOKEN1);
         assertLe(paid, arrived);
-        // Each holder retains at most one sub-quantum remainder plus index-flooring wei.
+        // At most one sub-RAO remainder per holder, plus index flooring.
         assertApproxEqAbs(paid, arrived, 2 * NATIVE_TRANSFER_QUANTUM + 8);
         _assertCloneCoversReservedTao(TOKEN1);
     }
-
-    // -------------------- Dissolution seam ---------------------------------------
 
     function test_DissolutionRefund_NotIndexedToHolders() public {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
@@ -297,14 +281,10 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         assertLe(paid, donated);
     }
 
-    // A raised chain threshold can force-sell the whole position while shares remain outstanding;
-    // an explicit zero minAlphaOut retires those shares and the sale proceeds stay claimable.
     function test_UnwrapAfterFullSweep_RetiresSharesAndKeepsClaim() public {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
         uint256 proceeds = 7 ether;
         _simulateTaoAwardedOnDissolution(TOKEN1, proceeds);
-        // Nothing on chain says where the swept alpha went, so the vault holds the expectation for
-        // its window before giving up on it and letting the shares retire.
         _catchRecordUpFor(TOKEN1);
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
@@ -322,10 +302,6 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         assertLe(paid, proceeds);
     }
 
-    // -------------------- Supply bound -------------------------------------------
-
-    // Recapitalizing a fully swept position multiplies share supply; the index must still be
-    // able to record the smallest possible native arrival at the inflated supply.
     function test_WrapAfterFullSweep_StaysWithinClaimIndexBound() public {
         uint256 seed = 1e10;
         _depositAndWrap(alice, NETUID1, seed);
@@ -353,10 +329,6 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         vault.wrap(NETUID1, chosen, 0);
     }
 
-    // -------------------- Zero-supply arrivals ------------------------------------
-
-    // With no holders at arrival there is no one to attribute the TAO to; it accrues to whoever
-    // holds shares at the next synchronization instead of sitting stuck in the clone.
     function test_TaoArrivingAtZeroSupply_AccruesToNextHolders() public {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
         _exitCompletely(alice, TOKEN1);

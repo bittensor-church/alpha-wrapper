@@ -20,9 +20,6 @@ import {
 import { MockStaking, CHAIN_MIN_STAKE } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
-/// @dev Covers getting a position back once the vault has lost sight of its alpha: a watcher
-///      pointing it at the key that holds it, and a loss nobody can find running out its window and
-///      being socialized.
 contract BackingRecoveryTest is AlphaVaultTestBase {
     struct LateCohorts {
         uint256 incumbentShares;
@@ -36,11 +33,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         uint256 supplyAtRecovery;
     }
 
-    // -------------------- Starting the clock -------------------------------------
-
-    /// @dev Nobody has to be transacting for the clock to start. Every rail that would notice a loss
-    ///      refuses, and a revert leaves no record behind, so a token nothing else touches would sit
-    ///      shut for good if this needed anyone's permission.
+    /// @dev Reverted user calls cannot persist a clock; permissionless `syncBacking` starts it.
     function test_SyncBacking_StartsTheWindowWithoutAQuorum() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 owed = _getVaultStake(hotkey1, NETUID1);
@@ -57,8 +50,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertFalse(lens.isBackingIntact(TOKEN1), "and still reports itself short");
     }
 
-    /// @dev The clock starts once per loss and is never restarted, or anyone could hold a token shut
-    ///      indefinitely by re-declaring the same loss every couple of hours.
     function test_SyncBacking_CannotPushTheDeadlineOut() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _buildSwapTrail(NETUID1, hotkey1, 2);
@@ -83,8 +74,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.syncBacking(TOKEN1);
     }
 
-    /// @dev A dissolved position's alpha legitimately became TAO, so its emptied slots are not a
-    ///      loss and must not be filed as one.
     function test_RevertWhen_SyncingARetiredTokenId() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _setRegBlock(NETUID1, 999);
@@ -93,16 +82,12 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.syncBacking(TOKEN1);
     }
 
-    /// @dev A slot whose backing went missing must not keep the record pointed at the key it went
-    ///      missing from: a write-off there would leave holders' alpha staked under a key the
-    ///      attesters never named, and a retired one would refuse every move aimed at it.
     function test_WriteOff_ReturnsAShortSlotToItsAttestedValidator() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulatePerSubnetSwap(NETUID1, hotkey1, hotkey4);
         vault.rebalance(NETUID1);
         assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey4, "the record followed the swap");
 
-        // The successor is then emptied with nothing on chain explaining it, and left unusable.
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, _subnetColdkey(NETUID1), NETUID1, 0);
         MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey4, true);
         _runOutRecoveryWindow(TOKEN1);
@@ -118,8 +103,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, quarter, _toSubstrate(alice), 0);
     }
 
-    /// @dev Starting a clock persists followed swaps and settles nothing else, so it takes the same
-    ///      guards as every other rail that writes to the record.
     function test_RevertWhen_SyncingWhileTheSubnetIsDissolving() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _buildSwapTrail(NETUID1, hotkey1, 2);
@@ -129,8 +112,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.syncBacking(TOKEN1);
     }
 
-    /// @dev A loss that repairs itself must not leave its spent clock behind, or the next identical
-    ///      loss would inherit an expired deadline and be written off with no window at all.
+    /// @dev A repaired loss must not lend its expired clock to a later shortfall.
     function test_LossRepairingItself_SpendsItsClock() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 owed = _getVaultStake(hotkey1, NETUID1);
@@ -151,11 +133,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertEq(lens.frozenUntil(TOKEN1), type(uint256).max, "the recurrence starts from no clock at all");
     }
 
-    // -------------------- Recovery by naming where the alpha went ----------------
-
-    /// @dev Recovery needs nobody's signature. The alpha sits under the vault's own coldkey, so
-    ///      moving it between the vault's own keys can only bring backing back into view - which is
-    ///      why anyone may do it, the moment they find it.
     function test_RecoverStray_ClearsTheShortfallWithoutAQuorum() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 owed = _getVaultStake(hotkey1, NETUID1);
@@ -174,8 +151,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey1, "and the alpha is back where the slot expects it");
     }
 
-    /// @dev The second hop is never read, so a deeper trail is the watcher's to resolve: they name
-    ///      the key at the far end and the alpha comes home.
     function test_RecoverStray_ResolvesATwoHopTrail() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 tip = _buildSwapTrail(NETUID1, hotkey1, 2);
@@ -188,10 +163,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "backing whole again");
     }
 
-    /// @dev A swap that keeps its stake leaves the alpha under a hotkey nobody owns, which the chain
-    ///      refuses to move. The vault takes no ownership of its own: an unrelated account claims
-    ///      the abandoned key - free, and carrying no claim on the stake under it - and the same
-    ///      recovery then goes through.
     function test_RecoverStray_WaitsForAnOutsiderToClaimTheAbandonedKey() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
@@ -202,7 +173,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vm.prank(bob);
         vault.recoverStray(TOKEN1, hotkey4);
 
-        // An account with no part in the vault, the subnet or the swap takes the key on.
         MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, false);
         vm.prank(bob);
         vault.recoverStray(TOKEN1, hotkey4);
@@ -213,9 +183,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, quarter, _toSubstrate(alice), 0);
     }
 
-    /// @dev Pins the cover guard against a split the chain's whole-entry moves cannot produce: a
-    ///      source unable to cover any open expectation is refused, the alpha stays put, the
-    ///      deadline stands, and the key that does cover the loss still recovers it.
+    /// @dev Synthetic split backing exercises the coverage guard; ordinary swaps move whole entries.
     function test_RevertWhen_TheSourceCannotCoverTheLoss() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);
@@ -239,8 +207,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertEq(lens.frozenUntil(TOKEN1), 0, "and the window ends");
     }
 
-    /// @dev Alpha the chain would refuse to move is not recovered and is socialized with the rest
-    ///      of the loss. The refusal is cheap: a chain-side rejection would burn the whole call.
     function test_RevertWhen_TheStrayIsTooSmallForTheChainToMove() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);
@@ -253,8 +219,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.recoverStray(TOKEN1, hotkey4);
     }
 
-    /// @dev Putting one slot's loss on file must not drop the swap another slot resolved on the way
-    ///      past, or the record would keep pointing at the key that validator's alpha departed.
     function test_SyncBacking_KeepsAFollowedSwapInTheRecord() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 moved = _getVaultStake(hotkey1, NETUID1);
@@ -285,8 +249,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.recoverStray(TOKEN1, hotkey1);
     }
 
-    /// @dev A clone can exist before any wrap wrote a record; alpha parked under its coldkey then
-    ///      belongs to no slot and there is nothing to recover it onto.
     function test_RevertWhen_RecoveringOnATokenWithNoSlots() public {
         vault.createSubnetProxy(NETUID1);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, _subnetColdkey(NETUID1), NETUID1, 5 ether);
@@ -295,8 +257,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.recoverStray(TOKEN1, hotkey4);
     }
 
-    /// @dev Two validators lost in the same window: each lump answers only for the slot whose
-    ///      expectation it covers, so the vault routes them home one call at a time.
     function test_RecoverStray_RoutesEachLumpToItsOwnSlot() public {
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2, hotkey3), _weights(6000, 3000, 1000));
         _depositAndWrap(alice, NETUID1, 30 ether);
@@ -304,7 +264,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         _simulateOffVaultSwap(NETUID1, hotkey2, hotkey5);
         vault.syncBacking(TOKEN1);
 
-        // The smaller lump cannot cover the larger slot, so it heals its own.
         vm.prank(bob);
         vault.recoverStray(TOKEN1, hotkey5);
         VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
@@ -317,8 +276,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "with nothing lost in routing");
     }
 
-    /// @dev A source able to cover more than one open expectation goes to the largest, so every
-    ///      later lump still has a slot its own size can answer for.
     function test_RecoverStray_AimsACoveringSourceAtTheLargestShortSlot() public {
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2, hotkey3), _weights(6000, 3000, 1000));
         _depositAndWrap(alice, NETUID1, 30 ether);
@@ -337,8 +294,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertTrue(lens.isBackingIntact(TOKEN1), "and is healed by its own lump");
     }
 
-    /// @dev Whatever the set size and whichever validators vanish, every lump the watcher names
-    ///      comes home to a slot its size answers for, and the position is whole once all have.
     function testFuzz_RecoverStray_BringsEveryLumpHome(uint256 countSeed, uint256 lossMask) public {
         uint256 count = bound(countSeed, 2, 6);
         bytes32[] memory set = new bytes32[](count);
@@ -372,8 +327,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "and the whole deposit is accounted for");
     }
 
-    /// @dev A watcher can find the alpha before anyone put the loss on file: recovery needs no
-    ///      clock, and a loss healed before its first sighting never opens a window at all.
     function test_RecoverStray_HealsALossNobodyRecorded() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
@@ -387,8 +340,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertEq(vault.recordedSlots(TOKEN1)[0].shortSince, 0, "with no clock ever started");
     }
 
-    /// @dev A stray keeps earning while it sits elsewhere, so the lump can come home larger than
-    ///      the expectation; the growth is holders' backing and arrives with it.
     function test_RecoverStray_BringsAnEmissionGrownLumpHome() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);
@@ -404,7 +355,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertApproxEqAbs(lens.totalStake(TOKEN1), 32 ether, 0.01 ether, "and the emissions came home with the lump");
     }
 
-    /// @dev The window is a deployment setting, so the deadline must follow the deployed value.
     function test_RecoveryWindow_SetAtDeploymentDrivesTheDeadline() public {
         (AlphaVault hourVault, AlphaVaultLens hourLens) = _deployVaultAndLens(address(registry), 1 hours);
         uint256 tokenId = hourVault.currentTokenId(NETUID1);
@@ -425,10 +375,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertTrue(hourLens.isBackingIntact(tokenId), "and the write-off falls due on it too");
     }
 
-    // -------------------- Running out the window ---------------------------------
-
-    /// @dev The permissionless maintenance rail takes the write-off too, so a token nobody is
-    ///      depositing into or exiting from still comes back on its own.
+    /// @dev This fixture explicitly finalizes through `syncBacking` before rebalancing.
     function test_RebalanceAfterTheWindow_WritesTheLossOff() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _buildSwapTrail(NETUID1, hotkey1, 2);
@@ -444,8 +391,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertGt(vault.balanceOf(bob, TOKEN1), 0, "deposits resume");
     }
 
-    /// @dev The window is a floor, not a cliff: until a settling call anchors the record, the slot
-    ///      still knows what it was owed and a late finder can still bring it home in full.
+    /// @dev Expiry alone does not write off the expectation; recovery can still restore it.
     function test_RecoverStray_StillAnswersAfterTheDeadline() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
@@ -459,9 +405,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "and the backing is whole again");
     }
 
-    /// @dev Once the loss is booked it is gone for the holders who bore it. Alpha found afterwards
-    ///      is new backing for whoever holds shares then - a deliberate transfer to the current
-    ///      cohort, accepted as the price of a bounded window rather than an accident.
     function test_LateFoundAlpha_IsAWindfallForTheCurrentCohort() public {
         uint256 aliceShares = _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 lost = _getVaultStake(hotkey1, NETUID1);
@@ -469,7 +412,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         _runOutRecoveryWindow(TOKEN1);
         vault.rebalance(NETUID1);
 
-        // Alice exits at the written-off valuation and takes none of what turns up later.
         vm.prank(alice);
         vault.unwrap(TOKEN1, aliceShares, _toSubstrate(alice), 0);
         uint256 bobShares = _depositAndWrap(bob, NETUID1, 10 ether);
@@ -484,8 +426,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertEq(vault.balanceOf(alice, TOKEN1), 0, "not to the cohort that bore the loss");
     }
 
-    /// @dev Retiring written-off shares stakes nothing, so a validator the chain has no live key
-    ///      for does not stand in the way - not even of a partial burn.
     function test_FullWriteOff_RetiresSharesBesideARetiredValidator() public {
         uint256 aliceShares = _depositAndWrap(alice, NETUID1, 15 ether);
         bytes32[] memory recordedHotkeys = _hotkeys(hotkey1, hotkey2, hotkey3);
@@ -503,9 +443,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertEq(_userStakeAcrossHotkeys(alice, NETUID1), 0, "for no alpha");
     }
 
-    /// @dev A complete write-off leaves outstanding shares with a zero alpha quote. A positive
-    ///      floor preserves their contingent claim on a late recovery; zero explicitly gives that
-    ///      claim up, retires the shares for no alpha, and leaves a later find to the remaining cohort.
     function test_FullWriteOff_ZeroMinAlphaOutExplicitlyRetiresShares() public {
         uint256 aliceShares = _depositAndWrap(alice, NETUID1, 15 ether);
         uint256 bobShares = _depositAndWrap(bob, NETUID1, 15 ether);
@@ -537,12 +474,8 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertApproxEqAbs(bobQuote, 30 ether, 3, "late recovery belongs to the remaining shares");
     }
 
-    /// @dev A post-write-off depositor can capture alpha found later, but cannot reach into the
-    ///      backing that remained accounted for. Partial write-offs price the new deposit between
-    ///      one quarter and four times the remaining backing, so the fuzz domain exercises material
-    ///      cohort splits rather than only negligible new holders. Complete write-offs keep the
-    ///      deposit small enough for the virtual-share mint to remain below the supply cap. The
-    ///      recovered stake carries no growth here; the separate growth test covers that case.
+    /// @dev No growth on hidden backing here. Partial-loss deposits exercise material cohort splits;
+    ///      full-loss deposits are bounded below the virtual-rate supply cap.
     function testFuzz_LateRecovery_CannotDiluteIncumbentByMoreThanFinalizedWriteOff(
         uint256 incumbentDeposit,
         uint256 recapitalizationSeed,
@@ -591,9 +524,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         }
     }
 
-    /// @dev Growth on a concealed position is returned with its principal. After a finalized
-    ///      partial write-off and a material new deposit, that growth can make the new cohort's
-    ///      recovery windfall larger than the amount reported by BackingWrittenOff.
     function test_LateRecovery_GrowthCanPushWindfallPastWriteOff() public {
         LateCohorts memory cohorts = _openIncumbentCohort(30 ether);
 
@@ -625,9 +555,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         );
     }
 
-    /// @dev Introducing a funded successor through the attested set after finalization reaches the
-    ///      same economic outcome as recoverStray: the next settling rail adopts the balance for
-    ///      whoever holds shares then, without reconstructing the prior cohort's entitlement.
     function test_LateAttestation_AdoptsWrittenOffAlphaForCurrentCohort() public {
         LateCohorts memory cohorts = _openIncumbentCohort(30 ether);
 
@@ -693,11 +620,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         );
     }
 
-    // -------------------- Mailboxes ----------------------------------------------
-
-    /// @dev A hotkey swap carries a waiting mailbox deposit along with everyone else's stake, and
-    ///      the mailbox reads only the chosen key. The owner reclaims the deposit from the key
-    ///      holding it, stakes it again toward a live attested validator, and wraps.
     function test_Wrap_SweptAlongDepositReturnsThroughReclaim() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         address mailbox = vault.getDepositAddress(bob, NETUID1);
@@ -719,8 +641,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertTrue(lens.isBackingIntact(TOKEN1), "with the record accounting for all of it");
     }
 
-    /// @dev A deposit aimed at a validator whose alpha the record has followed elsewhere still lands
-    ///      on that validator's key rather than sitting where the mailbox left it.
     function test_Wrap_LandsOnTheKeyTheRecordFollows() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulatePerSubnetSwap(NETUID1, hotkey1, hotkey4);
@@ -735,8 +655,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertTrue(lens.isBackingIntact(TOKEN1), "and the record accounts for all of it");
     }
 
-    /// @dev Each slot's loss runs its own clock: a second loss neither restarts the first slot's
-    ///      window nor rides it out.
     function test_SecondLoss_GetsItsOwnClock() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _buildSwapTrail(NETUID1, hotkey1, 2);
@@ -754,7 +672,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         );
         assertEq(lens.frozenUntil(TOKEN1), firstDeadline + 1 hours, "and the second got its own");
 
-        // The first slot's window is out, the second's is not: booking one leaves the other shut.
         vm.warp(firstDeadline);
         vault.syncBacking(TOKEN1);
         vm.expectPartialRevert(BackingShortfall.selector);
@@ -765,7 +682,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertTrue(lens.isBackingIntact(TOKEN1), "both settle once the later window is out");
     }
 
-    /// @dev The deadline is the whole mechanism, so it is worth pinning either side of.
     function testFuzz_WriteOff_FallsDueOnlyOnceTheWindowIsOut(uint256 offset) public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _buildSwapTrail(NETUID1, hotkey1, 2);
@@ -787,8 +703,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         }
     }
 
-    /// @dev Only the finalizer gives up on a loss. A rail keeps refusing past the deadline, so a
-    ///      deposit or an exit can never book a write-off as a side effect.
     function test_PastTheDeadline_OnlySyncBackingBooksTheLoss() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 owed = _getVaultStake(hotkey1, NETUID1);
@@ -816,12 +730,9 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice), 0);
     }
 
-    /// @dev A balance the resolver already answers for is not stray. Left shufflable, anyone could
-    ///      move a swapped-to key's alpha onto another slot and leave the first one short.
     function test_RevertWhen_RecoveringFromAKeyASlotResolvesTo() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 owed = _getVaultStake(hotkey1, NETUID1);
-        // A direct swap the resolver follows, with no call yet to persist it.
         _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
 
         vm.expectRevert(NothingToRecover.selector);
@@ -832,8 +743,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertTrue(lens.isBackingIntact(TOKEN1), "and the slot it answers for stayed covered");
     }
 
-    /// @dev A surplus on a covered slot is not stray either: it already counts where it sits, and
-    ///      one slot is never recapitalized out of another.
     function test_RevertWhen_RecoveringFromACoveredSlotsSurplus() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);
@@ -846,9 +755,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.recoverStray(TOKEN1, hotkey2);
     }
 
-    /// @dev Booking a loss must leave the record pointing somewhere the next call can use. A slot
-    ///      finalized at zero keeps its old physical key, so the settle has to take the attested
-    ///      validator instead - otherwise the rails aim at a key that refuses them.
     function test_BookedLoss_LeavesTheRailsAimingAtAnAttestedKey() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulatePerSubnetSwap(NETUID1, hotkey1, hotkey4);
@@ -860,7 +766,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         _runOutRecoveryWindow(TOKEN1);
         assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey4, "the booking left the key alone");
 
-        // The other slots are still funded, so the rebalance has stake to aim somewhere.
         vault.rebalance(NETUID1);
         assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey1, "the settle anchored the attested validator");
         assertEq(_getVaultStake(hotkey4, NETUID1), 0, "and nothing was aimed at the dead key");

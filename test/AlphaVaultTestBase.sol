@@ -61,7 +61,6 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     uint16 public constant BPS_BASE = 10_000;
 
-    // The simulated chain's dust threshold; aliased so the two can never drift.
     uint256 internal constant DUST_THRESHOLD = CHAIN_NOMINATOR_MIN_STAKE;
 
     uint256 public TOKEN1;
@@ -74,11 +73,8 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         vm.etch(ALPHA_PRECOMPILE, address(new MockAlpha()).code);
         MockSubnetPrecompile(SUBNET_PRECOMPILE).setRegisteredAt(uint16(NETUID1), 100);
         MockSubnetPrecompile(SUBNET_PRECOMPILE).setRegisteredAt(uint16(NETUID2), 200);
-        // Pre-fund so the staking precompile mock can credit native TAO back to callers.
         vm.deal(STAKING_PRECOMPILE, 1_000_000 ether);
-        // etch copies code, not storage, so the sell rate starts 0/0 and any un-parameterized sell
-        // panics on division; a 1:1 default keeps unrelated tests meaningful. The min-stake floor
-        // and the dust-sweep threshold are seeded to the chain's live values for the same reason.
+        // Etching copies code, not constructor storage; seed rates and chain thresholds explicitly.
         MockStaking(STAKING_PRECOMPILE).setRemoveStakeRate(1, 1);
         MockStaking(STAKING_PRECOMPILE).setChainMinStake(CHAIN_MIN_STAKE);
         MockStaking(STAKING_PRECOMPILE).setChainMinTransfer(CHAIN_MIN_TRANSFER);
@@ -87,8 +83,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         mailboxLogic = new DepositMailbox();
         subnetLogic = new SubnetClone();
 
-        // vm.addr(SIGNER_PK_2) < vm.addr(SIGNER_PK_1); the registry requires sigs sorted
-        // ascending by recovered address, so attestations sign in this order.
+        // vm.addr(SIGNER_PK_2) < vm.addr(SIGNER_PK_1); registry signatures must be address-sorted.
         signerPks.push(SIGNER_PK_2);
         signerPks.push(SIGNER_PK_1);
         address[] memory signers = new address[](2);
@@ -96,7 +91,6 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         signers[1] = vm.addr(signerPks[1]);
         registry = new ValidatorRegistry(address(this), signers, 2);
 
-        // validatorRegistry is immutable, so it must exist before the vault is constructed.
         (vault, lens) = _deployVaultAndLens(address(registry));
 
         _setValidators(
@@ -108,10 +102,6 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         TOKEN2 = vault.currentTokenId(NETUID2);
     }
 
-    /// @dev `validatorRegistry` is immutable, so tests that need a different registry construct a
-    ///      fresh vault against it rather than swapping it on the shared `vault`. The lens comes
-    ///      with it: reading a fresh vault's quotes off the shared lens is the mismatched pair the
-    ///      user guide warns integrators about.
     function _deployVaultAndLens(address _registry) internal returns (AlphaVault freshVault, AlphaVaultLens freshLens) {
         return _deployVaultAndLens(_registry, RECOVERY_WINDOW);
     }
@@ -164,8 +154,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         arr[2] = c;
     }
 
-    /// @dev The salted hotkeys are disjoint from the named `hotkey1..4` fixtures, so a wide set and
-    ///      the fixture set never collide.
+    /// @dev Salted hotkeys cannot collide with the named hotkey1..4 fixtures.
     function _setValidatorCount(uint256 netuid, uint256 count) internal returns (bytes32[] memory hks) {
         hks = _hotkeysFrom("validator", count);
         _setValidators(netuid, hks, _evenWeights(count));
@@ -181,8 +170,6 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         return _stakeAcross(hks, _subnetColdkey(netuid), netuid);
     }
 
-    /// @dev Asserts the vault's stake on `hks` follows the even split, with the rounding remainder
-    ///      on the last slot - the same way the vault assigns targets.
     function _assertEvenSpread(bytes32[] memory hks, uint256 netuid, uint256 total) internal view {
         uint16[] memory wts = _evenWeights(hks.length);
         uint256 assigned;
@@ -210,7 +197,6 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     function _simulateAlphaDeposit(address user, uint256 netuid, uint256 amount) internal {
         address cloneAddr = vault.getDepositAddress(user, netuid);
         bytes32 cloneColdkey = _toSubstrate(cloneAddr);
-        // Use the best validator hotkey for this subnet (matches what wrap will resolve)
         bytes32 hotkey = lens.getCurrentValidators(netuid)[0];
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey, cloneColdkey, netuid, amount);
     }
@@ -265,12 +251,8 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         _catchRecordUp(netuid);
     }
 
-    /// @dev Sculpting balances through the mock is a test convenience with no on-chain
-    ///      counterpart: the vault's alpha moves only when the vault itself moves it. A drop the
-    ///      vault did not make reads as backing gone missing, which is what this walks the token
-    ///      through - put the loss on file, let its window run, take the write-off - so the record
-    ///      agrees with the balances the test asked for. Tests about losses skip this and write to
-    ///      the mock directly.
+    /// @dev Mock balance reductions otherwise look like missing backing. Explicitly write them off
+    ///      for unrelated fixtures; recovery tests must manipulate the mock without this helper.
     function _catchRecordUp(uint256 netuid) internal {
         _catchRecordUpFor(vault.currentTokenId(netuid));
     }
@@ -280,7 +262,6 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         _runOutRecoveryWindow(tokenId);
     }
 
-    // Smallest share count whose pro-rata assets equal `targetAssets` under the share-price cushion.
     function _sharesForExactAssets(uint256 tokenId, uint256 targetAssets, uint256 totalAlpha)
         internal
         view
@@ -345,8 +326,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         _setRegBlock(tokenId & 0xFFFF, newRegBlock);
     }
 
-    /// @dev Dissolve leaves the registration block untouched; subtensor removes it only
-    ///      partway through the asynchronous cleanup.
+    /// @dev The registration block survives the start of asynchronous dissolution cleanup.
     function _simulateDissolutionStarted(uint256 netuid) internal {
         _setDissolving(netuid, true);
     }
@@ -362,8 +342,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     }
 
     function _setAlphaPriceReadsZero(uint256 netuid) internal {
-        // A sub-quantum chain price rounds to 0 at the EVM boundary while the chain floor still
-        // binds at full precision - the real shape of a sub-1e-9 subnet.
+        // The chain retains a nonzero price below the EVM reader's precision.
         _setAlphaPrice(netuid, 0.5e9);
     }
 
@@ -371,12 +350,10 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         MockStaking(STAKING_PRECOMPILE).setRemoveStakeRate(num, denom);
     }
 
-    /// @dev Caps what one sell can swap; the rest of the request stays staked.
     function _setRemoveStakeCap(uint256 maxAlpha) internal {
         MockStaking(STAKING_PRECOMPILE).setRemoveStakeCap(maxAlpha);
     }
 
-    /// @dev Zero disables the chain's force-sweep of a sub-threshold remainder.
     function _setDustThreshold(uint256 thresholdTao) internal {
         MockStaking(STAKING_PRECOMPILE).setNominatorMinRequiredStake(thresholdTao);
     }
@@ -403,8 +380,6 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         vm.deal(clone, clone.balance + amount);
     }
 
-    // The claimable-TAO quote is a commitment: a nonzero quote pays exactly, a zero quote means
-    // the claim reverts.
     function _claimQuotedAmount(address user, uint256 tokenId) internal returns (uint256 delivered) {
         uint256 quoted = lens.claimableTaoOf(user, tokenId);
         if (quoted == 0) {
@@ -430,46 +405,38 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         return (total * bps) / BPS_BASE;
     }
 
-    /// @dev The keys the record expects the position's alpha under.
     function _lastSeen(uint256 tokenId) internal view returns (bytes32[] memory) {
         return VaultReads.activesOf(vault.recordedSlots(tokenId));
     }
 
-    /// @dev Puts a key on the simulated chain as one the chain answers for, whether it is new or a
-    ///      retired name someone has claimed again.
+    /// @dev Restores mock owner presence only; does not simulate subnet registration or erase lineage.
     function _simulateHotkeyRegistered(bytes32 hotkey) internal {
         MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey, false);
         _recordHotkeyOwner(hotkey);
     }
 
-    /// @dev Moves the clone's backing between hotkeys with no vault call and no lineage, standing
-    ///      in for a swap this subnet recorded nothing for.
+    /// @dev Moves backing without recording lineage or invoking the vault.
     function _simulateOffVaultSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
         bytes32 coldkey = _subnetColdkey(netuid);
         uint256 amount = _getStakeForColdkey(fromHotkey, coldkey, netuid);
         uint256 alreadyThere = _getStakeForColdkey(toHotkey, coldkey, netuid);
         MockStaking(STAKING_PRECOMPILE).setStake(fromHotkey, coldkey, netuid, 0);
         MockStaking(STAKING_PRECOMPILE).setStake(toHotkey, coldkey, netuid, alreadyThere + amount);
-        // Stake only ever lands on a key the chain has an owner for.
         _simulateHotkeyRegistered(toHotkey);
     }
 
-    /// @dev A swap confined to one subnet: the stake moves, the successor edge points at it, and
-    ///      the old key keeps its owner.
+    /// @dev Per-subnet swaps retain the old owner record.
     function _simulatePerSubnetSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
         _simulateOffVaultSwap(netuid, fromHotkey, toHotkey);
         MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(fromHotkey, netuid, toHotkey);
     }
 
-    /// @dev The ordinary validator swap, which covers every subnet at once: the stake moves, the
-    ///      successor edge points at it, and the chain is left with no owner for the old key.
+    /// @dev All-subnet swaps remove the old owner record.
     function _simulateFollowedSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
         _simulatePerSubnetSwap(netuid, fromHotkey, toHotkey);
         MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(fromHotkey, true);
     }
 
-    /// @dev Chains `hops` swaps, leaving the backing at the far tip with the vault able to read
-    ///      only the first edge.
     function _buildSwapTrail(uint256 netuid, bytes32 fromHotkey, uint256 hops) internal returns (bytes32 tip) {
         bytes32 previous = fromHotkey;
         for (uint256 i; i < hops; ++i) {
@@ -480,14 +447,10 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         _simulateOffVaultSwap(netuid, fromHotkey, tip);
     }
 
-    /// @dev What a native transfer of `amount` wei can actually deliver.
     function _wholeRao(uint256 amount) internal pure returns (uint256) {
         return VaultMath.toNativeQuantum(amount);
     }
 
-    /// @dev Sells the first slot out through the TAO exit, which reads no attested set, so the
-    ///      entry that followed a swap holds nothing and the next call has to decide for itself
-    ///      where that validator's share belongs.
     function _drainTheFirstSlot(address holder, uint256 netuid) internal {
         uint256 tokenId = vault.currentTokenId(netuid);
         bytes32 followed = vault.recordedSlots(tokenId)[0].active;
@@ -498,8 +461,6 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         assertEq(_getVaultStake(followed, netuid), 0, "the slot has to be empty for this to mean anything");
     }
 
-    /// @dev Puts the loss on file, runs its window out, and books it - the three steps that reopen
-    ///      a token, all of them through the one permissionless entry point.
     function _runOutRecoveryWindow(uint256 tokenId) internal {
         vault.syncBacking(tokenId);
         vm.warp(lens.frozenUntil(tokenId));

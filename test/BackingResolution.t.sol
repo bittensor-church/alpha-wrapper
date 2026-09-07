@@ -7,14 +7,8 @@ import { AttestedHotkeyRetired, BackingShortfall, SwappedHotkeyStillAttested } f
 import { CHAIN_MIN_TRANSFER, MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
-/// @dev Covers what the one-hop resolver refuses: trails it will not walk, edges the chain never
-///      recorded, and collisions where one balance would answer for two slots. Getting a refused
-///      position back lives in BackingRecovery.t.sol.
 contract BackingResolutionTest is AlphaVaultTestBase {
-    // -------------------- Fail closed on an unexplained shortfall ----------------
 
-    /// @dev A second edge is never read, so a deposit's worth of backing two swaps away is a loss
-    ///      for the watcher to resolve, and every path that prices shares or moves alpha waits.
     function test_TwoHopSwap_FailsClosedOnEveryPath() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
         _depositAndWrap(bob, NETUID1, 30 ether);
@@ -45,8 +39,6 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.unwrapForTao(TOKEN1, shares / 4, 0);
     }
 
-    /// @dev Share transfers and the native TAO a holder has already earned belong to the holder
-    ///      whatever the alpha is doing, so neither waits on a recovery window.
     function test_ShortfallStanding_LeavesTransfersAndTaoClaimsLive() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
         _donateToClone(vault.subnetClone(TOKEN1), 4 ether);
@@ -62,7 +54,6 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         _claimQuotedAmount(alice, TOKEN1);
     }
 
-    /// @dev Each slot answers for its own expectation, so growth elsewhere cannot cover a loss.
     function test_GrowthElsewhere_DoesNotCoverALoss() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 lost = _getVaultStake(hotkey1, NETUID1);
@@ -77,8 +68,6 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
     }
 
-    /// @dev One balance cannot back two slots, so a successor another slot already answers for is
-    ///      refused however the two got there.
     function test_ConvergentSwaps_FailClosed() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);
@@ -94,9 +83,7 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
     }
 
-    /// @dev Pins the resolver's cover guard against a state the chain's whole-entry moves cannot
-    ///      produce: a successor explaining only part of the loss is no explanation, and accepting
-    ///      it would report the rest as backing that is not there.
+    /// @dev Synthetic partial migration exercises the coverage guard; ordinary swaps move whole entries.
     function test_PartialSuccessor_FailsClosed() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);
@@ -110,8 +97,6 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
     }
 
-    /// @dev Stake transferred under a retired key cannot block a valid swap. The successor alone
-    ///      covers the slot, while the residual stays outside the accounted backing.
     function test_SuccessorWithAResidualLeftBehind_StaysOperable() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 accounted = lens.totalStake(TOKEN1);
@@ -129,8 +114,6 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice), 0);
     }
 
-    /// @dev A swap can carry one slot's alpha onto a key another slot has itself moved off. Nothing
-    ///      answers twice there, so the follow is allowed and the token stays operable.
     function test_SwapOntoAKeyAnotherSlotLeft_StaysOperable() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateFollowedSwap(NETUID1, hotkey2, hotkey5);
@@ -146,19 +129,13 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, quarter, _toSubstrate(alice), 0);
     }
 
-    /// @dev A swap can leave one validator's alpha sitting under another validator's attested
-    ///      name. If an emptied slot then fell back onto its own name, that name could be the key
-    ///      another slot already answers for, and the position would report the same balance twice
-    ///      - pricing exits against backing that is not there.
+    /// @dev Falling back to a logical name now occupied by another slot would count one balance twice.
     function test_TaoExitEmptyingASwappedSlot_LeavesNoBalanceAnsweringTwice() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
         vault.rebalance(NETUID1);
-        // hotkey2's alpha lands on hotkey1 - a name the attesters still list, whose own slot has
-        // moved on to hotkey4.
         _simulateFollowedSwap(NETUID1, hotkey2, hotkey1);
 
-        // Sell enough to empty the hotkey4 slot outright.
         uint256 burn = (shares * (_getVaultStake(hotkey4, NETUID1) + 1e15)) / lens.locatedStake(TOKEN1);
         vm.prank(alice);
         vault.unwrapForTao(TOKEN1, burn, 0);
@@ -175,9 +152,6 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         }
     }
 
-    /// @dev The settle after such an exit faces the same trap: the emptied slot's attested name
-    ///      carries another validator's alpha, so the slot keeps its own resolved key instead of
-    ///      falling back onto the name.
     function test_SettleAfterAnEmptyingExit_KeepsSlotsOnDistinctKeys() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
@@ -201,19 +175,14 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         assertApproxEqAbs(lens.totalStake(TOKEN1), held, 0.01 ether, "and the total counts each balance once");
     }
 
-    /// @dev The first validator's slot, emptied while its own attested name carries the
-    ///      neighbouring slot's alpha: it stays on the key it resolved to.
     function _positionWithAnEmptiedSlotOnAnotherKey() private {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
         vault.rebalance(NETUID1);
-        // hotkey2's alpha lands on hotkey1, a name its own slot has moved off.
         _simulatePerSubnetSwap(NETUID1, hotkey2, hotkey1);
         _drainTheFirstSlot(alice, NETUID1);
     }
 
-    /// @dev Attesting the key that slot stays on as a validator of its own would leave the two
-    ///      entries on one balance, so the set is refused until the attesters untangle it.
     function test_SetNamingTheKeyAnEmptiedSlotStaysOn_Refuses() public {
         _positionWithAnEmptiedSlotOnAnotherKey();
 
@@ -223,9 +192,6 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
     }
 
-    /// @dev The chain can retire that key while the slot sits on it holding nothing. There is then
-    ///      no key left to stake the validator's share under, and the rails say so rather than
-    ///      forward a move the chain would reject at the cost of the whole budget.
     function test_EmptiedSlotWhoseKeyIsRetired_RefusesTheRebalance() public {
         _positionWithAnEmptiedSlotOnAnotherKey();
 
@@ -235,11 +201,7 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
     }
 
-    // -------------------- Emptyings the chain does not explain -------------------
-
-    /// @dev A dust sweep records nothing at all, and a swap leaves the same silence once its edge
-    ///      is dropped - so reading silence as a sweep would let an operator take the alpha and
-    ///      have the vault reprice the token beneath its holders.
+    /// @dev No edge distinguishes a dust sweep from an erased swap trail; neither permits immediate repricing.
     function test_EdgeFreeEmptying_FailsClosed() public {
         uint256 netuid = 5;
         _registerSubnet(netuid, hotkey1);
@@ -253,8 +215,6 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.rebalance(netuid);
     }
 
-    /// @dev The same silence with the alpha demonstrably alive under another key. The vault has no
-    ///      way to tell this from the case above and does not guess between them.
     function test_SwapWithNoEdge_FailsClosed() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
@@ -265,8 +225,6 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
     }
 
-    /// @dev Nothing in the decision reads a price, so neither the size of the loss nor the price of
-    ///      alpha touches the verdict.
     function test_EdgeFreeEmptying_RefusesAtAnyPriceOrSize() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);
@@ -280,8 +238,6 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
     }
 
-    /// @dev A position the chain really did empty. Nobody can find alpha that no longer exists, so
-    ///      the window runs out on it and the token comes back with the loss socialized.
     function test_SweptPosition_ReopensAfterTheWindow() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);
@@ -300,15 +256,12 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         assertGt(vault.balanceOf(bob, TOKEN1), 0, "the token recapitalizes after the window");
     }
 
-    /// @dev The registry is allocation policy and nothing more: rotating a validator in neither
-    ///      settles a standing loss nor brings that validator's own balance into the count.
     function test_RegistryUpdate_NeitherClearsALossNorAddsBacking() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 located = lens.locatedStake(TOKEN1);
         _buildSwapTrail(NETUID1, hotkey1, 2);
         vault.syncBacking(TOKEN1);
 
-        // hotkey4 comes in already holding alpha of the vault's, which no slot answers for.
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, _subnetColdkey(NETUID1), NETUID1, 9 ether);
         _setValidators(
             NETUID1, _hotkeys(hotkey4, hotkey2, hotkey3), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)

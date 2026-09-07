@@ -13,18 +13,11 @@ import {
     ValidatorSetMalformed
 } from "../VaultErrors.sol";
 
-/// @title VaultReads
-/// @notice The chain reads behind a vault position - validator set, per-hotkey stake, subnet
-///         registration state and unclaimed clone TAO - shared by `AlphaVault` and the read-only
-///         `AlphaVaultLens`, so a quote and the call it quotes read the same way.
-/// @dev    Vault storage is never reached from here; every caller passes in what it read from its
-///         own side, whether that is a storage slot or a getter call.
 library VaultReads {
     function coldkeyOf(address evmAddress) internal view returns (bytes32) {
         return IAddressMapping(ADDRESS_MAPPING_PRECOMPILE).addressMapping(evmAddress);
     }
 
-    /// @dev Reverts `NoValidatorFound` if the registry has no configured set for `netuid`.
     function resolveValidators(IValidatorRegistry registry, uint16 netuid)
         internal
         view
@@ -32,7 +25,6 @@ library VaultReads {
     {
         (hotkeys, weights) = registry.getValidators(netuid);
         if (hotkeys.length == 0) revert NoValidatorFound();
-        // The registry interface guarantees matching lengths; a broken registry fails fast here.
         if (hotkeys.length != weights.length) revert ValidatorSetMalformed();
     }
 
@@ -57,22 +49,16 @@ library VaultReads {
         return currentRegistrationBlock == 0 || currentRegistrationBlock != VaultMath.registrationBlockOf(tokenId);
     }
 
-    /// @dev Subtensor dissolves a subnet asynchronously over many blocks, and alpha balances and
-    ///      TAO refunds are in flux for the whole window.
     function isDissolving(uint16 netuid) internal view returns (bool) {
         return ISubnet(SUBNET_PRECOMPILE).isSubnetDissolving(netuid);
     }
 
-    /// @dev Every path that prices the live generation is frozen until dissolution completes.
     function requireNotDissolving(uint16 netuid) internal view {
         if (isDissolving(netuid)) revert SubnetInDissolutionBlackoutPeriod();
     }
 
-    /// @dev Whether a dissolution in progress on the netuid holds this token's payout. A token a
-    ///      different subnet has since replaced is not held: that subnet's cleanup drains its own
-    ///      clone and leaves the old refund whole. Once cleanup has cleared the registration block
-    ///      a replaced token reads like one in its own late window, and the vault keeps that window
-    ///      shut rather than price a refund the chain may still be settling, so it waits too.
+    /// @dev A successor subnet's cleanup does not affect this token's refund, except when its
+    ///      registration block is zero: that state is indistinguishable from this token's own late cleanup.
     function isHeldByDissolution(uint256 tokenId) internal view returns (bool) {
         uint16 netuid = VaultMath.netuidOf(tokenId);
         if (!isDissolving(netuid)) return false;
@@ -84,10 +70,7 @@ library VaultReads {
         if (isHeldByDissolution(tokenId)) revert SubnetInDissolutionBlackoutPeriod();
     }
 
-    /// @dev The part of a clone's `balance` a synchronization may fold into the claim index right
-    ///      now, given the liability already `reserved` against it. Zero while the subnet is
-    ///      dissolving or dissolved: from then on new clone balance is the dissolution refund,
-    ///      which the dissolved unwrap path distributes pro rata instead.
+    /// @dev TAO arriving during/after dissolution backs redemptions, not the claim index.
     function indexableTao(uint256 tokenId, uint256 balance, uint256 reserved) internal view returns (uint256) {
         uint256 newTao = VaultMath.unreservedTao(balance, reserved);
         if (newTao == 0) return 0;
@@ -96,10 +79,7 @@ library VaultReads {
         return newTao;
     }
 
-    // -------------------- Backing record ----------------------------------------
-
-    /// @dev One record per validator the position is spread across. `logical` and `active` differ
-    ///      only while a hotkey swap has moved the stake and the attesters have not caught up.
+    /// @dev `logical` is the attested name; `active` is the recorded stake location, possibly a successor.
     struct Slot {
         bytes32 logical;
         bytes32 active;
@@ -107,13 +87,7 @@ library VaultReads {
         uint64 shortSince;
     }
 
-    /// @dev One reading of a record against the chain. A struct because the coverage build
-    ///      compiles at minimum optimization, where returning the parts separately runs the stack
-    ///      out.
-    /// @param keys     The key each slot resolves to.
-    /// @param balances What sits under each of them.
-    /// @param short    Which slots cannot account for themselves.
-    /// @param total    What the reading located in all.
+    /// @dev Bundled to avoid stack exhaustion in unoptimized builds.
     struct Backing {
         bytes32[] keys;
         uint256[] balances;
@@ -121,13 +95,10 @@ library VaultReads {
         uint256 total;
     }
 
-    /// @dev Expectations are compared with this much give, never for equality. An accepted ceiling
-    ///      on accounting dust the vault will not chase.
+    /// @dev Accepted accounting dust; smaller discrepancies do not start recovery.
     uint256 internal constant TRACKED_SLACK_RAO = 1e3;
 
-    /// @dev Reads the record against the chain, writing nothing and resolving at most one hotkey
-    ///      swap per slot. The vault's rails and the lens's quotes share it, so they cannot
-    ///      disagree about what the position holds.
+    /// @dev Resolves at most one successor hop from each recorded active key, without writing it back.
     function resolveBacking(Slot[] memory slots, bytes32 coldkey, uint16 netuid)
         internal
         view
@@ -158,12 +129,8 @@ library VaultReads {
         }
     }
 
-    /// @dev The one shortfall that resolves itself: a validator hotkey swap, accepted only when the
-    ///      successor explains the whole slot. Any residual under the retired key is left uncounted
-    ///      instead of letting stray stake block the follow. A successor another slot answers for
-    ///      is still refused because one balance may never back two expectations. Exactly one edge
-    ///      is read, and no price: judging a past event by today's valuation gets it wrong in both
-    ///      directions.
+    /// @dev Follow only a successor covering the whole slot. Ignore old-key residue and reject
+    ///      shared successors so one balance never backs two slots. Use alpha, not today's TAO price.
     function _followSwap(bytes32[] memory keys, uint256 index, uint256 tracked, bytes32 coldkey, uint16 netuid)
         private
         view
@@ -177,7 +144,6 @@ library VaultReads {
         return (true, successor, successorBalance);
     }
 
-    /// @dev The hotkey's one-hop successor, or zero when the chain records none.
     function hotkeySuccessor(bytes32 hotkey, uint16 netuid) internal view returns (bytes32) {
         (bool exists, bytes32 successor) = IStaking(STAKING_PRECOMPILE).getHotkeySuccessor(hotkey, netuid);
         if (!exists || successor == hotkey) return bytes32(0);
@@ -194,7 +160,6 @@ library VaultReads {
         }
     }
 
-    /// @dev First short slot of a reading; max when none are.
     function firstShortOf(bool[] memory short) internal pure returns (uint256) {
         for (uint256 i; i < short.length;) {
             if (short[i]) return i;
@@ -205,8 +170,6 @@ library VaultReads {
         return type(uint256).max;
     }
 
-    /// @dev The one refusal for unaccounted backing, shared so the vault's rails and the lens's
-    ///      quotes cannot disagree about it.
     function requireIntact(Slot[] memory slots, Backing memory backing, uint16 netuid) internal pure {
         uint256 shortIndex = firstShortOf(backing.short);
         if (shortIndex != type(uint256).max) {
@@ -214,7 +177,6 @@ library VaultReads {
         }
     }
 
-    /// @dev Whether `stake` accounts for a slot owed `tracked`.
     function coversTracked(uint256 stake, uint256 tracked) internal pure returns (bool) {
         return stake + TRACKED_SLACK_RAO >= tracked;
     }
