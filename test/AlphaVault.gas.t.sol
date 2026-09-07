@@ -225,6 +225,23 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         vm.snapshotGasLastCall("AlphaVault", "recoverStray: whole slot (64 validators)");
     }
 
+    function test_gas_recoverStray_merged_64Validators() public {
+        bytes32[] memory hotkeys = _setValidatorCount(NETUID1, MAX_VALIDATORS);
+        _depositAndWrap(alice, NETUID1, 10 ether);
+        bytes32 source = keccak256("merged-recovery");
+        for (uint256 i; i < hotkeys.length; ++i) {
+            _simulateOffVaultSwap(NETUID1, hotkeys[i], source);
+        }
+        vault.syncBacking(TOKEN1);
+
+        vault.recoverStray(TOKEN1, source);
+        vm.snapshotGasLastCall("AlphaVault", "recoverStray: merged slots (64 validators)");
+
+        assertEq(lens.totalStake(TOKEN1), 10 ether);
+        assertEq(lens.frozenUntil(TOKEN1), 0);
+        assertEq(_getVaultStake(source, NETUID1), 0);
+    }
+
     function test_gas_previewUnwrap_64Validators() public {
         _setValidatorCount(NETUID1, MAX_VALIDATORS);
         _simulateAlphaDeposit(alice, NETUID1, 10 ether);
