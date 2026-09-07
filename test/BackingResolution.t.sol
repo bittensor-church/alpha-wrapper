@@ -122,7 +122,7 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
 
         assertTrue(lens.isBackingIntact(TOKEN1), "no balance answers for two slots");
-        assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "the whole position is counted once");
+        assertEq(lens.totalStake(TOKEN1), 30 ether, "the whole position is counted once");
         uint256 quarter = vault.balanceOf(alice, TOKEN1) / 4;
         vm.prank(alice);
         vault.unwrap(TOKEN1, quarter, _toSubstrate(alice), 0);
@@ -171,7 +171,7 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         }
         assertEq(slots[0].active, hotkey4, "the emptied slot kept its resolved key");
         assertEq(slots[1].active, hotkey1, "beside the slot whose alpha its name carries");
-        assertApproxEqAbs(lens.totalStake(TOKEN1), held, 0.01 ether, "and the total counts each balance once");
+        assertEq(lens.totalStake(TOKEN1), held, "and the total counts each balance once");
     }
 
     function _positionWithAnEmptiedSlotOnAnotherKey() private {
@@ -258,6 +258,7 @@ contract BackingResolutionTest is AlphaVaultTestBase {
     function test_RegistryUpdate_NeitherClearsALossNorAddsBacking() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 located = lens.locatedStake(TOKEN1);
+        uint256 lost = _getVaultStake(hotkey1, NETUID1);
         _buildSwapTrail(NETUID1, hotkey1, 2);
         vault.syncBacking(TOKEN1);
 
@@ -267,12 +268,8 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         );
 
         assertFalse(lens.isBackingIntact(TOKEN1), "the rotation settled nothing");
-        assertEq(lens.locatedStake(TOKEN1), located - _lostToTheTrail(located), "and added no backing of its own");
+        assertEq(lens.locatedStake(TOKEN1), located - lost, "and added no backing of its own");
         vm.expectPartialRevert(BackingShortfall.selector);
         vault.rebalance(NETUID1);
-    }
-
-    function _lostToTheTrail(uint256 located) private view returns (uint256) {
-        return located - _getVaultStake(hotkey2, NETUID1) - _getVaultStake(hotkey3, NETUID1);
     }
 }

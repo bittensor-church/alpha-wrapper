@@ -32,17 +32,18 @@ forge test
 
 ## Gas snapshots
 
-CI checks `.gas-snapshot` and per-call files in `snapshots/`. These use mocked
-precompiles: compare regressions here, but use e2e transaction receipts to size
-live-chain gas.
+CI checks deterministic tests in `.gas-snapshot` and per-call files in
+`snapshots/`. Fuzz and invariant tests run in separate steps; their sampled gas
+costs vary with generated inputs and are excluded from snapshots. These tests
+use mocked precompiles: compare regressions here, but use e2e transaction
+receipts to size live-chain gas.
 
 Regenerate using CI's profile and thread count:
 
 ```bash
 FOUNDRY_PROFILE=ci FOUNDRY_GAS_SNAPSHOT_CHECK=false FOUNDRY_GAS_SNAPSHOT_EMIT=true \
-  forge snapshot --tolerance 1 --no-match-contract Invariant --threads 4
+  forge snapshot --tolerance 1 --no-match-contract Invariant --no-match-test testFuzz --threads 4
 ```
 
-Thread count affects the shared fuzz dictionary and recorded results. Coverage
-uses a different optimization mode and can overwrite snapshots; regenerate them
-with the command above before committing.
+Coverage uses a different optimization mode and can overwrite snapshots;
+regenerate them with the command above before committing.

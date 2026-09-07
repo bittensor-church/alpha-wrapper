@@ -18,6 +18,7 @@ contract MockStaking {
     uint256 public transferStakeRoundingLoss;
     bool public transferStakeReverts;
     bool public consumeAllGasOnFailure;
+    bool public nativeTaoUnits;
     uint256 private _chainMinStakeTao;
 
     uint256 private _chainMinTransferTao;
@@ -28,6 +29,11 @@ contract MockStaking {
 
     function setConsumeAllGasOnFailure(bool v) external {
         consumeAllGasOnFailure = v;
+    }
+
+    /// @dev Enable the precompile's RAO-to-EVM conversion without changing the quote's RAO units.
+    function setNativeTaoUnits(bool enabled) external {
+        nativeTaoUnits = enabled;
     }
 
     // Real precompile rejection consumes forwarded gas; plain Solidity revert would refund it.
@@ -157,6 +163,11 @@ contract MockStaking {
         _successorSet[from][netuid] = true;
     }
 
+    function clearHotkeySuccessor(bytes32 hotkey, uint256 netuid) external {
+        delete _successor[hotkey][netuid];
+        delete _successorSet[hotkey][netuid];
+    }
+
     function getHotkeySuccessor(bytes32 hotkey, uint16 netuid) external view returns (bool, bytes32) {
         return (_successorSet[hotkey][netuid], _successor[hotkey][netuid]);
     }
@@ -206,7 +217,7 @@ contract MockStaking {
             _fail("MockStaking: hotkey has no owner");
         }
         uint256 staked = stakes[hotkey][_senderColdkey()][netuid];
-        // Unit-test seam: credit one wei per TAO RAO, not the real chain's 1e9 wei. e2e covers conversion.
+        // Legacy arithmetic fixtures credit one wei per TAO RAO. Native-unit campaigns enable 1e9 below.
         uint256 consumed = removeStakeCap != 0 && alphaAmount > removeStakeCap ? removeStakeCap : alphaAmount;
         uint256 taoOut = quoteTaoOut(consumed);
         if (alphaAmount != staked && quoteTaoOut(alphaAmount) < _chainMinStakeTao) {
@@ -222,7 +233,7 @@ contract MockStaking {
             }
         }
         stakes[hotkey][_senderColdkey()][netuid] = remainder;
-        (bool ok,) = msg.sender.call{ value: taoOut }("");
+        (bool ok,) = msg.sender.call{ value: nativeTaoUnits ? taoOut * 1e9 : taoOut }("");
         require(ok, "MockStaking: TAO credit failed");
     }
 }

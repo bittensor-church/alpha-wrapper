@@ -1,18 +1,49 @@
 """Chainless unit tests for alpha_e2e.chain's cast-output and receipt parsing."""
+import json
+from subprocess import CompletedProcess
+
+import pytest
+
 from alpha_e2e import chain
 
 
-def test_strip_cast_scientific_suffix():
+def test_cast_call_returns_the_integer_without_the_scientific_suffix(monkeypatch):
     # cast prints: "1000000000000000000 [1e18]" -- keep the integer token only.
-    assert chain._first_token("1000000000000000000 [1e18]") == "1000000000000000000"
-    assert chain._first_token("0x70997970C51812dc3A010C7d01b50e0d17dc79C8") == \
-        "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
-    assert chain._first_token("") == ""
+    monkeypatch.setattr(chain, "run", lambda cmd: CompletedProcess(cmd, 0, "1000000000000000000 [1e18]\n", ""))
+    assert chain.cast_call("0x123", "totalSupply()(uint256)") == "1000000000000000000"
 
 
-def test_tokens_per_line_parse_multi_return():
+def test_cast_call_lines_preserves_the_order_of_multiple_return_values(monkeypatch):
     raw = "123 [1.2e2]\n456 [4.5e2]\n"
-    assert chain._tokens_per_line(raw) == ["123", "456"]
+    monkeypatch.setattr(chain, "run", lambda cmd: CompletedProcess(cmd, 0, raw, ""))
+    assert chain.cast_call_lines("0x123", "previewUnwrap()(uint256,uint256)") == ["123", "456"]
+
+
+@pytest.mark.parametrize("output", ["", "error: connection refused", "[]", "{}", '{"status":"0x0"}'])
+def test_cast_send_rejects_failures_without_a_mined_receipt(monkeypatch, output):
+    monkeypatch.setattr(chain, "run", lambda *args, **kwargs: CompletedProcess([], 1, output, "submission failed"))
+    with pytest.raises(chain.ChainError, match="receipt"):
+        chain.cast_send("0x123", "claimTao(uint256,address)", 1, "0x456", private_key="test-key", gas_limit=100_000)
+
+
+@pytest.mark.parametrize("status", ["0x0", "0x1"])
+def test_cast_send_returns_mined_successes_and_reverts(monkeypatch, status):
+    receipt = {"status": status, "transactionHash": "0x" + "ab" * 32, "blockNumber": "0x7", "gasUsed": "0x5208"}
+    exit_code = 1 if status == "0x0" else 0
+    monkeypatch.setattr(chain, "run", lambda *args, **kwargs: CompletedProcess([], exit_code, json.dumps(receipt), ""))
+    actual = chain.cast_send(
+        "0x123", "claimTao(uint256,address)", 1, "0x456", private_key="test-key", gas_limit=100_000,
+    )
+    assert actual == receipt
+
+
+@pytest.mark.parametrize("missing", ["transactionHash", "blockNumber", "gasUsed"])
+def test_cast_send_rejects_a_revert_without_execution_evidence(monkeypatch, missing):
+    receipt = {"status": "0x0", "transactionHash": "0x" + "ab" * 32, "blockNumber": "0x7", "gasUsed": "0x5208"}
+    del receipt[missing]
+    monkeypatch.setattr(chain, "run", lambda *args, **kwargs: CompletedProcess([], 1, json.dumps(receipt), ""))
+    with pytest.raises(chain.ChainError, match="incomplete receipt"):
+        chain.cast_send("0x123", "claimTao(uint256,address)", 1, "0x456", private_key="test-key", gas_limit=100_000)
 
 
 def test_receipt_ok():

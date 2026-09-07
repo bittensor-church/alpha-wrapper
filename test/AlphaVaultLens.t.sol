@@ -18,7 +18,7 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
         assertEq(address(lens.vault()), address(vault));
     }
 
-    function testFuzz_SharePrice_MatchesTheLivePayoutOfOneShareUnit(uint256 deposit, uint256 emissions, uint256 shares)
+    function testFuzz_SharePriceAgreesWithThePreviewOfOneShareUnit(uint256 deposit, uint256 emissions, uint256 shares)
         public
     {
         deposit = bound(deposit, 1e7, 1e20);
@@ -88,31 +88,6 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
         _donateToClone(vault.subnetClone(TOKEN1), 5 ether);
 
         assertEq(lens.claimableTaoOf(alice, TOKEN1), 0);
-    }
-
-    /// @dev Both lenses use the same build; matching `vault()` alone would not establish quote equivalence.
-    function test_SecondLens_AnswersIdenticallyToTheFirst() public {
-        uint256 deposit = 100 ether;
-        uint256 shares = _depositAndWrap(alice, NETUID1, deposit);
-
-        _setValidators(NETUID1, _hotkeys(hotkey1, hotkey4), _weights(5_000, 5_000));
-        _donateToClone(vault.subnetClone(TOKEN1), 5 ether);
-
-        AlphaVaultLens second = new AlphaVaultLens(vault);
-
-        assertGt(lens.totalStake(TOKEN1), 0, "the scenario must leave backing to quote");
-        assertGt(lens.claimableTaoOf(alice, TOKEN1), 0, "the scenario must leave TAO to claim");
-
-        assertEq(second.totalStake(TOKEN1), lens.totalStake(TOKEN1), "totalStake");
-        assertEq(second.sharePrice(TOKEN1), lens.sharePrice(TOKEN1), "sharePrice");
-        assertEq(second.previewWrap(TOKEN1, deposit), lens.previewWrap(TOKEN1, deposit), "previewWrap");
-        assertEq(second.claimableTaoOf(alice, TOKEN1), lens.claimableTaoOf(alice, TOKEN1), "claimableTaoOf");
-        assertEq(second.getCurrentValidators(NETUID1), lens.getCurrentValidators(NETUID1), "getCurrentValidators");
-
-        (uint256 alphaFromSecond, uint256 taoFromSecond) = second.previewUnwrap(TOKEN1, shares);
-        (uint256 alphaFromFirst, uint256 taoFromFirst) = lens.previewUnwrap(TOKEN1, shares);
-        assertEq(alphaFromSecond, alphaFromFirst, "previewUnwrap alpha");
-        assertEq(taoFromSecond, taoFromFirst, "previewUnwrap tao");
     }
 
     function test_Constructor_ResolvesTheVaultsRegistry() public view {

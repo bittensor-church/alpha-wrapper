@@ -3,13 +3,11 @@ pragma solidity ^0.8.20;
 
 import { Vm } from "forge-std/Test.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
-import { VaultReads } from "src/libraries/VaultReads.sol";
 import { AlphaVaultLens } from "src/AlphaVaultLens.sol";
 import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
 import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
 import { MockStaking, CHAIN_MIN_STAKE, CHAIN_MIN_TRANSFER, CHAIN_NOMINATOR_MIN_STAKE } from "./mocks/MockStaking.sol";
-import { VaultMath } from "src/libraries/VaultMath.sol";
 import { MockAddressMapping } from "./mocks/MockAddressMapping.sol";
 import { MockSubnetPrecompile } from "./mocks/MockSubnetPrecompile.sol";
 import { MockAlpha } from "./mocks/MockAlpha.sol";
@@ -195,16 +193,14 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     }
 
     function _simulateAlphaDeposit(address user, uint256 netuid, uint256 amount) internal {
-        address cloneAddr = vault.getDepositAddress(user, netuid);
-        bytes32 cloneColdkey = _toSubstrate(cloneAddr);
-        bytes32 hotkey = lens.getCurrentValidators(netuid)[0];
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey, cloneColdkey, netuid, amount);
+        _simulateAlphaDepositHotkey(user, netuid, amount, lens.getCurrentValidators(netuid)[0]);
     }
 
     function _simulateAlphaDepositHotkey(address user, uint256 netuid, uint256 amount, bytes32 hotkey) internal {
         address cloneAddr = vault.getDepositAddress(user, netuid);
         bytes32 cloneColdkey = _toSubstrate(cloneAddr);
-        MockStaking(STAKING_PRECOMPILE).setStake(hotkey, cloneColdkey, netuid, amount);
+        MockStaking mock = MockStaking(STAKING_PRECOMPILE);
+        mock.setStake(hotkey, cloneColdkey, netuid, mock.getStake(hotkey, cloneColdkey, netuid) + amount);
     }
 
     function _simulateEmissions(uint256 netuid, uint256 extraAlpha) internal {
@@ -237,12 +233,15 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         return MockStaking(STAKING_PRECOMPILE).getStake(hotkey, _subnetColdkey(netuid), netuid);
     }
 
-    function _setVaultStake(bytes32 hotkey, uint256 netuid, uint256 amount) internal {
+    function _setVaultStakeAndWriteOffShortfalls(bytes32 hotkey, uint256 netuid, uint256 amount) internal {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey, _subnetColdkey(netuid), netuid, amount);
         _catchRecordUp(netuid);
     }
 
-    function _setVaultStakes(uint256 netuid, uint256 a, uint256 b, uint256 c) internal returns (uint256 total) {
+    function _setVaultStakesAndWriteOffShortfalls(uint256 netuid, uint256 a, uint256 b, uint256 c)
+        internal
+        returns (uint256 total)
+    {
         bytes32 cloneColdkey = _subnetColdkey(netuid);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, cloneColdkey, netuid, a);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, cloneColdkey, netuid, b);
@@ -372,7 +371,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         MockStaking(STAKING_PRECOMPILE).setRemoveStakeRevertsFor(hotkey, v);
     }
 
-    function _simulateTransferToggleOn() internal {
+    function _disableAlphaTransfers() internal {
         MockStaking(STAKING_PRECOMPILE).setTransferStakeReverts(true);
     }
 
@@ -406,32 +405,34 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     }
 
     function _lastSeen(uint256 tokenId) internal view returns (bytes32[] memory) {
-        return VaultReads.activesOf(vault.recordedSlots(tokenId));
+        return lens.lastSeenHotkeys(tokenId);
     }
 
-    /// @dev Restores mock owner presence only; does not simulate subnet registration or erase lineage.
-    function _simulateHotkeyRegistered(bytes32 hotkey) internal {
+    /// @dev Makes the ownership precompile report an owner for this hotkey.
+    function _simulateHotkeyOwnerPresent(bytes32 hotkey) internal {
         MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey, false);
         _recordHotkeyOwner(hotkey);
     }
 
-    /// @dev Moves backing without recording lineage or invoking the vault.
+    /// @dev Moves mock stake without changing the successor precompile's response.
     function _simulateOffVaultSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
+        require(fromHotkey != toHotkey, "swap needs distinct hotkeys");
         bytes32 coldkey = _subnetColdkey(netuid);
         uint256 amount = _getStakeForColdkey(fromHotkey, coldkey, netuid);
         uint256 alreadyThere = _getStakeForColdkey(toHotkey, coldkey, netuid);
         MockStaking(STAKING_PRECOMPILE).setStake(fromHotkey, coldkey, netuid, 0);
         MockStaking(STAKING_PRECOMPILE).setStake(toHotkey, coldkey, netuid, alreadyThere + amount);
-        _simulateHotkeyRegistered(toHotkey);
+        _simulateHotkeyOwnerPresent(toHotkey);
     }
 
-    /// @dev Per-subnet swaps retain the old owner record.
+    /// @dev The precompile reports a successor while the old hotkey still has an owner.
     function _simulatePerSubnetSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
         _simulateOffVaultSwap(netuid, fromHotkey, toHotkey);
+        MockStaking(STAKING_PRECOMPILE).clearHotkeySuccessor(toHotkey, netuid);
         MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(fromHotkey, netuid, toHotkey);
     }
 
-    /// @dev All-subnet swaps remove the old owner record.
+    /// @dev The precompile reports a successor and no owner for the old hotkey.
     function _simulateFollowedSwap(uint256 netuid, bytes32 fromHotkey, bytes32 toHotkey) internal {
         _simulatePerSubnetSwap(netuid, fromHotkey, toHotkey);
         MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(fromHotkey, true);
@@ -448,7 +449,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     }
 
     function _wholeRao(uint256 amount) internal pure returns (uint256) {
-        return VaultMath.toNativeQuantum(amount);
+        return amount / 1e9 * 1e9;
     }
 
     function _drainTheFirstSlot(address holder, uint256 netuid) internal {

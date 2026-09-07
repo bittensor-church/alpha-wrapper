@@ -39,7 +39,7 @@ contract BackingRecordTest is AlphaVaultTestBase {
         VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
         assertEq(slots[0].logical, hotkey1, "the registry still names the original validator");
         assertEq(slots[0].active, hotkey4, "the alpha is tracked at the successor");
-        assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "backing whole across the swap");
+        assertEq(lens.totalStake(TOKEN1), 30 ether, "backing whole across the swap");
     }
 
     function test_RepeatedSwaps_AdvanceOneHopPerCall() public {
@@ -61,7 +61,7 @@ contract BackingRecordTest is AlphaVaultTestBase {
         assertEq(slots[0].logical, hotkey1, "the registry has not moved");
         assertEq(slots[0].active, hotkey5, "the alpha is tracked at the live key");
         assertEq(lens.lastSeenHotkeys(tokenId)[0], hotkey5, "the lens reports the same key");
-        assertApproxEqAbs(lens.totalStake(tokenId), 10 ether, 0.01 ether, "backing whole across both swaps");
+        assertEq(lens.totalStake(tokenId), 10 ether, "backing whole across both swaps");
     }
 
     function test_SwappedValidator_AllRailsKeepWorking() public {
@@ -100,7 +100,7 @@ contract BackingRecordTest is AlphaVaultTestBase {
         assertEq(slots[0].logical, hotkey3, "slot order follows the attested set");
         assertEq(slots[1].logical, hotkey1, "the swapped validator kept its own weight slot");
         assertEq(slots[1].active, hotkey4, "and its alpha is still tracked at the successor");
-        assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "nothing lost in the reorder");
+        assertEq(lens.totalStake(TOKEN1), 30 ether, "nothing lost in the reorder");
     }
 
     function test_DroppedValidator_HasItsAlphaRolledOntoTheNewSet() public {
@@ -113,7 +113,7 @@ contract BackingRecordTest is AlphaVaultTestBase {
 
         assertEq(_getVaultStake(hotkey4, NETUID1), 0, "the successor was drained");
         assertEq(vault.recordedSlots(TOKEN1).length, 2, "the record matches the new set");
-        assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "backing whole after the roll");
+        assertEq(lens.totalStake(TOKEN1), 30 ether, "backing whole after the roll");
     }
 
     function test_SetNamingTheSuccessor_CountsTheBalanceOnce() public {
@@ -129,7 +129,7 @@ contract BackingRecordTest is AlphaVaultTestBase {
         VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
         assertEq(slots[0].logical, hotkey4, "the attested name took over the slot");
         assertEq(slots[0].active, hotkey4, "answering for its own key");
-        assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "and nothing is counted twice");
+        assertEq(lens.totalStake(TOKEN1), 30 ether, "and nothing is counted twice");
     }
 
     function test_SetNamingASwappedKeyAndItsSuccessor_RefusesCheaply() public {
@@ -212,7 +212,7 @@ contract BackingRecordTest is AlphaVaultTestBase {
         assertEq(slots[2].logical, hotkey4, "the record names the attested validator");
         assertEq(slots[2].active, hotkey5, "while its share sits at the successor");
         assertGt(_getVaultStake(hotkey5, NETUID1), 0, "which is where the rebalance staked it");
-        assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "backing whole across the swap");
+        assertEq(lens.totalStake(TOKEN1), 30 ether, "backing whole across the swap");
     }
 
     function test_PerSubnetSwapAfterADrain_StakesTheShareAtTheAttestedName() public {
@@ -438,7 +438,7 @@ contract BackingRecordTest is AlphaVaultTestBase {
 
         assertTrue(lens.isBackingIntact(TOKEN1), "the TAO rail leaves a record the swap cannot trip");
         vault.rebalance(NETUID1);
-        assertApproxEqAbs(lens.totalStake(TOKEN1), backingAfterExit, 0.01 ether, "backing whole across the swap");
+        assertEq(lens.totalStake(TOKEN1), backingAfterExit, "backing whole across the swap");
     }
 
     function test_MoveRounding_DoesNotTrip() public {
@@ -463,7 +463,7 @@ contract BackingRecordTest is AlphaVaultTestBase {
         _simulateFollowedSwap(netuid, hks[0], swapped);
         vault.rebalance(netuid);
 
-        assertApproxEqAbs(lens.totalStake(tokenId), 64 ether, 0.01 ether, "backing whole across the wide set");
+        assertEq(lens.totalStake(tokenId), 64 ether, "backing whole across the wide set");
         assertTrue(lens.isBackingIntact(tokenId), "record sound after the follow");
     }
 }

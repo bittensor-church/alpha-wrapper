@@ -25,7 +25,7 @@ from alpha_e2e.substrate import h160_to_ss58, h160_to_substrate_b32
 
 
 @pytest.mark.scenario
-def test_subnet_dissolved(env):
+def test_dissolution_refunds_holders_and_mailboxes_without_affecting_other_subnets(env):
     # --- Phase 6: two users wrap positions on the soon-dissolved subnet ---------
     dissolved_netuid = env.netuids[0]
     dissolved_token_id = env.token_ids[0]
@@ -150,7 +150,7 @@ def test_subnet_dissolved(env):
     )
 
     first_user_tao_before = env.user_tao_wei()
-    env.vault_send(
+    first_receipt = env.vault_send(
         2_000_000, "user1 dissolved unwrap failed",
         "unwrap(uint256,uint256,bytes32,uint256)",
         dissolved_token_id, first_user_shares, env.wrapper_substrate_coldkey, 0,
@@ -158,13 +158,14 @@ def test_subnet_dissolved(env):
     assert env.vault_shares(dissolved_token_id) == 0, (
         "user1 shares not burned after the dissolved unwrap"
     )
-    first_user_gain = checks.assert_positive_gain(
-        first_user_tao_before, env.user_tao_wei(),
-        "user1 gained no TAO from the dissolved unwrap",
+    first_user_gain = checks.reconstructed_payout(
+        first_user_tao_before, env.user_tao_wei(), first_receipt, "user1 dissolved payout",
     )
+    assert first_user_gain == expected_first_user_tao, "user1 received the wrong refund share"
 
+    expected_second_user_tao = chain.cast_balance_wei(dissolved_clone) // checks.RAO_WEI * checks.RAO_WEI
     second_user_tao_before = chain.cast_balance_wei(second_user_address)
-    env.vault_send(
+    second_receipt = env.vault_send(
         2_000_000, "user2 dissolved unwrap failed",
         "unwrap(uint256,uint256,bytes32,uint256)",
         dissolved_token_id, second_user_shares, env.wrapper_substrate_coldkey, 0,
@@ -173,10 +174,11 @@ def test_subnet_dissolved(env):
     assert env.vault_shares(dissolved_token_id, second_user_address) == 0, (
         "user2 shares not burned after the dissolved unwrap"
     )
-    second_user_gain = checks.assert_positive_gain(
-        second_user_tao_before, chain.cast_balance_wei(second_user_address),
-        "user2 gained no TAO from the dissolved unwrap",
+    second_user_gain = checks.reconstructed_payout(
+        second_user_tao_before, chain.cast_balance_wei(second_user_address), second_receipt,
+        "user2 dissolved payout",
     )
+    assert second_user_gain == expected_second_user_tao, "the last holder did not receive the remaining refund"
 
     clone_tail = chain.cast_balance_wei(dissolved_clone)
     assert clone_tail < 2 * checks.RAO_WEI, (
@@ -218,7 +220,7 @@ def test_subnet_dissolved(env):
     )
     parked_mailbox_tao_before = chain.cast_balance_wei(parked_mailbox)
     user_tao_before = env.user_tao_wei()
-    env.vault_send(
+    mailbox_receipt = env.vault_send(
         2_000_000, "reclaimTaoFromMailbox failed",
         "reclaimTaoFromMailbox(uint256)", parked_netuid,
     )
@@ -229,10 +231,10 @@ def test_subnet_dissolved(env):
     assert chain.cast_balance_wei(parked_mailbox) == 0, (
         "mailbox not fully drained after reclaimTaoFromMailbox"
     )
-    gained = checks.assert_positive_gain(
-        user_tao_before, env.user_tao_wei(),
-        "user gained no TAO from reclaimTaoFromMailbox",
+    gained = checks.reconstructed_payout(
+        user_tao_before, env.user_tao_wei(), mailbox_receipt, "mailbox refund",
     )
+    assert gained == parked_mailbox_tao_before, "mailbox reclaim paid less than the drained balance"
     print(f"  Never-wrapped mailbox recovered ({parked_mailbox_tao_before} wei): "
           f"clone deployed on demand, user net +{gained} wei, mailbox drained to 0")
 

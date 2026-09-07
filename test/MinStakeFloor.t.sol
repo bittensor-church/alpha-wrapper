@@ -41,8 +41,8 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
         _setAlphaPrice(NETUID1, PRICE_HALF);
         // The 2e6-alpha corrective move is worth only 1e6 TAO RAO, below the floor.
-        _setVaultStake(hotkey1, NETUID1, 6e6);
-        _setVaultStake(hotkey2, NETUID1, 2e6);
+        _setVaultStakeAndWriteOffShortfalls(hotkey1, NETUID1, 6e6);
+        _setVaultStakeAndWriteOffShortfalls(hotkey2, NETUID1, 2e6);
 
         vm.recordLogs();
         vault.rebalance(NETUID1);
@@ -56,8 +56,8 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, NETUID1, 8e6, hotkey1);
         _wrapHotkey(alice, NETUID1, hotkey1);
 
-        _setVaultStake(hotkey1, NETUID1, 6e6);
-        _setVaultStake(hotkey2, NETUID1, 2e6);
+        _setVaultStakeAndWriteOffShortfalls(hotkey1, NETUID1, 6e6);
+        _setVaultStakeAndWriteOffShortfalls(hotkey2, NETUID1, 2e6);
         MockStaking(STAKING_PRECOMPILE).setMoveStakeReverts(true);
 
         vm.expectRevert(bytes("MockStaking: moveStake reverted"));
@@ -84,7 +84,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
     function test_RevertWhen_UnwrapWithAllSlotsSubFloor() public {
         _depositAndWrap(alice, NETUID1, 4_500_000);
-        _setVaultStakes(NETUID1, 1_500_000, 1_500_000, 1_500_000);
+        _setVaultStakesAndWriteOffShortfalls(NETUID1, 1_500_000, 1_500_000, 1_500_000);
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         vm.prank(alice);
@@ -169,7 +169,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
     function test_Rebalance_SkipsEveryMoveBelowRaisedChainFloor() public {
         _depositAndWrap(alice, NETUID1, 40e6);
-        _setVaultStakes(NETUID1, 20e6, 10e6, 10e6);
+        _setVaultStakesAndWriteOffShortfalls(NETUID1, 20e6, 10e6, 10e6);
         _setChainMinStake(50e6);
 
         vm.recordLogs();
@@ -182,7 +182,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
     function test_Rebalance_FollowsLoweredChainFloor() public {
         _depositAndWrap(alice, NETUID1, 40e6);
         _setAlphaPrice(NETUID1, PRICE_HALF);
-        _setVaultStakes(NETUID1, 16e6, 12e6, 12e6);
+        _setVaultStakesAndWriteOffShortfalls(NETUID1, 16e6, 12e6, 12e6);
 
         vault.rebalance(NETUID1);
         assertEq(_getVaultStake(hotkey1, NETUID1), 16e6, "the corrective move is under the current minimum");
@@ -246,7 +246,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
     function test_RevertWhen_GatherBelowRaisedChainFloor() public {
         _depositAndWrap(alice, NETUID1, 40e6);
-        _setVaultStakes(NETUID1, 15e6, 15e6, 10e6);
+        _setVaultStakesAndWriteOffShortfalls(NETUID1, 15e6, 15e6, 10e6);
         _setChainMinStake(20e6);
 
         uint256 shares = _sharesForExactAssets(TOKEN1, 25e6, 40e6);
@@ -275,7 +275,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         c = bound(c, 0, 1e16);
         _depositAndWrap(alice, NETUID1, 30 ether);
         _setAlphaPrice(NETUID1, chainPriceE18);
-        uint256 total = _setVaultStakes(NETUID1, a, b, c);
+        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, a, b, c);
 
         vault.rebalance(NETUID1);
 
@@ -290,7 +290,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, 99, 10 ether, hotkey4);
         _wrapHotkey(alice, 99, hotkey4);
         uint256 tokenId = vault.currentTokenId(99);
-        _setVaultStake(hotkey4, 99, dust);
+        _setVaultStakeAndWriteOffShortfalls(hotkey4, 99, dust);
         _setValidators(99, _hotkeys(hotkey1), _weights(10_000));
         _setAlphaPrice(99, chainPriceE18);
         uint256 trueValue = (dust * chainPriceE18) / 1e18;
@@ -331,7 +331,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         chainPriceE18 = bound(chainPriceE18, 1, 100e18);
         uint256 supply = _depositAndWrap(alice, NETUID1, 30 ether);
         _setAlphaPrice(NETUID1, chainPriceE18);
-        uint256 total = _setVaultStakes(NETUID1, a, b, c);
+        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, a, b, c);
         uint256 shares = (supply * shareBps) / 10_000;
         uint256 expected = (shares * (total + 1)) / (supply + 1e9);
 
@@ -373,7 +373,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         _wrapHotkey(alice, 99, hotkey4);
 
         // Inside the oracle band: read value 1.5e6, true value 2.25e6, floor 2e6 TAO RAO.
-        _setVaultStake(hotkey4, 99, 1.5e15);
+        _setVaultStakeAndWriteOffShortfalls(hotkey4, 99, 1.5e15);
         _setValidators(99, _hotkeys(hotkey1), _weights(10_000));
 
         vault.rebalance(99);
@@ -418,7 +418,9 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
     function test_Unwrap_GatherWithinOneQuantumOfFloorDelivers() public {
         _setAlphaPrice(NETUID1, 1e9);
         _depositAndWrap(alice, NETUID1, 6e15);
-        _setVaultStakes(NETUID1, 1_500_000_000_000_000, 1_500_000_000_000_000, 1_500_000_000_000_000);
+        _setVaultStakesAndWriteOffShortfalls(
+            NETUID1, 1_500_000_000_000_000, 1_500_000_000_000_000, 1_500_000_000_000_000
+        );
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         (uint256 previewAlpha,) = lens.previewUnwrap(TOKEN1, shares);

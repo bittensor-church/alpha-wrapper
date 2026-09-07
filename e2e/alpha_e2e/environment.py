@@ -160,7 +160,7 @@ class Environment:
         return int(lines[0]), int(lines[1])
 
     def chain_min_stake_tao(self) -> int:
-        """The minimum the vault reads on every floor check. A runtime constant."""
+        """The minimum exposed by the staking precompile."""
         return int(chain.cast_call(config.STAKING_PRECOMPILE, "getDefaultMinStake()(uint256)"))
 
     def hotkey_in_last_seen(self, token_id: int, hotkey_pubkey: str) -> bool:
@@ -253,8 +253,7 @@ class Environment:
         self, gas_limit: int, signature: str, *args,
         private_key: Optional[str] = None, label: Optional[str] = None,
     ) -> dict:
-        """Broadcast a vault transaction and return its receipt (a failed send
-        surfaces as a receipt without a success status). Every call reports its gas
+        """Broadcast a vault transaction and return its mined receipt. Every call reports its gas
         under `label`, defaulting to the function name being called."""
         receipt = chain.cast_send(
             self.vault_address, signature, *args,
@@ -280,13 +279,12 @@ class Environment:
         self, gas_limit: int, message: str, signature: str, *args,
         private_key: Optional[str] = None, label: Optional[str] = None,
     ) -> dict:
-        """Broadcast a vault transaction that is EXPECTED to revert; assert it did
-        not succeed."""
+        """Broadcast a vault transaction and require a mined EVM revert."""
         receipt = self.vault_broadcast(
             gas_limit, signature, *args,
             private_key=private_key, label=self._gas_label(signature, message, label),
         )
-        assert not chain.receipt_ok(receipt), message
+        assert receipt.get("status") == "0x0", f"{message}: {receipt}"
         return receipt
 
     def assert_vault_reverts_with(
@@ -315,7 +313,7 @@ class Environment:
             gas_limit, signature, *args,
             private_key=private_key, label=self._gas_label(signature, message, label),
         )
-        assert not chain.receipt_ok(receipt), message
+        assert receipt.get("status") == "0x0", f"{message}: {receipt}"
         return receipt
 
     # --- Scenario actions -------------------------------------------------------

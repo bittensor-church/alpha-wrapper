@@ -1,11 +1,10 @@
 """Scenario: the vault stays live through every dust state.
 
-No sequence of deposits, withdrawals, and validator changes can leave the vault
-stuck behind leftovers too small for the chain to move. Two churn cycles scatter
-every kind of leftover - withdrawal remainders, skipped rebalances, sale
-leftovers, balances on rotated-out validators - and every call along the way
-keeps working at normal gas cost. A closing ledger then checks that everything
-deposited came back out, as delivered alpha or as TAO from sales.
+Two churn cycles exercise withdrawal remainders, skipped rebalances, sale
+leftovers, and balances on rotated-out validators. Each eligible call must
+succeed within its gas budget. The closing ledger provides a lower-bound
+smoke check because previously delivered alpha continues earning emissions;
+the Foundry accounting campaign separately checks exact conservation.
 """
 import pytest
 
@@ -154,7 +153,7 @@ class ChurnLedger:
 
 
 @pytest.mark.scenario
-def test_min_stake_liveness(env):
+def test_holders_can_exit_after_two_cycles_of_dust_and_validator_rotation(env):
     chain_min_stake = env.chain_min_stake_tao()
     print(f"  chain minimum stake = {chain_min_stake} RAO")
 

@@ -187,10 +187,7 @@ def _create_subnets() -> List[int]:
         netuids.append(netuid)
         print(f"  netuid {netuid}")
 
-    # The fast-runtime's admin freeze window lets owner/root hyperparameter writes
-    # (the registration cap below, the transfer toggle in the transfers-off test)
-    # land only near each subnet's epoch boundary and otherwise silently miss.
-    # Disable it so they apply first try.
+    # Let scenario setup change administrative settings without waiting for an epoch.
     _log("Disable admin freeze window (deterministic sudo hyperparameter writes)")
     extrinsics.set_admin_freeze_window(0)
     print("  AdminFreezeWindow -> 0")
