@@ -8,7 +8,6 @@ import { CHAIN_MIN_TRANSFER, MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 contract BackingResolutionTest is AlphaVaultTestBase {
-
     function test_TwoHopSwap_FailsClosedOnEveryPath() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
         _depositAndWrap(bob, NETUID1, 30 ether);

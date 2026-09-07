@@ -8,7 +8,6 @@ import { MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 contract BackingRecordTest is AlphaVaultTestBase {
-
     function test_Wrap_RecordsWhereEachValidatorsAlphaIs() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
 
