@@ -1,28 +1,25 @@
-# scripts/
+# Observability scripts
 
-Python tooling for the alpha-wrapper contracts: read-only on-chain observability
-readers and the shared library they build on.
+Read-only Python tools for vault events and state. They load ABIs from `out/`;
+build the contracts before using them.
 
-| Script | Description |
-|---|---|
-| `get_deposits.py` | `Deposited` events |
-| `get_unwraps.py` | Live-subnet `Unwrapped` events, including the successful alpha payout |
-| `get_rebalances.py` | `Rebalanced` events |
-| `get_subnet_proxies.py` | `SubnetProxyCreated` events |
-| `get_validator_updates.py` | `ValidatorsUpdated` events |
-| `get_volumes.py` | Unit-safe alpha and TAO unwrap metrics, with optional user filter |
-| `get_vault_state.py` | Returns on-chain data about an ERC-1155 token for a subnet |
-| `common.py` | Shared web3/ABI/CSV helpers imported by the scripts above and by the e2e framework (`../e2e/alpha_e2e/`) |
+| Script | Output |
+| --- | --- |
+| `get_deposits.py` | Deposits |
+| `get_unwraps.py` | Live alpha exits, including actual alpha payout |
+| `get_rebalances.py` | Weight-alignment moves |
+| `get_subnet_proxies.py` | Clone creation |
+| `get_validator_updates.py` | Registry updates |
+| `get_volumes.py` | Alpha/TAO exit metrics, optionally filtered by user |
+| `get_vault_state.py` | Token state and lens quotes |
 
-Run `forge build` first -- the Python scripts load ABIs from `out/`.
+`get_vault_state.py` requires `--lens-address` and `--vault-address`. Use a trusted
+lens: checking its `vault()` catches a mismatch, not fabricated quotes.
 
-`get_vault_state.py` reads backing and share price from an `AlphaVaultLens`, so it takes a
-`--lens-address` alongside `--vault-address`. Supply a lens you trust: it refuses a lens whose
-`vault()` names a different vault, which catches the wrong address rather than a dishonest one.
+Units: `_rao` columns are alpha at 9 decimals; `_wei` columns are native TAO at
+18 decimals. Shares are raw ERC-1155 units. Alpha payouts, alpha requested for sale
+and actual TAO proceeds are separate metrics, never summed across units.
 
-Volume column suffixes identify their units: `_rao` is raw alpha (1e-9 alpha) and `_wei`
-is native TAO (1e-18 TAO). Shares are raw ERC-1155 share units. Live alpha payouts,
-nominal alpha requested for TAO, and actual TAO payouts remain distinct; only values with
-the same unit are rolled up.
-
-The end-to-end tests and their harness live in [`../e2e/`](../e2e/).
+`common.py` supplies shared web3, ABI and CSV helpers to these tools and the
+[e2e harness](../e2e/README.md). Recovery monitoring requirements are in the
+[watcher runbook](../docs/hotkey-swaps.md).

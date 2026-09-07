@@ -37,7 +37,7 @@ contract CloneBaseSellAlphaTest is Test {
     }
 
     function test_SellAlphaForTao_NoOpOnZero() public {
-        // Toggle removeStake to revert so a missing zero-guard would surface as a revert here.
+        // Make the precompile reject even zero, exposing any missing caller-side zero guard.
         MockStaking(STAKING_PRECOMPILE).setRemoveStakeReverts(true);
         uint256 balanceBefore = address(clone).balance;
         clone.sellAlphaForTao(HOTKEY, NETUID, 0);

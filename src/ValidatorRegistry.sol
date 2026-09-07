@@ -7,23 +7,16 @@ import { ECDSA } from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import { IValidatorRegistry } from "./interfaces/IValidatorRegistry.sol";
 import { IStaking, STAKING_PRECOMPILE } from "./interfaces/IStaking.sol";
 
-/// @dev The vault reads one stake balance per validator on every state-mutating call, and a
-///      rotation settles every slot, so per-call work scales with this cap. 64 keeps the widest
-///      measured path under a tenth of the block gas limit, so a position stays exitable at any
-///      width the registry can commit.
+/// @dev Bounds per-validator reads and storage writes on vault operations.
 uint256 constant MAX_VALIDATORS = 64;
 
-/// @title ValidatorRegistry
-/// @notice Per-subnet validator hotkeys + BPS weights, updated by threshold-of-N
-///         off-chain attesters via EIP-712 signed payloads. Every hotkey a payload
-///         names must be one the chain has an owner for.
+/// @notice Quorum-signed EIP-712 validator weights; hotkey ownership is checked at submission only.
 contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     bytes32 public constant ATTESTATION_TYPEHASH =
         keccak256("WeightAttestation(uint256 netuid,bytes32[] hotkeys,uint256[] weights,uint256 nonce)");
 
     uint16 private constant BPS_BASE = 10_000;
-    /// @dev Bounds `_setSigners` churn so a careless or compromised admin can't install a set
-    ///      so large that subsequent rotation exceeds the block gas limit.
+    /// @dev Bounds signer-rotation work even if the admin is compromised.
     uint8 private constant MAX_SIGNERS = 16;
 
     struct WeightAttestation {
@@ -74,7 +67,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         _setSigners(initialSigners, initialThreshold);
     }
 
-    /// @param signatures Must be sorted by recovered signer address, ascending.
+    /// @param signatures Sorted by recovered signer address, ascending.
     function updateValidators(WeightAttestation calldata attestation, bytes[] calldata signatures) external {
         uint256 validatorCount = attestation.hotkeys.length;
         _validatePayload(attestation, validatorCount);
@@ -83,7 +76,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         _commit(attestation, validatorCount);
     }
 
-    /// @param signatures Per-attestation signatures; each entry must be sorted ascending by recovered address.
+    /// @param signatures Each attestation's signatures sorted by recovered signer address, ascending.
     function updateValidatorsBatch(WeightAttestation[] calldata attestations, bytes[][] calldata signatures) external {
         uint256 attestationCount = attestations.length;
         if (attestationCount != signatures.length) revert LengthMismatch();
@@ -147,11 +140,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         emit SignersUpdated(newSigners, newThreshold);
     }
 
-    /// @dev Every hotkey is checked against the chain's owner record, one read apiece. The vault
-    ///      holds no fallback set: it aims its stake rails at whatever stands here, and the chain
-    ///      turns away every operation naming a hotkey it has no owner for, taking the gas with it.
-    ///      A single such name - a typo, or a key deregistered or swapped away before the signatures
-    ///      landed - would therefore shut that subnet's alpha rail until a corrected set commits.
+    /// @dev Reject ownerless targets before installing a set; ownership can still change afterwards.
     function _validatePayload(WeightAttestation calldata attestation, uint256 validatorCount) private view {
         if (attestation.netuid > type(uint16).max) revert NetuidOutOfRange();
         if (validatorCount == 0 || validatorCount > MAX_VALIDATORS) revert InvalidValidatorCount();
@@ -178,10 +167,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         if (sum != BPS_BASE) revert WeightsMustSum10000();
     }
 
-    /// @dev A signed attestation stays valid only until any attestation lands on the same subnet,
-    ///      so the nonce alone bounds its life. It can never rewind the stored set either: while the
-    ///      nonce is unadvanced the stored set is the one that preceded every attestation contending
-    ///      for it, so whichever lands is at least as recent as what it replaces.
+    /// @dev Signatures have no expiry; landing any update invalidates competing payloads at its nonce.
     function _validateNonce(WeightAttestation calldata attestation) private view {
         if (attestation.nonce != nonces[attestation.netuid] + 1) revert StaleNonce();
     }
@@ -210,7 +196,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         delete validatorSet.weights;
         for (uint256 i; i < validatorCount;) {
             validatorSet.hotkeys.push(attestation.hotkeys[i]);
-            // The sum == BPS_BASE check bounds every weight well inside uint16.
+            // The weight sum bounds this cast to 10000.
             validatorSet.weights.push(uint16(attestation.weights[i]));
             unchecked {
                 ++i;

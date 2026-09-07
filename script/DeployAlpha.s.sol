@@ -8,16 +8,7 @@ import { SubnetClone } from "src/SubnetClone.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { AlphaVaultLens } from "src/AlphaVaultLens.sol";
 
-/// @title DeployAlpha
-/// @notice Deploys only the alpha-wrapper contracts (DepositMailbox + SubnetClone + AlphaVault
-///         + AlphaVaultLens).
-///         Used standalone; the tao20 repo has its own deploy script that wires these up
-///         with the rest of the index protocol.
-/// @dev    The validator registry is an immutable constructor dependency, supplied via the
-///         `VALIDATOR_REGISTRY` env var (deploy/configure `ValidatorRegistry` separately first).
-///         `VAULT_URI` overrides the metadata URI; the vault cannot change it after deployment.
-///         `RECOVERY_WINDOW` overrides how long (in seconds) a recorded backing loss stays
-///         recoverable before it may be written off; it too is immutable once deployed.
+/// @dev Configure the registry first; the vault's registry address, URI and recovery window are immutable.
 contract DeployAlpha is Script {
     function run() public {
         address validatorRegistry = vm.envAddress("VALIDATOR_REGISTRY");
@@ -36,7 +27,6 @@ contract DeployAlpha is Script {
             new AlphaVault(vaultUri, address(mailboxLogic), address(subnetLogic), validatorRegistry, recoveryWindow);
         console.log("AlphaVault:            %s", address(vault));
 
-        // It holds no state, so redeploying it against the same vault is always safe.
         AlphaVaultLens lens = new AlphaVaultLens(vault);
         console.log("AlphaVaultLens:        %s", address(lens));
 

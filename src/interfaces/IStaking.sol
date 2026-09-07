@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/// @title IStaking
-/// @notice Interface for the Bittensor staking precompile on EVM.
-/// @dev Precompile lives at 0x0000000000000000000000000000000000000805.
-///      Coldkeys are bytes32 (SS58 public keys), NOT H160 addresses.
-///      The EVM-to-Substrate mapping uses Frontier HashedAddressMapping.
+/// @dev Coldkeys are Substrate public keys, not H160 addresses. Stake amounts and TAO thresholds use RAO.
 interface IStaking {
     function transferStake(
         bytes32 destination_coldkey,
@@ -25,29 +21,21 @@ interface IStaking {
 
     function getStake(bytes32 hotkey, bytes32 coldkey, uint256 netuid) external view returns (uint256);
 
-    /// @notice The coldkey the chain records as owning `hotkey`, and whether it holds such a record
-    ///         at all. A hotkey with no owner names no account: every stake operation aiming at one
-    ///         is rejected, and an all-subnet swap leaves the key it moved on from in exactly that
-    ///         state.
+    /// @dev An all-subnet swap removes the old key's owner record, not the key identifier.
+    ///      Stake operations require this record; association can restore it.
     function getHotkeyOwner(bytes32 hotkey) external view returns (bool exists, bytes32 owner);
 
-    /// @notice The hotkey `hotkey` on `netuid` was swapped for, if any. Keyed with a narrower
-    ///         netuid type than the rest of this interface, matching the chain.
-    /// @dev    The edge is dropped once the old key is registered again, so its absence proves
-    ///         nothing about where a balance went.
+    /// @dev Subnet re-registration can erase this edge; no edge does not prove there was no swap.
     function getHotkeySuccessor(bytes32 hotkey, uint16 netuid) external view returns (bool exists, bytes32 successor);
 
     function removeStake(bytes32 hotkey, uint256 amount, uint256 netuid) external payable;
 
-    /// @notice Tao-denominated dust threshold: after a partial unstake, the chain force-clears any
-    ///         nominator stake entry left below this spot value.
+    /// @notice TAO spot-value threshold in RAO below which a partial unstake force-sells the remainder.
     function getNominatorMinRequiredStake() external view returns (uint256);
 
-    /// @notice Tao-denominated minimum the chain applies to a partial unstake; a runtime constant,
-    ///         so it moves only on a chain upgrade. The chain floors transfers and same-subnet moves
-    ///         lower and exposes no getter for that one, so this is a safe upper bound for them too.
+    /// @notice Partial-unstake minimum in TAO RAO.
+    /// @dev Transfers/moves have a lower, unexposed minimum; the vault uses this conservative bound.
     function getDefaultMinStake() external view returns (uint256);
 }
 
-/// @dev Staking precompile address on Bittensor EVM.
 address constant STAKING_PRECOMPILE = 0x0000000000000000000000000000000000000805;

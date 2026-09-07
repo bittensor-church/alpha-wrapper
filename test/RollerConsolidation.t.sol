@@ -6,15 +6,9 @@ import { ConsolidationBelowFloor } from "src/VaultErrors.sol";
 import { CHAIN_MIN_STAKE, MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
-/// @dev Exercises the whole-balance consolidation "roller": rotated-out stake (including sub-floor
-///      dust) is rolled onto the current set with pile-sized, non-decreasing hops (the richest slot is the
-///      binding floor check), any failure reverts atomically, an unwrap gathers for a single exact
-///      delivery, and the spot oracle gates no value (a zero read falls through to the chain).
 contract RollerConsolidationTest is AlphaVaultTestBase {
     event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaOut);
 
-    /// @dev Registers subnet 99, wraps a deposit for alice on hotkey4, shaves the position to
-    ///      sub-floor dust, and rotates hotkey4 out so the dust sits on a rotated-out validator.
     function _seedDustOnlyVault() private returns (uint256 tokenId) {
         _registerSubnet(99, hotkey4);
         _simulateAlphaDepositHotkey(alice, 99, 10 ether, hotkey4);
@@ -24,13 +18,10 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         _setValidators(99, _hotkeys(hotkey1), _weights(10_000));
     }
 
-    /// @dev Headline: two hotkeys rotate out at once and the roller chains the whole pile through
-    ///      both, emptying each rotated-out slot and refreshing the remembered set - no tracking, no forfeiture.
     function test_Rebalance_ConsolidatesMultipleRotatedOutSlots() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 totalBefore = lens.totalStake(TOKEN1);
 
-        // Drop hotkey2 and hotkey3 in one rotation; the roll carries the pile through both rotated-out slots.
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey4), _weights(5000, 5000));
         vault.rebalance(NETUID1);
 
@@ -43,9 +34,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(seen[1], hotkey4);
     }
 
-    /// @dev Rotated-out sub-floor stake with no other above-floor backing is still consolidated,
-    ///      because wrap flushes the fresh deposit BEFORE the consolidation so the roll can start from it. A
-    ///      consolidation-first order would put the sub-floor amount on the wire and revert.
+    /// @dev Flushing before consolidation lets the fresh deposit carry otherwise-unmovable dust.
     function test_Wrap_ConsolidatesRotatedOutStakeUsingFreshDeposit() public {
         uint256 tokenId = _seedDustOnlyVault();
         uint256 dust = CHAIN_MIN_STAKE - 1;
@@ -62,14 +51,12 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(seen[0], hotkey1, "remembered set refreshed to the current set");
     }
 
-    /// @dev Full-set rotation where the RICHER rotated-out slot sits at a later remembered-set index: the roll
-    ///      starts from it, and revisiting the richest slot must not re-add its departed balance.
+    /// @dev Revisiting the richest slot after its pile has left would reuse a stale balance.
     function test_Rebalance_ConsolidatesWhenRicherRotatedOutSlotSitsAtLaterIndex() public {
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(3000, 7000));
         _depositAndWrap(alice, NETUID1, 10 ether);
         uint256 totalBefore = lens.totalStake(TOKEN1);
 
-        // Rotate BOTH validators out; the 70%-weighted hotkey2 is the richest rotated-out slot at index 1.
         _setValidators(NETUID1, _hotkeys(hotkey4), _weights(10_000));
         vm.recordLogs();
         vault.rebalance(NETUID1);
@@ -81,9 +68,6 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(lens.totalStake(TOKEN1), totalBefore, "total conserved");
     }
 
-    /// @dev A funded rotated-out slot is consolidated by rolling the union-richest pile through it: the pile
-    ///      hops onto the rotated-out slot, returns carrying its balance, and the re-split restores targets.
-    ///      Only the alignment move logs; the roll hops are silent.
     function test_Rebalance_RollsPileThroughFundedRotatedOutSlot() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(5000, 5000));
@@ -100,10 +84,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(lens.totalStake(TOKEN1), 30 ether, "total conserved");
     }
 
-    /// @dev A same-subnet move can be credited a RAO short, so after one dropped validator drains
-    ///      onto a current slot, that slot holds slightly less than the vault added up. The dust
-    ///      fold that follows must ask for what the chain says is there: asking for the arithmetic
-    ///      figure over-asks, and the refusal takes wrap, unwrap and rebalance down together.
+    /// @dev Short-credited moves require live balance reads; arithmetic sums over-ask the next hop.
     function test_Rebalance_FoldsDustAfterShortCreditedDrain() public {
         _setRegBlock(99, 300);
         _setValidators(99, _hotkeys(hotkey1, hotkey2), _weights(5000, 5000));
@@ -111,7 +92,6 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         _wrapHotkey(alice, 99, hotkey1);
         uint256 tokenId = vault.currentTokenId(99);
 
-        // Both validators drop at once: one rich enough to drain whole, one holding only dust.
         uint256 dust = CHAIN_MIN_STAKE - 1;
         _setVaultStake(hotkey1, 99, 30 ether);
         _setVaultStake(hotkey2, 99, dust);
@@ -138,8 +118,6 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(received, previewedAssets, "zero oracle read falls through to the chain floor");
     }
 
-    // All union balances sub-floor with rotated-out stake: no pile can clear the floor, so
-    // consolidation is rejected up front while the TAO rail stays open.
     function test_RevertWhen_ConsolidatingDustOnlyVault() public {
         _seedDustOnlyVault();
 
@@ -147,7 +125,6 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         vault.rebalance(99);
     }
 
-    // A dust-only vault rejects unwrap inside the consolidation, before any chain call.
     function test_RevertWhen_UnwrappingDustOnlyVault() public {
         uint256 tokenId = _seedDustOnlyVault();
 
@@ -157,8 +134,6 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         vault.unwrap(tokenId, shares, _toSubstrate(alice), 0);
     }
 
-    // The rail ConsolidationBelowFloor points at: the same dust-only vault exits in full via the
-    // floor-exempt full-balance sell.
     function test_UnwrapForTao_ExitsDustOnlyVault() public {
         uint256 tokenId = _seedDustOnlyVault();
         uint256 dust = CHAIN_MIN_STAKE - 1;
@@ -172,8 +147,6 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(lens.totalStake(tokenId), 0, "nothing left behind");
     }
 
-    // At a zero price read the consolidation cannot label the richest balance, so it falls through and the chain's
-    // own full-precision floor rejects the roll with the raw error.
     function test_RevertWhen_ConsolidatingDustOnlyVaultAtZeroPrice() public {
         _seedDustOnlyVault();
         _setAlphaPriceReadsZero(99);
@@ -182,11 +155,8 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         vault.rebalance(99);
     }
 
-    /// @dev A request larger than any single slot is delivered by gathering the current-set pile
-    ///      onto one hotkey (each hop carries the whole pile) and then a single exact transfer.
     function test_Unwrap_GathersAcrossValidatorsForSingleDelivery() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
-        // Even 10/10/10 split so no single slot covers a >1/3 request.
         _setVaultStakes(NETUID1, 10 ether, 10 ether, 10 ether);
 
         uint256 burnShares = vault.balanceOf(alice, TOKEN1) * 60 / 100;
@@ -203,8 +173,6 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(lens.totalStake(TOKEN1), 30 ether - previewAssets, "only the delivered alpha left the vault");
     }
 
-    /// @dev The event reports the capped alpha payout when gather hops round the backing below the
-    ///      nominal full-burn entitlement.
     function test_UnwrapEventReportsCappedAlphaPayoutAfterGatherRounding() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _setVaultStakes(NETUID1, 10 ether, 10 ether, 10 ether);
@@ -221,8 +189,6 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(_userStakeAcrossHotkeys(_toSubstrate(alice), NETUID1), expectedAlphaOut);
     }
 
-    /// @dev A consolidation move the chain rejects reverts the whole call: nothing moves, the
-    ///      remembered set is not refreshed, and the rotated-out stake is never dropped.
     function test_RevertWhen_RollerMoveFails() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 totalBefore = lens.totalStake(TOKEN1);
@@ -238,8 +204,6 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(seen[2], hotkey3, "remembered set still references the pre-rotation set");
     }
 
-    /// @dev Oracle-soft wrap: when the spot price reads 0 the DepositTooSmall precheck is skipped
-    ///      and the chain's own full-precision floor decides; an above-floor deposit is accepted.
     function test_Wrap_AcceptsDepositWhenPriceReadsZero() public {
         _setAlphaPriceReadsZero(NETUID1);
         _depositAndWrap(alice, NETUID1, 30 ether);
@@ -248,12 +212,9 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertEq(lens.totalStake(TOKEN1), 30 ether, "full deposit backs the shares");
     }
 
-    /// @dev Oracle-soft unwrapForTao: at a zero price read the partial-tail floor check is skipped,
-    ///      so only the exempt full-drain slot sells and the tail comes back to the caller as shares.
     function test_UnwrapForTao_TailWaitsWhenPriceReadsZero() public {
         _setRemoveStakeRate(1, 1);
         _depositAndWrap(alice, NETUID1, 100 ether);
-        // hotkey1 full-drains (floor-exempt); the remainder on hotkey3 would be a partial slice.
         uint256 total = _setVaultStakes(NETUID1, 5e6, 0, 40 ether);
         uint256 shares = _sharesForExactAssets(TOKEN1, 5e6 + 1e6, total);
         uint256 sharesBefore = vault.balanceOf(alice, TOKEN1);
@@ -271,7 +232,6 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         assertApproxEqAbs(refundValue, 1e6, 1, "the waiting tail came back as shares worth exactly it");
     }
 
-    /// @dev A zero-price (sub-1e-9) vault still exits fully via floor-exempt full-balance sells.
     function test_UnwrapForTao_FullSlotExitWhenPriceReadsZero() public {
         _setRemoveStakeRate(1, 1);
         _setAlphaPriceReadsZero(NETUID1);

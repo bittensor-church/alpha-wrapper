@@ -95,8 +95,6 @@ contract ReclaimMailboxAlphaAsTaoTest is AlphaVaultTestBase {
         assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey1, _toSubstrate(predicted), NETUID1), 50 ether);
     }
 
-    // A native TAO gift sent directly to the mailbox must be excluded from the slippage delta
-    // and remain on the mailbox afterwards.
     function test_DonationToMailboxPriorToCall_DoesNotInflateTaoOut() public {
         _setRemoveStakeRate(1, 1);
         _seedMailboxAlpha(alice, NETUID1, hotkey1, 50 ether);
@@ -112,8 +110,6 @@ contract ReclaimMailboxAlphaAsTaoTest is AlphaVaultTestBase {
         assertEq(mailbox.balance, 3 ether);
     }
 
-    // If the caller's receive hook reverts on the TAO payment, the whole call must roll back
-    // and leave mailbox alpha intact.
     function test_RevertWhen_CallerReceiverRevertsOnReceive() public {
         _setRemoveStakeRate(1, 1);
         RevertingReceiver receiver = new RevertingReceiver();
@@ -127,7 +123,6 @@ contract ReclaimMailboxAlphaAsTaoTest is AlphaVaultTestBase {
         assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey1, _toSubstrate(predicted), NETUID1), 50 ether);
     }
 
-    // The reentrancy guard must reject a recipient whose receive hook tries to call back in.
     function test_ReentrantReclaimMailboxAlphaAsTaoIsRejectedByGuard() public {
         _setRemoveStakeRate(1, 1);
         ReclaimMailboxReentrantReceiver receiver = new ReclaimMailboxReentrantReceiver();
@@ -137,15 +132,12 @@ contract ReclaimMailboxAlphaAsTaoTest is AlphaVaultTestBase {
         vm.prank(address(receiver));
         vault.reclaimMailboxAlphaAsTao(NETUID1, hotkey1, 0);
 
-        // The re-entry was rejected specifically by the guard, not by some incidental revert.
         assertEq(receiver.reentryError(), abi.encodeWithSelector(ReentrancyGuard.ReentrancyGuardReentrantCall.selector));
         assertFalse(receiver.reentrySucceeded());
-        // The legitimate (outer) reclaim still completed: the mailbox stake is drained.
         address predicted = vault.getDepositAddress(address(receiver), NETUID1);
         assertEq(MockStaking(STAKING_PRECOMPILE).getStake(hotkey1, _toSubstrate(predicted), NETUID1), 0);
     }
 
-    // Event payload must carry every field off-chain indexers rely on.
     function test_ReclaimMailboxAlphaAsTao_EmitsMailboxAlphaSoldForTaoEvent() public {
         _setRemoveStakeRate(1, 1);
         _seedMailboxAlpha(alice, NETUID1, hotkey1, 50 ether);

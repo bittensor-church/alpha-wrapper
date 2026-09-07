@@ -4,15 +4,7 @@ pragma solidity ^0.8.20;
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { MAX_VALIDATORS } from "src/ValidatorRegistry.sol";
 
-// Per-call gas, recorded into snapshots/AlphaVault.json so a regression shows up in review.
-//
-// The figures are approximations. Every chain call here is mocked, and a mock costs what it
-// costs rather than what the chain charges. Measured against a live localnet at three
-// validators, wrap and unwrap land within about a tenth of these numbers, while the TAO rail
-// runs half again dearer than shown - it leans hardest on the calls the mock makes cheap. The
-// sixty-four-validator entries have no measured counterpart and are the least trustworthy of
-// all, since that is where per-validator reads dominate. Use these to catch a change in cost,
-// and the gas the e2e run prints for every call to size a real one.
+// Mock-based regression measurements, not live-chain gas estimates; use e2e receipts for sizing.
 
 /// forge-config: default.isolate = true
 contract AlphaVaultGasTest is AlphaVaultTestBase {
@@ -68,7 +60,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
 
         uint256 total = _setVaultStakes(NETUID1, 60 ether, 0, 40 ether);
-        // The 1e6 remainder on hotkey3 is a sub-floor partial; it is skipped and refunded as shares.
+        // The 1e6 remainder is a sub-floor partial, refunded as shares.
         uint256 shares = _sharesForExactAssets(TOKEN1, 60 ether + 1e6, total);
 
         vm.prank(alice);
@@ -95,9 +87,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         vm.snapshotGasLastCall("AlphaVaultLens", "previewUnwrap");
     }
 
-    // The batch repeats one id, so its entry prices the loop rather than the cold-storage cost of
-    // twenty separate positions: a regression guard, not evidence of a saving. Batching collapses
-    // only the caller's round trips, ~2% against the same twenty reads made one by one.
+    // Repeating one id measures the loop, not cold reads across independent positions.
     function test_gas_claimableTaoOf() public {
         _seedClaimableTao();
 
@@ -121,10 +111,6 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
         _donateToClone(vault.subnetClone(TOKEN1), 3 ether);
     }
-
-    // --------- widest supported set ------------------------------------------
-    // Three validators is the expected size; the entries below price the 64-validator ceiling so a
-    // change that only shows up at full width cannot land unnoticed.
 
     function test_gas_wrap_firstWrap_64Validators() public {
         _setValidatorCount(NETUID1, MAX_VALIDATORS);
@@ -165,8 +151,6 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         vm.snapshotGasLastCall("AlphaVault", "unwrap: full (64 validators)");
     }
 
-    // The rail every other exit falls back to, so its ceiling is the one that decides whether a
-    // position can always get out.
     function test_gas_unwrapForTao_full_64Validators() public {
         _setRemoveStakeRate(1, 1);
         _setValidatorCount(NETUID1, MAX_VALIDATORS);
@@ -179,8 +163,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         vm.snapshotGasLastCall("AlphaVault", "unwrapForTao: full (64 validators)");
     }
 
-    // The TAO rail sells across the keys the record names and never consults the registry, so a
-    // full rotation must not widen it: this entry is expected to track the one above.
+    // A registry rotation must not widen the TAO path, which reads only recorded keys.
     function test_gas_unwrapForTao_fullyRotated_64Validators() public {
         _setRemoveStakeRate(1, 1);
         _setValidatorCount(NETUID1, MAX_VALIDATORS);
@@ -195,8 +178,6 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         vm.snapshotGasLastCall("AlphaVault", "unwrapForTao: full after a rotation (64 validators)");
     }
 
-    // The most consolidation work one call can do: the roll drains 64 dropped slots into a pile,
-    // then the respread fans it back out across the 64 new ones.
     function test_gas_rebalance_fullyRotated_64Validators() public {
         _setValidatorCount(NETUID1, MAX_VALIDATORS);
         _simulateAlphaDeposit(alice, NETUID1, 10 ether);
@@ -208,8 +189,6 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         vm.snapshotGasLastCall("AlphaVault", "rebalance: fully rotated (64 validators)");
     }
 
-    // The two rails a watcher drives, priced at full width: the cost of putting a loss on file and
-    // of carrying the alpha home once it is found.
     function test_gas_syncBacking_64Validators() public {
         _setValidatorCount(NETUID1, MAX_VALIDATORS);
         _simulateAlphaDeposit(alice, NETUID1, 10 ether);

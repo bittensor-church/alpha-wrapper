@@ -1,124 +1,71 @@
 # Attester guide
 
-The vault stakes each subnet's alpha under the validators listed in
-`ValidatorRegistry`. Those lists are set by attestations - EIP-712
-messages signed off-chain by a quorum of registry signers. This guide is
-for the people producing those signatures.
+A quorum of registry signers chooses each subnet's validator set using EIP-712
+attestations. Anyone can submit the signatures; the sender only pays gas.
 
-## What you are signing
+## Payload and validation
 
-One attestation sets the complete validator list for one subnet:
+```solidity
+struct WeightAttestation {
+    uint256 netuid;
+    bytes32[] hotkeys;
+    uint256[] weights;
+    uint256 nonce;
+}
+```
 
-    struct WeightAttestation {
-        uint256   netuid;    // the subnet the attestation applies to
-        bytes32[] hotkeys;   // validators the vault stakes this subnet's alpha under
-        uint256[] weights;   // each validator's share of the stake, in basis points
-        uint256   nonce;     // orders this subnet's updates
-    }
+Submission requires:
 
-The registry enforces at submission time:
+- A 16-bit netuid and `nonce == nonces(netuid) + 1`.
+- 1–64 distinct, nonzero hotkeys with owner records at submission time.
+- One positive BPS weight per hotkey, summing to 10000.
 
-- 1 to 64 distinct, non-zero hotkeys, one weight per hotkey.
-- Every hotkey names a key the chain has an owner for. The registry
-  reads that record for each one, so a mistyped key - or one an
-  all-subnet swap has moved on from since you signed - is turned away
-  with `OwnerlessHotkey`, keeping the subnet's stake rails aimed at keys
-  the chain will accept.
-- Every weight non-zero; weights sum to exactly 10000.
-- netuid fits in 16 bits.
-- nonce equals `nonces(netuid) + 1`. Nonces count per subnet.
+An ownerless entry reverts `OwnerlessHotkey`. Ownership can change after submission;
+this check does not replace watcher monitoring.
 
-## How long a signature lasts
+All signers must sign identical bytes. Agree on a selection policy and evaluation
+block, then derive the same ordered hotkeys, weights and nonce.
 
-A signature stays usable until an attestation lands for that subnet.
-Once one does, `nonces(netuid)` advances and every signature still
-outstanding for the old nonce stops working - sign again at the new
-nonce to replace it.
+EIP-712 domain:
 
-Signatures carry no clock of their own, so one signed today and
-submitted a month later still applies, as long as nothing landed for
-that subnet in between. What ages is the list inside it: it stays the
-list you picked when you signed.
+```text
+name:              "AlphaVault ValidatorRegistry"
+version:           "1"
+chainId:           deployment chain id
+verifyingContract: registry address
+```
 
-Signing again at the same nonce adds a competitor rather than a
-replacement. Whichever payload reaches the chain first commits, and the
-others revert against the nonce it advanced - so landing yours is what
-settles which list takes effect. Once one has landed, the next nonce
-opens and a signature there supersedes it.
+## Submission and signature lifetime
 
-A signature you have handed out is also beyond recall: anyone holding it
-can submit it. Treat each one as final, and retire a list you have moved
-away from by landing its replacement.
+Call `updateValidators(attestation, signatures)` with at least `threshold()`
+current signers, ordered by recovered address ascending. Duplicates, unordered
+signatures and non-current signers are rejected, including extra signatures beyond
+the threshold. `updateValidatorsBatch` applies several updates atomically.
+Success emits `ValidatorsUpdated(netuid, nonce, hotkeys, weights)`.
 
-## Agreeing with the other signers
+Signatures have no expiry or recall. Signing a replacement at the same nonce
+creates a competing payload; whichever lands first wins and invalidates the others.
+To retire an old signed list, submit its replacement. Nonces advance per subnet.
 
-The threshold counts signatures over one identical payload, so every
-signer must produce the same bytes. Every field supports that: netuid
-and nonce come from the registry, and hotkeys and weights come from
-applying your shared selection policy at an agreed evaluation point -
-a block height each of you can name independently, such as an epoch
-boundary. Signers who evaluate the same height under the same policy
-arrive at identical payloads without coordinating.
+The admin uses `setSigners(newSigners, newThreshold)`: 2–16 distinct nonzero
+signers, with threshold 2 through signer count. Changes take effect immediately,
+invalidating signatures from removed signers. Admins can add or remove admins.
 
-The EIP-712 domain:
+## Allocation and hotkey swaps
 
-    name:              "AlphaVault ValidatorRegistry"
-    version:           "1"
-    chainId:           the chain the registry is deployed on
-    verifyingContract: the registry address
+A new set takes effect in the vault on the next wrap, alpha exit or
+`rebalance(netuid)`. Dropped stake is consolidated before payout/alignment.
+The TAO exit ignores registry weights. Mailbox deposits under dropped keys stay
+with their depositors and must be reclaimed or wrapped after an appropriate update.
 
-## Submitting
+After a swap, replace the old name with the intended successor in one update.
+Listing both can produce `SwappedHotkeyStillAttested` when two entries would
+share one backing key. Ordinary one-hop swaps are handled automatically, including
+empty-slot receiving-key selection; unresolved cases rely on a watcher.
+See [Hotkey swaps and recovery](hotkey-swaps.md) for the exact restrictions.
 
-Anyone can submit - the signatures are the authorization, the sender only
-pays gas. Call `updateValidators(attestation, signatures)` with at least
-`threshold()` signatures over the same digest, ordered ascending by
-signer address; the contract rejects any other order, and duplicate
-signers with it. Extra signatures beyond the threshold are fine as long
-as each comes from a current signer. `updateValidatorsBatch` takes
-several attestations in one transaction, each with its own signature
-list.
-
-A successful update emits `ValidatorsUpdated(netuid, nonce, hotkeys,
-weights)`.
-
-## What happens after an update
-
-The vault picks up the new set on its next deposit, alpha exit or
-`rebalance` for that subnet; the TAO exit ignores the weights and sells
-from wherever the stake sits. If a validator was dropped, the next such
-call first rolls the vault's stake off it onto the current set; whoever
-wants the stake realigned right away can call the vault's
-`rebalance(netuid)`.
-
-Deposits parked under a dropped hotkey stay recoverable: `wrap` refuses
-out-of-set hotkeys up front, and stake already sitting in a mailbox
-under one stays reclaimable by its owner.
-
-When a validator swaps its hotkey, the vault follows the chain's own
-successor edge one hop and keeps the stake with that validator on its
-next call. Attest the new key when convenient, and drop the old name in
-the same update: a set naming a swapped-away key beside its successor
-makes deposits, alpha exits and rebalances refuse with
-`SwappedHotkeyStillAttested`; only the TAO exit stays open.
-
-That convenience rule applies only to an ordinary, still-resolvable
-one-hop swap. If the old key has been registered again, Subtensor has
-removed its successor edge, and a vault reports a backing shortfall, do
-not treat attesting the funded successor as recovery. Coordinate with a
-watcher to call `recoverStray` before the deadline where possible. If the
-shortfall has already been written off, introducing that successor lets
-a later settling call count its existing alpha for the current share
-cohort; it cannot restore the entitlement of the holders who bore the
-write-off. See the
-[security model](security-model.md#recovery-window-tradeoff-and-late-recovery-attack)
-for the complete attack and its loss bound.
-
-## Signer set changes
-
-The registry admin replaces the signer set with
-`setSigners(newSigners, newThreshold)`: 2 to 16 signers, threshold at
-least 2 and at most the signer count. The change emits `SignersUpdated`
-and takes effect immediately, so signatures from a removed signer stop
-counting even if collected earlier. The admin role administers itself -
-an admin can add or remove admins - so whoever holds it ultimately
-controls future signer sets.
+Do not use a new attestation as a substitute for recovering missing backing.
+Coordinate `recoverStray` before write-off where possible. Adding a funded
+successor after write-off lets later settlement credit it to current holders,
+not reconstruct the original holders' claims. See the
+[late-recovery risk](security-model.md#recovery-window-tradeoff-and-late-recovery-attack).

@@ -13,25 +13,11 @@ import {
     ZeroAddress
 } from "./VaultErrors.sol";
 
-/// @title AlphaVaultLens
-/// @notice Every quote an `AlphaVault` integrator needs: backing, share price, deposit and exit
-///         previews, claimable TAO and the configured validator set.
-/// @dev    Holds no state and has no privileges: it reads the vault's public getters and the same
-///         chain state the vault reads, through the same libraries, so a lens and a vault built
-///         from one source agree by construction. That agreement belongs to the build rather than
-///         to the pairing: a lens compiled from changed library source still answers for the same
-///         vault while computing differently, and any contract at all can return the right address
-///         from `vault()`. The address to read quotes from is therefore one to take from a trusted
-///         source and pin, and its runtime code is worth comparing against a reviewed build.
-///         Being separate is what keeps the quotes changeable: the vault is immutable and has no
-///         admin, so anything living inside it is frozen for good, while a lens can be redeployed
-///         against the same vault whenever a quote needs to improve.
-///         Never price a position from inside a callback: a quote read while a vault call is in
-///         flight can see a mid-operation state.
+/// @dev Quotes share the vault's math, but do not guarantee a call will execute.
+///      Use a trusted build; `vault()` alone does not authenticate the lens.
+///      Reads during callbacks can observe mid-operation state.
 contract AlphaVaultLens {
     AlphaVault public immutable vault;
-    /// @notice The registry the vault takes its validator sets from, resolved once at construction
-    ///         because the vault holds it immutably.
     IValidatorRegistry public immutable validatorRegistry;
 
     constructor(AlphaVault _vault) {
@@ -40,53 +26,33 @@ contract AlphaVaultLens {
         validatorRegistry = _vault.validatorRegistry();
     }
 
-    /// @notice Total alpha backing this token's shares. Returns 0 before the clone exists.
-    /// @dev    Reverts `BackingShortfall` while any backing is unaccounted for: the figure it
-    ///         would otherwise give counts only what the vault can locate, so it understates the
-    ///         holding and steps back up the moment the alpha is found.
-    ///         `locatedStake` gives that figure regardless, and `isBackingIntact` and
-    ///         `frozenUntil` report the state without reverting.
-    ///
-    ///         While the subnet is dissolving the chain is draining the balances, so the value is
-    ///         the in-flux total with no shortfall judgment - unstable until
-    ///         `isSubnetDissolving(netuid)` clears.
-    /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
-    /// @return Alpha staked under the clone for this token.
+    /// @dev Rejects missing backing, except during/after dissolution when alpha balances are in flux.
     function totalStake(uint256 tokenId) public view returns (uint256) {
         (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _readBacking(tokenId);
         VaultReads.requireIntact(slots, backing, VaultMath.netuidOf(tokenId));
         return backing.total;
     }
 
-    /// @notice Alpha the vault can find for this token, whether or not that is all of it.
-    /// @dev    The figure behind `totalStake`, answering where that one refuses.
+    /// @notice Located alpha, including when a shortfall makes `totalStake` revert.
     function locatedStake(uint256 tokenId) external view returns (uint256) {
         (, VaultReads.Backing memory backing) = _readBacking(tokenId);
         return backing.total;
     }
 
-    /// @notice The keys the position's backing is currently expected under, one per attested
-    ///         validator.
+    /// @notice Recorded active keys, before resolving any new swap.
     function lastSeenHotkeys(uint256 tokenId) external view returns (bytes32[] memory) {
         return VaultReads.activesOf(vault.recordedSlots(tokenId));
     }
 
-    /// @notice Whether the vault can account for the alpha it expects under every validator it
-    ///         records. A hotkey swap it can follow on its own reads true, and so does a
-    ///         dissolving subnet: the drain is not a loss to chase.
-    /// @dev    False means every rail refuses, and keeps refusing past the deadline until
-    ///         `syncBacking` books the loss.
+    /// @dev Checks backing coverage, not hotkey ownership or withdrawal eligibility.
+    ///      Dissolving/dissolved positions bypass this check.
     function isBackingIntact(uint256 tokenId) external view returns (bool) {
         (, VaultReads.Backing memory backing) = _readBacking(tokenId);
         return VaultReads.firstShortOf(backing.short) == type(uint256).max;
     }
 
-    /// @notice When the losses on file become writable off, as a unix timestamp; zero when nothing
-    ///         is missing.
-    /// @dev    The latest deadline across the slots the vault cannot account for. A loss nobody
-    ///         has recorded yet reads `type(uint256).max`, since no deadline exists until someone
-    ///         calls `syncBacking` to start one. Past the timestamp the token stays shut until a
-    ///         further `syncBacking` books the loss.
+    /// @return deadline Latest shortfall deadline; zero if intact, max uint256 if any clock is unstarted.
+    /// @dev Expiry only permits `syncBacking` to write off losses; it does not clear them.
     function frozenUntil(uint256 tokenId) external view returns (uint256 deadline) {
         (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _readBacking(tokenId);
         uint256 window = vault.recoveryWindow();
@@ -103,9 +69,7 @@ contract AlphaVaultLens {
         }
     }
 
-    /// @dev The reading the vault's rails take, never applied. A dissolved or dissolving position
-    ///      is simply totalled: its alpha became TAO, or is being drained by the chain, so no
-    ///      expectation can be held against it.
+    /// @dev Dissolution converts alpha to TAO; do not treat that drain as missing backing.
     function _readBacking(uint256 tokenId)
         private
         view
@@ -124,67 +88,30 @@ contract AlphaVaultLens {
         backing = VaultReads.resolveBacking(slots, coldkey, netuid);
     }
 
-    /// @notice Price of one share in 1e18 precision, expressed in alpha: what a live unwrap of
-    ///         one share unit delivers, so the quote carries the same virtual offsets the rails apply.
-    /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while the subnet is being dissolved,
-    ///         `SubnetDissolved` once dissolution has completed or
-    ///         the tokenId does not correspond to the currently-registered subnet,
-    ///         `BackingShortfall` while any backing is unaccounted for,
-    ///         `NoSharesOutstanding` when no shares have been minted against this tokenId
-    ///         (a share price with zero supply has no meaningful value), and
-    ///         `SharePriceBelowPrecision` when backing exists but a share unit is worth less than
-    ///         the scale can express - a written-off position recapitalized at the virtual rate -
-    ///         rather than quoting zero against real backing; `previewUnwrap` still prices any
-    ///         burn. A complete write-off with nothing recovered quotes zero.
-    /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
-    /// @return Price of one share scaled by 1e18.
+    /// @notice Alpha per share, scaled by 1e18, including virtual offsets.
+    /// @dev Zero backing quotes zero; positive backing below quote precision reverts.
+    ///      `previewUnwrap` can still price a larger burn.
     function sharePrice(uint256 tokenId) external view returns (uint256) {
         _requireCurrentRegistration(tokenId);
         uint256 supply = vault.totalSupply(tokenId);
         if (supply == 0) revert NoSharesOutstanding();
         uint256 stake = totalStake(tokenId);
-        // With no backing the virtual offset alone would price a share unit above zero.
+        // Do not let the virtual asset imply value after a complete write-off.
         if (stake == 0) return 0;
         uint256 price = VaultMath.assetsFor(stake, supply, 1e18);
         if (price == 0) revert SharePriceBelowPrecision();
         return price;
     }
 
-    /// @notice Preview how many shares would be minted for a deposit of `assets` alpha.
-    /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` during the blackout,
-    ///         `SubnetDissolved` for a tokenId whose subnet has been dissolved - deposits
-    ///         route through `currentTokenId(netuid)` and cannot land on a stale tokenId - and
-    ///         `BackingShortfall` while any backing is unaccounted for, exactly as `wrap` would.
-    /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
-    /// @param  assets  Amount of alpha being deposited.
-    /// @return Number of shares that would be minted.
     function previewWrap(uint256 tokenId, uint256 assets) external view returns (uint256) {
         _requireCurrentRegistration(tokenId);
         return VaultMath.sharesFor(totalStake(tokenId), vault.totalSupply(tokenId), assets);
     }
 
-    /// @notice Preview the unwrap of `shares` for a position.
-    /// @dev    Reverts `SubnetInDissolutionBlackoutPeriod` while a dissolution holds the position
-    ///         (a replaced position pays through its successor's cleanup, as `unwrap` does),
-    ///         `SubnetDissolved` for a dissolved position whose clone holds no TAO refund, and
-    ///         `BackingShortfall` while any backing is unaccounted for, exactly as `unwrap` would.
-    ///         The live-path quote is the nominal pro-rata entitlement; chain-side share rounding
-    ///         can make the observed recipient credit a few RAO lower. Using this quote as
-    ///         `minAlphaOut` therefore delivers at least the quote or reverts. A sub-floor total is
-    ///         not deliverable here and must be exited via unwrapForTao. A zero alpha quote with
-    ///         shares outstanding means all backing was written off: `unwrap` then retires shares
-    ///         for zero only when the caller explicitly passes a zero floor. Keeping a positive floor
-    ///         preserves the shares for any later recovery. That voluntary alpha-for-TAO sell is a
-    ///         market order with no preview of its own: its payout is bounded by the caller's
-    ///         minTaoOut, not quoted here. `tao` is the dissolved-subnet payout in whole
-    ///         native-transfer quantums, exactly what `unwrap` pays; a zero there means `unwrap`
-    ///         would refuse the slice as below one quantum. The caller's claimable-TAO
-    ///         entitlement is never part of this quote: it survives unwrapping and is quoted by
-    ///         `claimableTaoOf`.
-    /// @param  tokenId ERC1155 tokenId identifying the (netuid, registrationBlock) position.
-    /// @param  shares  Shares being previewed.
-    /// @return alpha   Nominal pro-rata alpha requested on the live path.
-    /// @return tao     Native TAO paid on the dissolved path.
+    /// @notice Nominal alpha RAO for a live exit, or TAO wei for a dissolved exit.
+    /// @dev Excludes claimable TAO and does not quote `unwrapForTao`.
+    ///      Chain rounding can reduce alpha credit; ownership, transfer and size checks may still reject an exit.
+    ///      A zero quote does not authorize a zero payout: the caller must set `minAlphaOut` to zero.
     function previewUnwrap(uint256 tokenId, uint256 shares) external view returns (uint256 alpha, uint256 tao) {
         if (shares == 0) return (0, 0);
         address clone = vault.subnetClone(tokenId);
@@ -206,17 +133,11 @@ contract AlphaVaultLens {
         return (VaultMath.assetsFor(totalStake(tokenId), supply, shares), 0);
     }
 
-    /// @notice TAO withdrawable by `account` for `tokenId` right now: exactly what `claimTao`
-    ///         would pay, including entitlement the storage has not settled yet, quoted at the
-    ///         granularity a native transfer can deliver.
+    /// @notice Claimable TAO in EVM wei, including pending accrual, rounded down to whole RAO.
     function claimableTaoOf(address account, uint256 tokenId) external view returns (uint256) {
         return _claimableTaoOf(account, tokenId);
     }
 
-    /// @notice `claimableTaoOf` for a set of positions at once, aligned to `tokenIds`.
-    /// @dev    A holder spread across many subnets quotes its whole native entitlement in one
-    ///         call. Each position is quoted independently: they share no state, so this is the
-    ///         per-position quote repeated, never a different answer from the single-position one.
     function batchClaimableTaoOf(address account, uint256[] calldata tokenIds)
         external
         view
@@ -237,7 +158,6 @@ contract AlphaVaultLens {
         return VaultMath.toNativeQuantum(VaultMath.backedEntitlement(entitlement, backing));
     }
 
-    /// @notice Exactly the subnet's configured validators; reverts when none are configured.
     function getCurrentValidators(uint256 netuid) external view returns (bytes32[] memory) {
         if (netuid > type(uint16).max) revert NetuidOutOfRange();
         // forge-lint: disable-next-line(unsafe-typecast)
@@ -245,15 +165,12 @@ contract AlphaVaultLens {
         return hotkeys;
     }
 
-    /// @dev Guard for quotes that describe only the currently-registered subnet: the hold check
-    ///      must precede the registration-block comparison so an in-flux registration is never
-    ///      classified as dissolved.
+    /// @dev Check the blackout first: a registration block cleared mid-cleanup is not a settled refund.
     function _requireCurrentRegistration(uint256 tokenId) private view {
         VaultReads.requireNotHeldByDissolution(tokenId);
         if (VaultReads.isIssuedForDissolvedSubnet(tokenId)) revert SubnetDissolved();
     }
 
-    /// @dev The increases the vault's next synchronization would record.
     function _previewSyncTao(uint256 tokenId, uint256 liability) private view returns (uint256, uint256) {
         address clone = vault.subnetClone(tokenId);
         if (clone == address(0)) return (0, 0);
@@ -262,7 +179,6 @@ contract AlphaVaultLens {
         return VaultMath.syncAmounts(newTao, vault.totalSupply(tokenId));
     }
 
-    /// @dev Earned-but-unrecorded TAO for the account at the given index level.
     function _pendingAt(address account, uint256 tokenId, uint256 index) private view returns (uint256) {
         return VaultMath.pendingTao(
             VaultMath.earnedAt(vault.balanceOf(account, tokenId), index), vault.taoIndexDebt(tokenId, account)

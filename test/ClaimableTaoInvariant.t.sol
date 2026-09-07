@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-// Tests that random sequences of deposits, transfers, exits, donations and claims never let the
-// vault promise more TAO than its subnet clone actually holds, and that holders as a group can
-// never withdraw more TAO than actually arrived.
-
 import { Test } from "forge-std/Test.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
@@ -50,8 +46,6 @@ contract ClaimableTaoHandler is Test {
         vault.safeTransferFrom(from, to, tokenId, amount, "");
     }
 
-    // The shared helper asserts the quote commitment; on top of it, a paid claim must move
-    // exactly its delivery out of the clone.
     function claim(uint256 actorSeed) external {
         address actor = _actor(actorSeed);
         address clone = vault.subnetClone(tokenId);
@@ -103,9 +97,8 @@ contract ClaimableTaoInvariantTest is AlphaVaultTestBase {
         assertGe(clone.balance, vault.taoLiability(TOKEN1));
     }
 
-    // Repeated debt re-baselining under these exact amounts accrues a one-wei phantom entitlement
-    // beyond the recorded liability; the final claim must pay only what the liability backs
-    // instead of drawing on TAO the index has not yet folded in.
+    // These amounts produce a one-wei phantom entitlement through repeated debt re-anchoring.
+    // Claims must cap it at liability rather than consume unindexed TAO.
     function test_PhantomEntitlement_CannotOverdrawReservedBacking() public {
         handler.donate(166020153748861866463033272813676692912666046992);
         handler.transferShares(110000000000000000000, 9555, 2827);

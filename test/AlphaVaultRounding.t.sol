@@ -4,20 +4,14 @@ pragma solidity ^0.8.20;
 import { ClaimBelowNativePrecision, NothingToUnwrap, ZeroAmount } from "src/VaultErrors.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 
-/// @dev Rounding-to-zero and empty-state guards for the share math, split out of AlphaVault.t.sol.
-///      Shares its setup/helpers with the other suites via the common AlphaVaultTestBase.
 contract AlphaVaultRoundingTest is AlphaVaultTestBase {
-    // Inflate the pool so the share price sits far above 1 asset/share: alice seeds 2e6 (supply 2e15),
-    // then 1e22 of emissions accrue. The rounding boundary for a fresh deposit becomes
-    // ~ preStake / supply = 1e22 / 2e15 ~ 5e6 assets, well above the 2e6 minimum-stake floor.
+    // Emissions put the zero-share rounding boundary (~5e6 assets) above the 2e6 stake floor.
     function _inflatedPool() private {
         _simulateAlphaDeposit(alice, NETUID1, 2e6);
         _wrap(alice, NETUID1);
         _simulateEmissions(NETUID1, 1e22);
     }
 
-    // Deposits that clear the 2e6 minimum-stake floor but still price to 0 shares against the inflated
-    // pool (<= 4e6, safely below the ~5e6 boundary) must revert ZeroAmount and mint nothing.
     function testFuzz_WrapRevertsWhenDepositRoundsToZeroShares(uint256 dust) public {
         _inflatedPool();
         dust = bound(dust, 2e6, 4e6);
@@ -30,7 +24,6 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         assertEq(vault.balanceOf(bob, TOKEN1), 0);
     }
 
-    // Deposits past the rounding boundary (>= 1e7, safely above ~5e6) are accepted and mint real shares.
     function testFuzz_WrapAcceptsDepositsAboveRoundingBoundary(uint256 deposit) public {
         _inflatedPool();
         deposit = bound(deposit, 1e7, type(uint64).max);
@@ -46,23 +39,17 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
         uint256 shares = vault.balanceOf(alice, TOKEN1);
 
-        // 1 share against ~1e28 supply / ~1e19 stake rounds to 0 assets: fires the assets==0
-        // guard (not NothingToUnwrap, totalAlpha is still > 0), no shares burned.
         vm.prank(alice);
         vm.expectRevert(ZeroAmount.selector);
         vault.unwrap(TOKEN1, 1, _toSubstrate(alice), 0);
         assertEq(vault.balanceOf(alice, TOKEN1), shares);
 
-        // A real share amount pays out its proportional value.
         vm.prank(alice);
         vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice), 0);
         uint256 received = _userStakeAcrossHotkeys(alice, NETUID1);
         assertApproxEqAbs(received, 5 ether, 1e9);
     }
 
-    // The dissolved payout floors each holder's pro-rata cut to whole RAO, so every exit can leave
-    // a sub-RAO tail in the pot; the payouts and the tails must add up to the pot exactly, and a
-    // cut that floors to nothing is refused rather than burned.
     function testFuzz_DissolvedUnwrapConservesRefundPot(uint256 aliceDeposit, uint256 bobDeposit, uint256 pot) public {
         aliceDeposit = bound(aliceDeposit, 1e7, 1e20);
         bobDeposit = bound(bobDeposit, 1e7, 1e20);
@@ -100,8 +87,6 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         assertLt(clone.balance, 2e9, "at most one sub-RAO tail per exit stays behind");
     }
 
-    // A quoted dissolved payout is a commitment: unwrapping the same shares must pay exactly it,
-    // and a zero quote means the exit refuses the slice.
     function testFuzz_PreviewUnwrapMatchesDissolvedPayout(uint256 deposit, uint256 pot, uint256 shares) public {
         deposit = bound(deposit, 1e7, 1e20);
         pot = bound(pot, 1, 1e24);
@@ -136,13 +121,11 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         _simulateTaoAwardedOnDissolution(tokenId, 0);
         _simulateDissolutionCompleted(NETUID1);
 
-        // Clone holds 0 TAO -> unwrap reverts NothingToUnwrap without burning shares.
         assertEq(clone.balance, 0);
         vm.prank(alice);
         vm.expectRevert(NothingToUnwrap.selector);
         vault.unwrap(tokenId, shares, _toSubstrate(alice), 0);
 
-        // Shares survived: once the dissolution TAO lands, the same position pays out.
         vm.deal(clone, 7 ether);
         uint256 before = alice.balance;
         vm.prank(alice);

@@ -11,8 +11,6 @@ import { MockSubnetPrecompile } from "./mocks/MockSubnetPrecompile.sol";
 import { MockValidatorRegistry } from "./mocks/MockValidatorRegistry.sol";
 import { BackingShortfall, NoValidatorFound, ValidatorSetMalformed } from "src/VaultErrors.sol";
 
-/// @dev Tests the chain-read helpers the vault and its lens share: stake and validator-set
-///      lookups, the recovery-window arithmetic, and the dissolution checks.
 contract VaultReadsTest is Test {
     uint16 internal constant NETUID = 7;
     uint64 internal constant REGISTRATION_BLOCK = 100;
@@ -32,8 +30,7 @@ contract VaultReadsTest is Test {
         registry = new MockValidatorRegistry();
     }
 
-    /// @dev External indirection so `vm.expectRevert` sees a call frame for the internal library
-    ///      functions under test.
+    /// @dev External call frame lets `vm.expectRevert` observe internal-library failures.
     function callResolveValidators(IValidatorRegistry _registry, uint16 netuid)
         external
         view
@@ -49,16 +46,12 @@ contract VaultReadsTest is Test {
         VaultReads.requireIntact(slots, backing, netuid);
     }
 
-    // -------------------- Tracked-balance comparison -----------------------------
-
     function test_CoversTracked_BoundaryAtTheSlack() public pure {
         uint256 tracked = 1e9;
 
         assertTrue(VaultReads.coversTracked(tracked - VaultReads.TRACKED_SLACK_RAO, tracked));
         assertFalse(VaultReads.coversTracked(tracked - VaultReads.TRACKED_SLACK_RAO - 1, tracked));
     }
-
-    // -------------------- Shortfall reporting ------------------------------------
 
     function test_FirstShortOf_ReportsTheFirstShortSlot() public pure {
         bool[] memory short = new bool[](3);
@@ -86,8 +79,6 @@ contract VaultReadsTest is Test {
         vm.expectRevert(abi.encodeWithSelector(BackingShortfall.selector, NETUID, slots[1].active, slots[1].tracked));
         this.callRequireIntact(slots, backing, NETUID);
     }
-
-    // -------------------- Validator-set resolution -------------------------------
 
     function test_ResolveValidators_ReturnsTheRegistrySet() public {
         bytes32[] memory hotkeys = new bytes32[](2);
@@ -120,8 +111,6 @@ contract VaultReadsTest is Test {
         this.callResolveValidators(registry, NETUID);
     }
 
-    // -------------------- Successor edges and balances ---------------------------
-
     function test_HotkeySuccessor_ReturnsTheRecordedEdge() public {
         MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(HOTKEY_A, NETUID, HOTKEY_B);
 
@@ -152,8 +141,6 @@ contract VaultReadsTest is Test {
         assertEq(balances[1], 0);
         assertEq(balances[2], 7e9);
     }
-
-    // -------------------- Dissolution state --------------------------------------
 
     function test_IsIssuedForDissolvedSubnet_MatchingRegistrationReadsLive() public view {
         assertFalse(VaultReads.isIssuedForDissolvedSubnet(TOKEN_ID));

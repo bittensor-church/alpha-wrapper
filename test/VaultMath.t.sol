@@ -5,20 +5,12 @@ import { Test } from "forge-std/Test.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { VaultMath } from "src/libraries/VaultMath.sol";
 
-/// @dev Tests the share arithmetic, token-id packing and validator-set helpers that the vault and
-///      its lens share.
 contract VaultMathTest is Test {
     uint256 internal constant AMOUNT_CEILING = 1e30;
-    /// @dev The vault's own domain: chain amounts are 64-bit RAO (STAKE_CEILING covers a full
-    ///      64-validator position) and `wrap` refuses any mint that would push supply past the
-    ///      cap, so the arithmetic is only ever asked about pairs inside these bounds.
+    /// @dev Fuzz domain: up to 64 uint64-sized stake entries, with supply bounded by the vault's cap.
     uint256 internal constant STAKE_CEILING = 64 * uint256(type(uint64).max);
     uint256 internal constant SUPPLY_CAP = VaultMath.TAO_NATIVE_QUANTUM * VaultMath.TAO_INDEX_PRECISION;
 
-    // -------------------- Share arithmetic ---------------------------------------
-
-    /// @dev The inflation-resistance guarantee: whatever the pre-existing stake and supply, a
-    ///      deposit's shares can never be worth more than the deposit that minted them.
     function testFuzz_SharesFor_RoundTripNeverCreatesValue(uint256 stake, uint256 supply, uint256 assets) public pure {
         stake = bound(stake, 0, STAKE_CEILING);
         supply = bound(supply, 0, SUPPLY_CAP);
@@ -32,8 +24,6 @@ contract VaultMathTest is Test {
         assertLe(back, assets, "a mint-and-burn round trip paid out more than went in");
     }
 
-    /// @dev Burning every real share pays at most the stake: the virtual offsets absorb the
-    ///      rounding, never the holders.
     function testFuzz_AssetsFor_FullSupplyNeverExceedsStake(uint256 stake, uint256 supply) public pure {
         stake = bound(stake, 0, STAKE_CEILING);
         supply = bound(supply, 0, SUPPLY_CAP);
@@ -52,16 +42,12 @@ contract VaultMathTest is Test {
         assertEq(VaultMath.sharesFor(stake, supply, 0), 0);
     }
 
-    // -------------------- Token-id packing ---------------------------------------
-
     function testFuzz_TokenId_PacksAndUnpacks(uint16 netuid, uint64 registrationBlock) public pure {
         uint256 tokenId = (uint256(registrationBlock) << 16) | netuid;
 
         assertEq(VaultMath.netuidOf(tokenId), netuid);
         assertEq(VaultMath.registrationBlockOf(tokenId), registrationBlock);
     }
-
-    // -------------------- Set helpers --------------------------------------------
 
     function testFuzz_IndexOf_FindsTheFirstOccurrence(uint256 length, uint256 target) public pure {
         length = bound(length, 1, 64);
@@ -101,8 +87,6 @@ contract VaultMathTest is Test {
         assertEq(VaultMath.sumBalances(balances), expected);
     }
 
-    // -------------------- Saturating helpers -------------------------------------
-
     function testFuzz_UnreservedTao_FloorsAtZero(uint256 balance, uint256 reserved) public pure {
         assertEq(VaultMath.unreservedTao(balance, reserved), balance - Math.min(balance, reserved));
     }
@@ -114,8 +98,6 @@ contract VaultMathTest is Test {
     function testFuzz_BackedEntitlement_CapsAtTheLiability(uint256 entitlement, uint256 liability) public pure {
         assertEq(VaultMath.backedEntitlement(entitlement, liability), Math.min(entitlement, liability));
     }
-
-    // -------------------- Pro-rata and quantum -----------------------------------
 
     function testFuzz_ProRata_FullSupplyPaysTheWholePot(uint256 total, uint256 supply) public pure {
         total = bound(total, 0, AMOUNT_CEILING);
@@ -140,8 +122,6 @@ contract VaultMathTest is Test {
         assertLt(amount - delivered, VaultMath.TAO_NATIVE_QUANTUM);
     }
 
-    // -------------------- Claim-index synchronization ----------------------------
-
     function test_SyncAmounts_ZeroSupplyRecordsNothing() public pure {
         (uint256 indexIncrease, uint256 liabilityIncrease) = VaultMath.syncAmounts(1e18, 0);
 
@@ -149,8 +129,6 @@ contract VaultMathTest is Test {
         assertEq(liabilityIncrease, 0);
     }
 
-    /// @dev The ceiling-rounded liability moves with every index increase and stays within the
-    ///      arrival, so repeated synchronizations can neither recount TAO nor over-reserve it.
     function testFuzz_SyncAmounts_LiabilityTracksTheIndex(uint256 newTao, uint256 supply) public pure {
         newTao = bound(newTao, 0, AMOUNT_CEILING);
         supply = bound(supply, 1, AMOUNT_CEILING);
@@ -163,8 +141,6 @@ contract VaultMathTest is Test {
         }
     }
 
-    /// @dev Solvency of the claim index: what a sole holder of the entire supply earns from a
-    ///      synchronization is covered by the liability it recorded.
     function testFuzz_SyncAmounts_LiabilityCoversASoleHolder(uint256 newTao, uint256 supply) public pure {
         newTao = bound(newTao, 0, AMOUNT_CEILING);
         supply = bound(supply, 1, AMOUNT_CEILING);

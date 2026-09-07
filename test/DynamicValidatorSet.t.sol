@@ -5,14 +5,8 @@ import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { CHAIN_MIN_STAKE } from "./mocks/MockStaking.sol";
 import { MAX_VALIDATORS } from "src/ValidatorRegistry.sol";
 
-/// @dev A subnet's validator set is any size from 1 to 64 and changes size between calls. Three is
-///      the expected size; these tests hold the two ends, the transitions between them, and the
-///      widest the position can get - a full rotation, where the remembered and current sets are
-///      both at the cap and every slot has to be settled.
 contract DynamicValidatorSetTest is AlphaVaultTestBase {
-    /// @dev Deposit sized so that after one of 64 validators is dropped, its balance clears the
-    ///      chain's floor many times over while each remaining slot's share of it falls well under
-    ///      the floor. Spreading the drop is impossible; moving it whole is the only way out.
+    /// @dev The dropped balance clears the move floor, but dividing it across 63 deficits does not.
     uint256 private constant UNSPREADABLE_DEPOSIT = 1e9;
 
     function test_Wrap_SpreadsAcrossFullValidatorCap() public {
@@ -59,10 +53,6 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         assertEq(_lastSeen(TOKEN1).length, MAX_VALIDATORS);
     }
 
-    /// @dev The case weight alignment cannot serve: alignment moves only the smaller of a surplus and
-    ///      a deficit, and here every deficit is below the floor, so it would skip every move and
-    ///      leave a balance many times the floor sitting on a validator the set no longer names. The
-    ///      roll carries whole piles instead, which is why it clears this.
     function test_Rebalance_DrainsDroppedBalanceTooSmallToSpread() public {
         bytes32[] memory wide = _setValidatorCount(NETUID1, MAX_VALIDATORS);
         _depositAndWrap(alice, NETUID1, UNSPREADABLE_DEPOSIT);
@@ -79,8 +69,6 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         assertEq(_lastSeen(TOKEN1).length, MAX_VALIDATORS - 1, "nothing left to remember");
     }
 
-    /// @dev The widest case there is: a full rotation at the cap leaves 64 dropped validators funded
-    ///      alongside 64 attested ones, so the roll has to carry the pile through all of them.
     function test_Rebalance_SweepsFullRotationAtTheCap() public {
         bytes32[] memory first = _setValidatorCount(NETUID1, MAX_VALIDATORS);
         _depositAndWrap(alice, NETUID1, 10 ether);
@@ -99,14 +87,10 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         assertEq(_lastSeen(TOKEN1).length, MAX_VALIDATORS);
     }
 
-    /// @dev Between a registry commit and the next vault call the whole position sits on validators
-    ///      the set no longer names. The TAO rail must price and sell it from there.
     function test_UnwrapForTao_ExitsFullyRotatedPosition() public {
         _setValidatorCount(NETUID1, 3);
         _depositAndWrap(alice, NETUID1, 10 ether);
 
-        // The fixture hotkeys are disjoint from the salted set the position sits on, so nothing
-        // the position holds is still attested.
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey2), _weights(5000, 5000));
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
@@ -118,9 +102,6 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         assertEq(lens.totalStake(TOKEN1), 0);
     }
 
-    /// @dev A price the EVM reads as zero carries no bound, so the roll must attempt the move and
-    ///      let the chain's own full-precision floor decide - refusing on a zero read would freeze
-    ///      every rotation on a sub-quantum subnet.
     function test_Rebalance_DrainsRotationAtUnreadablePrice() public {
         bytes32[] memory wide = _setValidatorCount(NETUID1, MAX_VALIDATORS);
         _depositAndWrap(alice, NETUID1, 10 ether);
@@ -134,9 +115,6 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         assertEq(lens.totalStake(TOKEN1), 10 ether);
     }
 
-    /// @dev At 64 validators an even split of a small position puts every target under the chain's
-    ///      floor, so no move is legal. The position must stay whole and fully priced rather than
-    ///      the call failing - the spread is best-effort, the accounting is not.
     function test_Wrap_KeepsSmallPositionWholeWhenTargetsFallBelowFloor() public {
         bytes32[] memory hks = _setValidatorCount(NETUID1, MAX_VALIDATORS);
         uint256 deposit = 4 * CHAIN_MIN_STAKE;
@@ -148,9 +126,7 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         assertEq(lens.totalStake(TOKEN1), deposit, "and is fully priced");
     }
 
-    // Every slot's target clears the chain's floor at the widest set, so the spread is always legal
-    // and these can assert on placement rather than only on conservation; MinStakeFloor covers the
-    // sub-floor edge.
+    // Keep every target above the chain floor so assertions can require exact placement.
     uint256 private constant MIN_SPREADABLE = 1 ether;
     uint256 private constant MAX_DEPOSIT = 1_000 ether;
 
@@ -173,7 +149,6 @@ contract DynamicValidatorSetTest is AlphaVaultTestBase {
         _setValidatorCount(NETUID1, fromCount);
         _depositAndWrap(alice, NETUID1, amount);
 
-        // A disjoint set of the requested size, so every old validator is dropped at once.
         bytes32[] memory rotated = _hotkeysFrom("rotated", toCount);
         _setValidators(NETUID1, rotated, _evenWeights(toCount));
 

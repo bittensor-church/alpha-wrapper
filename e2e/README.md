@@ -1,120 +1,53 @@
-# e2e
+# End-to-end tests
 
-Real-chain end-to-end tests for the alpha-wrapper vault. A pytest suite that
-drives a live localnet through cast/forge/btcli subprocess calls and
-substrate extrinsics -- deposits, unwraps on both rails, floor handling,
-dust and hostility scenarios, subnet dissolution, and the observability
-scripts.
+Pytest scenarios drive a real Subtensor localnet through Foundry, btcli and
+Substrate extrinsics. Chainless unit tests cover the Python harness separately.
 
-## Prerequisites
+## Requirements
 
-- A running localnet subtensor at `ws://127.0.0.1:9944` (RPC at
-  `http://127.0.0.1:9944`), pre-funded with the well-known dev keys in
-  `alpha_e2e/config.py`.
-- `cast`/`forge` (Foundry) on `PATH`; `btcli` ships with the Python deps below.
-- Python deps installed via `e2e/install-deps.sh` (CI runs the same script).
+- Localnet at `ws://127.0.0.1:9944` / `http://127.0.0.1:9944`, funded for the dev
+  keys in `alpha_e2e/config.py`.
+- `cast` and `forge` on PATH.
+- Python dependencies from `e2e/install-deps.sh`, including btcli.
 
-## How to run
+## Run
 
-From the repo root:
+From the repository root:
 
 ```bash
 cd e2e
-
-# One scenario against a fresh localnet:
 python3 -m pytest tests/test_full_flow.py -v -m scenario
-
-# All chainless unit tests (no chain required):
 python3 -m pytest tests -v -m "not scenario"
 ```
 
-`pytest.ini` sets `testpaths = tests` and registers the `scenario` marker
-(a full localnet scenario -- slow, needs a running chain). Tests without that
-marker are pure-Python unit tests (address derivation, cast-output parsing,
-assertion helpers) and run with no chain at all.
+Use one scenario module per fresh chain. Modules share subnet and contract state
+through the session-scoped `env` fixture; running several against one long-lived
+chain is unsupported. CI gives each scenario its own container.
 
-**IMPORTANT:** scenario modules are designed for one-module-per-fresh-chain.
-CI runs each `tests/test_*.py` scenario as its own matrix job against its own
-subtensor container. Running multiple scenario modules in a single pytest
-invocation against one long-lived localnet is not supported -- they share
-chain and contract state (netuids, token ids, alpha price) via the session
-`env` fixture, and a later module's assumptions about that state will not
-hold if an earlier module already mutated the chain.
+## Layout and coverage
 
-## Layout
+`alpha_e2e/` contains configuration, address derivation, chain commands,
+extrinsics, validator signatures, checks, environment actions and bootstrap.
+`conftest.py` switches to the repository root and registers the fixture;
+`pytest.ini` configures imports and the `scenario` marker. `chain_ops.py` is the
+manual CLI for the same chain operations.
 
-`alpha_e2e/` -- the framework package:
+Scenario files in `tests/` cover:
 
-- `config.py` -- localnet dev constants (RPC/chain endpoints, dev keys, gas
-  budgets, rounding-dust tolerances).
-- `substrate.py` -- pure-Python substrate address derivation (blake2b
-  HashedAddressMapping, SS58) and wallet-file readers.
-- `chain.py` -- typed subprocess wrappers over `cast`/`forge`/`btcli`.
-- `extrinsics.py` -- substrate extrinsics signed by the dev Alice key (stake
-  transfers and sales, conviction locks, sudo toggles, subnet dissolution);
-  failures raise with the chain's decoded module error.
-- `validators.py` -- EIP-712 validator-set attestations for the
-  ValidatorRegistry.
-- `checks.py` -- shared assertion helpers (gas budgets, quote-based payout
-  checks, CSV invariants over the observability scripts).
-- `environment.py` -- the `Environment` dataclass: on-chain getters and typed
-  actions (`deposit_and_wrap`, `vault_send`, `assert_vault_reverts_with`,
-  `set_validators`, `crash_price_until_below`, ...) every scenario drives.
-- `bootstrap.py` -- `build_environment()`: one-time localnet setup (subnets,
-  validators, staking, contract deploy, funding), pre-flight + Phases 0-5.
-- `fixtures.py` -- the session-scoped `env` pytest fixture wrapping
-  `bootstrap.build_environment()`.
+- `test_full_flow.py`: deposits, exits, emissions, rotation and observability.
+- `test_transfers_off.py`, `test_convicted_alpha.py`: disabled transfers and locks.
+- `test_subnet_dissolved.py`: refunds and mailbox recovery.
+- `test_min_stake_floor.py`, `test_dust_dos.py`, `test_min_stake_liveness.py`:
+  minimums, top-ups, dust and repeated position changes.
+- `test_hostile_dust.py`: third-party stake donations.
+- `test_claimable_tao.py`: forced-sale proceeds and holder entitlements.
+- `test_parked_stake.py`: ownerless parked stake; an unrelated watcher associates
+  the hotkey without subnet re-registration, restoring the tested exit.
 
-`pytest.ini` puts the package on the import path (`pythonpath = .`);
-`conftest.py` `chdir`s to the repo root (so `cast`/`forge` and the
-observability scripts see repo-relative paths like `src/...`) and registers
-the `env` fixture plugin. `chain_ops.py` is a standalone CLI over the same
-chain operations, kept for manual localnet work.
+Each module's docstring describes its sequence. These scenarios exercise specific
+recovery conditions, not an unconditional exit guarantee; see the
+[design](../docs/hotkey-swaps.md).
 
-## Scenarios
-
-One module per scenario (each expects its own fresh localnet); the module
-docstring in each file carries the full phase-by-phase description.
-
-- `test_full_flow.py` -- the main flow: deposits split across 3 validators on
-  3 subnets, full alpha unwraps, both TAO-rail exits, emission accrual,
-  validator rotation, the TAO-exit slippage guard, and every observability
-  script asserted row-by-row.
-- `test_transfers_off.py` -- subnet alpha transfers disabled: the alpha rail
-  reverts with shares intact, both TAO rails still pay out on quote.
-- `test_convicted_alpha.py` -- conviction-locked alpha: over-movable deposits
-  refused on-chain, the movable portion wraps, unwraps to a lock-holding
-  coldkey and TAO exits leave lock state untouched.
-- `test_subnet_dissolved.py` -- a dissolved subnet: dissolved unwrap and
-  mailbox reclaim recover native TAO pro-rata, alpha rails revert, an
-  untouched subnet is unaffected.
-- `test_min_stake_floor.py` -- min-stake floor handling: the wrap gate refuses
-  a sub-floor deposit in-budget, rotated-out dust is consolidated by the next
-  wrap, sub-floor rebalance moves are skipped in-budget.
-- `test_dust_dos.py` -- dust lockout: rotated-out dust, a price crash, and a
-  sub-floor co-holder all refuse cheaply with designed errors while the TAO
-  exit, top-ups, and fresh deposits clear them.
-- `test_hostile_dust.py` -- third-party dust: stake planted in a user's
-  mailbox and on the vault is ignored or absorbed as a donation, never a way
-  to stop wraps or unwraps.
-- `test_min_stake_liveness.py` -- sequence liveness: two churn cycles of
-  deposits, withdrawals, and rotations leave every kind of small leftover, with
-  every call staying live and nothing forfeited.
-- `test_claimable_tao.py` -- a governance dust-threshold raise force-sells the
-  vault's position: the stranded native TAO is credited to the holders present
-  at that moment, withdrawable in full, and denied to later depositors.
-- `test_parked_stake.py` -- an all-subnets hotkey swap keeps vault stake under
-  an ownerless, unregistered key: exits fail until an unrelated watcher
-  associates (but does not re-register) the key, after which the same exit pays.
-
-Chainless unit tests for the framework itself: `test_substrate.py`,
-`test_chain_unit.py`, `test_checks_unit.py`.
-
-## The `env` fixture
-
-`env` (in `alpha_e2e/fixtures.py`, session-scoped) calls
-`bootstrap.build_environment()` once per pytest process: it creates three
-subnets, registers and stakes nine validators, deploys the contracts, and
-funds the test accounts. Every test in a scenario module that requests `env`
-shares that one build -- this is what makes running more than one scenario
-module per localnet unsupported (see the IMPORTANT note above).
+Chainless harness tests are `test_substrate.py`, `test_chain_unit.py` and
+`test_checks_unit.py`. Bootstrap creates three subnets, nine validators, the
+contracts and funded test accounts once per scenario process.
