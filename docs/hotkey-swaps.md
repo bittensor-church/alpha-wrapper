@@ -81,6 +81,14 @@ shortfall or recovery clock.
 `recoverStray` neither creates owner records nor edits the registry. Both recovery
 calls are permissionless and cannot pay the caller from vault funds.
 
+A stray key can hold backing merged from several slots. Recovery moves the whole
+find once, then reassigns other short slots' expectations to the measured surplus
+at the receiving slot. Each alpha is counted once, without splitting the find
+into potentially sub-minimum transfers. Any remaining shortage keeps its original
+clock. Recovery also saves all resolved keys so a reduced expectation cannot
+take a successor already covering another slot. Recovery emits `BackingRecovered`;
+surplus beyond all shortages becomes new backing.
+
 ## Exit behavior and accepted tradeoffs
 
 If an empty attested entry has no owned receiving key, `AttestedHotkeyRetired`

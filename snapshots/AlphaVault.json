@@ -1,7 +1,8 @@
 {
   "rebalance: after registry weight update": "193707",
   "rebalance: fully rotated (64 validators)": "9657672",
-  "recoverStray: whole slot (64 validators)": "983084",
+  "recoverStray: merged slots (64 validators)": "1512986",
+  "recoverStray: whole slot (64 validators)": "1032546",
   "syncBacking: loss on file (64 validators)": "989942",
   "unwrap: full": "215692",
   "unwrap: full (64 validators)": "2700696",
