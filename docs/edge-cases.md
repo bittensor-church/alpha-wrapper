@@ -96,12 +96,16 @@ edge and follows it one hop, so the ordinary swap resolves itself on the
 next call and holders never notice.
 
 A swap across every subnet also retires the old name, and the chain
-turns away every stake operation naming a key it has no owner for. The
-same edge decides where that validator's share is staked next, so its
-slot keeps being funded at the successor even once an exit has emptied
-it. An attested name the chain offers no live key for is refused by
-name, `AttestedHotkeyRetired`, until the attesters replace that
-validator; the TAO exit stays open meanwhile.
+turns away every stake operation naming a key it has no owner for. Such
+a validator's share is staked at the key the record last found it
+under, or at that key's successor, so its slot keeps being funded even
+once an exit has emptied it. An attested name the chain offers no live
+key for is refused by name, `AttestedHotkeyRetired`, by every call that
+would stake something at it - deposits, rebalances and partial alpha
+exits - until the attesters replace that validator. A burn of the
+entire supply pays out of the keys the position holds and goes through,
+unless stake under a dropped validator has to be rolled onto the
+attested keys first; the TAO exit stays open meanwhile.
 
 One hop is all it reads. A validator that swapped twice before the vault
 looked, an edge the chain has since dropped, or two swaps converging on

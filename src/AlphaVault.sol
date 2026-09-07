@@ -239,7 +239,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32 destColdkey = VaultReads.coldkeyOf(clone);
 
         (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _openBacking(tokenId, destColdkey, nid);
-        bytes32[] memory actives = _assignActives(slots, backing, hotkeys, nid);
+        bytes32[] memory actives = _assignFundableActives(slots, backing, hotkeys, nid);
 
         uint256 totalDeposit = _mailboxBalance(userClone, chosenHotkey, nid);
         if (totalDeposit == 0) revert ZeroAmount();
@@ -458,7 +458,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         (bytes32[] memory hotkeys, uint16[] memory weights) = VaultReads.resolveValidators(validatorRegistry, netuid);
         bytes32 coldkey = VaultReads.coldkeyOf(clone);
         (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _openBacking(tokenId, coldkey, netuid);
-        bytes32[] memory actives = _assignActives(slots, backing, hotkeys, netuid);
+        (bytes32[] memory actives, bytes32 retired) = _assignActives(slots, backing, hotkeys, netuid);
+        // Only stake moving into an entry needs a live key for it: an exit pays out of the keys
+        // the position holds. Rolling rotated-out stake back onto the attested keys is such a move.
+        if (retired != bytes32(0) && _holdsRotatedOutStake(backing, actives)) revert AttestedHotkeyRetired(retired);
         // Nothing on this path trades against the pool, so one price read holds for the whole call.
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
         _consolidateRotatedStake(clone, coldkey, netuid, backing.keys, actives, alphaPriceE18);
@@ -478,7 +481,10 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             return;
         }
 
-        uint256 assets = VaultMath.assetsFor(totalAlpha, totalSupply(tokenId), shares);
+        uint256 supply = totalSupply(tokenId);
+        // A partial burn re-splits what remains across every entry; a full one leaves nothing to.
+        if (retired != bytes32(0) && shares != supply) revert AttestedHotkeyRetired(retired);
+        uint256 assets = VaultMath.assetsFor(totalAlpha, supply, shares);
         if (assets == 0) revert ZeroAmount();
         if (assets < minAlphaOut) revert SlippageExceeded(assets);
 
@@ -600,7 +606,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         (bytes32[] memory hotkeys, uint16[] memory weights) = VaultReads.resolveValidators(validatorRegistry, nid);
         bytes32 coldkey = VaultReads.coldkeyOf(clone);
         (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _openBacking(tokenId, coldkey, nid);
-        bytes32[] memory actives = _assignActives(slots, backing, hotkeys, nid);
+        bytes32[] memory actives = _assignFundableActives(slots, backing, hotkeys, nid);
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
         _consolidateRotatedStake(clone, coldkey, nid, backing.keys, actives, alphaPriceE18);
         _rebalance(tokenId, clone, actives, weights, coldkey, alphaPriceE18);
@@ -932,6 +938,22 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         return false;
     }
 
+    /// @dev Whether a key outside `currentSet` still carries a balance the consolidation would
+    ///      roll in.
+    function _holdsRotatedOutStake(VaultReads.Backing memory backing, bytes32[] memory currentSet)
+        private
+        pure
+        returns (bool)
+    {
+        for (uint256 i; i < backing.keys.length;) {
+            if (backing.balances[i] != 0 && _isRotatedOut(backing.keys[i], currentSet)) return true;
+            unchecked {
+                ++i;
+            }
+        }
+        return false;
+    }
+
     /// @dev Picks the richest hotkey across the source and destination keys as the roll's start. Its
     ///      balance is the roll's binding floor check, so starting from anything smaller could trip
     ///      `ConsolidationBelowFloor` on a pile the chain would accept, and starting from rotated-out
@@ -1132,20 +1154,36 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         VaultReads.requireIntact(slots, backing, netuid);
     }
 
-    /// @dev The key each attested validator's alpha sits under: the slot's resolved key while it
-    ///      holds anything, and otherwise a key the chain will still accept for that validator -
-    ///      the attested name while the chain has an owner for it, the successor of a name a swap
-    ///      has retired. No two entries may land on one key, so an emptied entry whose name
-    ///      another attested slot answers under keeps its resolved key, and an entry left with no
-    ///      key of its own reverts `SwappedHotkeyStillAttested` - only the attesters can untangle
-    ///      a set listing a swapped-away name beside its successor. An entry left with no key the
-    ///      chain still has an owner for reverts `AttestedHotkeyRetired`.
-    function _assignActives(
+    /// @dev `_assignActives` for a call that moves stake into the attested entries: a move aimed
+    ///      at a key the chain has no owner for costs the whole forwarded budget, so a validator
+    ///      the chain offers no live key for is refused up front, by name, for the attesters to
+    ///      replace.
+    function _assignFundableActives(
         VaultReads.Slot[] memory slots,
         VaultReads.Backing memory backing,
         bytes32[] memory currentSet,
         uint16 netuid
     ) private view returns (bytes32[] memory actives) {
+        bytes32 retired;
+        (actives, retired) = _assignActives(slots, backing, currentSet, netuid);
+        if (retired != bytes32(0)) revert AttestedHotkeyRetired(retired);
+    }
+
+    /// @dev The key each attested validator's alpha sits under: the slot's resolved key while it
+    ///      holds anything, and otherwise a key the chain will still accept for that validator -
+    ///      the attested name while the chain has an owner for it, else the key the record last
+    ///      found it under, else that key's successor. No two entries may land on one key, so an
+    ///      emptied entry whose name another attested slot answers under keeps its resolved key,
+    ///      and an entry left with no key of its own reverts `SwappedHotkeyStillAttested` - only
+    ///      the attesters can untangle a set listing a swapped-away name beside its successor.
+    ///      `retired` is the first name the chain offers no live key for, or zero: its entry keeps
+    ///      the last key the record knew, which only a call moving stake into it must refuse.
+    function _assignActives(
+        VaultReads.Slot[] memory slots,
+        VaultReads.Backing memory backing,
+        bytes32[] memory currentSet,
+        uint16 netuid
+    ) private view returns (bytes32[] memory actives, bytes32 retired) {
         // The loop below runs `indexOf` - a linear scan - per entry, so the names are read into
         // a flat array once instead of per scan.
         bytes32[] memory logicals = new bytes32[](slots.length);
@@ -1160,22 +1198,24 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         for (uint256 i; i < currentSet.length;) {
             bytes32 name = currentSet[i];
             uint256 at = VaultMath.indexOf(logicals, name);
+            bytes32 key;
+            bool live = true;
             if (at != type(uint256).max && backing.balances[at] != 0) {
-                actives[i] = backing.keys[at];
+                key = backing.keys[at];
             } else if (_keyHeldElsewhere(backing, logicals, currentSet, name, at)) {
                 if (at == type(uint256).max) revert SwappedHotkeyStillAttested();
                 // The slot accounts for nothing, so the chain may have retired the key it answers
                 // under since the record last looked.
-                actives[i] = _requireLiveKey(backing.keys[at], name);
+                key = backing.keys[at];
+                live = _hasOwner(key);
             } else {
-                bytes32 receiving = _receivingKey(backing, logicals, currentSet, name, at, netuid);
+                (key, live) = _receivingKey(backing, logicals, currentSet, name, at, netuid);
                 // A second retired name the chain sends to the same key would put two entries on
                 // one balance.
-                if (receiving != name && VaultMath.contains(actives, receiving)) {
-                    revert SwappedHotkeyStillAttested();
-                }
-                actives[i] = receiving;
+                if (key != name && VaultMath.contains(actives, key)) revert SwappedHotkeyStillAttested();
             }
+            actives[i] = key;
+            if (!live && retired == bytes32(0)) retired = name;
             unchecked {
                 ++i;
             }
@@ -1196,12 +1236,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         return VaultMath.contains(currentSet, logicals[holder]);
     }
 
-    /// @dev Where an entry the position holds nothing for is staked: the attested name while the
-    ///      chain has an owner for it - which covers a swap confined to another subnet, and a name
-    ///      registered again since, whose stale edge is ignored - and otherwise the successor the
-    ///      chain recorded for it. Refuses a successor another entry can land on, and a name the
-    ///      chain offers no live key for at all: a move aimed at such a key costs the whole
-    ///      forwarded budget.
+    /// @dev Where an entry the position holds nothing for is staked, and whether the chain still
+    ///      has an owner for it: the attested name while it has one - which covers a swap confined
+    ///      to another subnet, and a name registered again since, whose stale edge is ignored -
+    ///      then the key the record last found the validator under, then that key's successor.
+    ///      The walk resumes from the record's key because the edge from the name reaches only the
+    ///      first of the swaps the position has already followed. Refuses a key another entry can
+    ///      land on. An entry with no live key at all keeps the last one known.
     function _receivingKey(
         VaultReads.Backing memory backing,
         bytes32[] memory logicals,
@@ -1209,26 +1250,29 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32 name,
         uint256 ownSlot,
         uint16 netuid
-    ) private view returns (bytes32) {
-        (bool nameExists,) = IStaking(STAKING_PRECOMPILE).getHotkeyOwner(name);
-        if (nameExists) return name;
+    ) private view returns (bytes32 key, bool live) {
+        if (_hasOwner(name)) return (name, true);
 
-        bytes32 successor = VaultReads.hotkeySuccessor(name, netuid);
-        if (successor == bytes32(0)) revert AttestedHotkeyRetired(name);
-        if (VaultMath.contains(currentSet, successor)) revert SwappedHotkeyStillAttested();
-        if (_keyHeldElsewhere(backing, logicals, currentSet, successor, ownSlot)) {
+        key = ownSlot == type(uint256).max ? name : backing.keys[ownSlot];
+        live = key != name && _hasOwner(key);
+        if (!live) {
+            bytes32 successor = VaultReads.hotkeySuccessor(key, netuid);
+            if (successor != bytes32(0) && _hasOwner(successor)) {
+                key = successor;
+                live = true;
+            }
+        }
+        if (
+            key != name
+                && (VaultMath.contains(currentSet, key)
+                    || _keyHeldElsewhere(backing, logicals, currentSet, key, ownSlot))
+        ) {
             revert SwappedHotkeyStillAttested();
         }
-        return _requireLiveKey(successor, name);
     }
 
-    /// @dev `key` if the chain still has an owner for it. The chain rejects every stake operation
-    ///      naming a key it does not, taking the whole forwarded budget with it, so an entry left
-    ///      with only such a key refuses in `name`'s stead - a validator the attesters can replace.
-    function _requireLiveKey(bytes32 key, bytes32 name) private view returns (bytes32) {
-        (bool exists,) = IStaking(STAKING_PRECOMPILE).getHotkeyOwner(key);
-        if (!exists) revert AttestedHotkeyRetired(name);
-        return key;
+    function _hasOwner(bytes32 hotkey) private view returns (bool exists) {
+        (exists,) = IStaking(STAKING_PRECOMPILE).getHotkeyOwner(hotkey);
     }
 
     /// @dev Rewrites the record from the chain once the position has been moved: one slot per

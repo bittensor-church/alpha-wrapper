@@ -294,6 +294,80 @@ contract BackingRecordTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
     }
 
+    function _positionWithTwoFollowedSwapsThenADrain() private {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        vault.rebalance(NETUID1);
+        _simulateFollowedSwap(NETUID1, hotkey4, hotkey5);
+        vault.rebalance(NETUID1);
+        assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey5, "the record followed both swaps");
+        _drainTheFirstSlot(alice, NETUID1);
+    }
+
+    /// @dev The edge from the attested name still points at the first successor, itself retired
+    ///      since; the record's own key is where the validator was last found.
+    function test_RebalanceAfterTwoFollowedSwapsAndADrain_StakesTheShareAtTheRecordedKey() public {
+        _positionWithTwoFollowedSwapsThenADrain();
+
+        vault.rebalance(NETUID1);
+
+        assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey5, "the slot stays on the key it was found under");
+        assertGt(_getVaultStake(hotkey5, NETUID1), 0, "which is where its share went");
+        assertEq(_getVaultStake(hotkey4, NETUID1), 0, "and nothing was aimed at the retired successor");
+        assertTrue(lens.isBackingIntact(TOKEN1), "with the record accounting for everything");
+    }
+
+    function test_UnwrapAfterTwoFollowedSwapsAndADrain_StakesTheShareAtTheRecordedKey() public {
+        _positionWithTwoFollowedSwapsThenADrain();
+
+        uint256 shares = vault.balanceOf(alice, TOKEN1);
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice), 0);
+
+        assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey5, "the slot stays on the key it was found under");
+        assertGt(_getVaultStake(hotkey5, NETUID1), 0, "which is where its share went");
+        assertGt(_userStakeAcrossHotkeys(alice, NETUID1), 0, "and the exit delivered");
+        assertTrue(lens.isBackingIntact(TOKEN1), "with the record accounting for what is left");
+    }
+
+    /// @dev A validator attested but never funded retires - two swaps, of which the vault can read
+    ///      only the first - while the position sits whole under the other. A full exit stakes
+    ///      nothing at it and is paid; a partial burn would re-split the remainder toward it.
+    function test_FullUnwrapBesideARetiredEntry_PaysFromTheHeldKeys() public {
+        _setValidators(NETUID1, _hotkeys(hotkey2), _weights(10000));
+        uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
+        _setValidators(NETUID1, _hotkeys(hotkey4, hotkey2), _weights(5000, 5000));
+        _simulateFollowedSwap(NETUID1, hotkey4, hotkey5);
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey5, true);
+
+        vm.expectRevert(abi.encodeWithSelector(AttestedHotkeyRetired.selector, hotkey4));
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice), 0);
+
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
+
+        assertEq(vault.balanceOf(alice, TOKEN1), 0, "the whole position was burned");
+        assertApproxEqAbs(_userStakeAcrossHotkeys(alice, NETUID1), 30 ether, 1e12, "and paid out as staked alpha");
+        assertEq(_getVaultStake(hotkey2, NETUID1), 0, "leaving nothing behind");
+    }
+
+    /// @dev Stake under a dropped validator is rolled onto the attested keys before anything is
+    ///      paid, and that roll needs a live key to land on.
+    function test_FullUnwrapRollingStakeOntoARetiredEntry_Refuses() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
+        _setValidators(NETUID1, _hotkeys(hotkey4, hotkey2, hotkey3), _weights(3334, 3333, 3333));
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey4, true);
+
+        vm.expectRevert(abi.encodeWithSelector(AttestedHotkeyRetired.selector, hotkey4));
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
+
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares, 0);
+        assertEq(vault.balanceOf(alice, TOKEN1), 0, "the TAO exit stays open");
+    }
+
     /// @dev Selling the slot out does not make a set listing a retired name beside its successor
     ///      servable: the retired name has nowhere to go but the key its neighbour was given.
     function test_SetNamingADrainedSwapAndItsSuccessor_StillRefuses() public {

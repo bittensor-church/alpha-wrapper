@@ -484,6 +484,25 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertEq(vault.balanceOf(alice, TOKEN1), 0, "not to the cohort that bore the loss");
     }
 
+    /// @dev Retiring written-off shares stakes nothing, so a validator the chain has no live key
+    ///      for does not stand in the way - not even of a partial burn.
+    function test_FullWriteOff_RetiresSharesBesideARetiredValidator() public {
+        uint256 aliceShares = _depositAndWrap(alice, NETUID1, 15 ether);
+        bytes32[] memory recordedHotkeys = _hotkeys(hotkey1, hotkey2, hotkey3);
+        for (uint256 i; i < recordedHotkeys.length; ++i) {
+            _simulateOffVaultSwap(NETUID1, recordedHotkeys[i], keccak256(abi.encode("retired-beside-stray", i)));
+        }
+        _runOutRecoveryWindow(TOKEN1);
+        MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey3, true);
+
+        uint256 burn = aliceShares / 2;
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, burn, _toSubstrate(alice), 0);
+
+        assertEq(vault.balanceOf(alice, TOKEN1), aliceShares - burn, "the shares were retired");
+        assertEq(_userStakeAcrossHotkeys(alice, NETUID1), 0, "for no alpha");
+    }
+
     /// @dev A complete write-off leaves outstanding shares with a zero alpha quote. A positive
     ///      floor preserves their contingent claim on a late recovery; zero explicitly gives that
     ///      claim up, retires the shares for no alpha, and leaves a later find to the remaining cohort.

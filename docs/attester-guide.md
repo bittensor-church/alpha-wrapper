@@ -103,13 +103,17 @@ makes deposits, alpha exits and rebalances refuse with
 
 A swap across every subnet also retires the old name: the chain keeps no
 owner for it and turns away every stake operation naming it. The vault
-reads the same edge to decide where that validator's share is staked
-next, so the share goes on reaching the successor even after an exit has
-emptied its slot. Where the chain offers no live key for an attested
-name - no owner, and either no successor edge or one pointing at another
-retired key - deposits, alpha exits and rebalances refuse with
-`AttestedHotkeyRetired(hotkey)` naming it, while the TAO exit stays
-open. Replace that validator in the next update.
+stakes that validator's share at the key it last found the validator
+under, or at that key's successor, so the share goes on reaching the
+validator even after an exit has emptied its slot. Where the chain
+offers no live key for an attested name - no owner, and either no
+successor edge or one pointing at another retired key - deposits,
+rebalances and partial alpha exits refuse with
+`AttestedHotkeyRetired(hotkey)` naming it. A burn of the entire supply
+still pays out of the keys the position holds, unless stake under a
+dropped validator has to be rolled onto the attested keys first, and
+the TAO exit stays open throughout. Replace that validator in the next
+update.
 
 That convenience rule applies only to an ordinary, still-resolvable
 one-hop swap. If the old key has been registered again, Subtensor has
