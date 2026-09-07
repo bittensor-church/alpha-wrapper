@@ -46,6 +46,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     string internal constant VAULT_URI = "https://api.tao20.io/{id}.json";
     uint256 internal constant RECOVERY_WINDOW = 3 hours;
+    uint256 internal constant BACKING_SLACK_RAO = 1_000;
 
     uint256 public constant NETUID1 = 1;
     uint256 public constant NETUID2 = 2;

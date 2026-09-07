@@ -2,7 +2,6 @@
 pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
-import { Vm } from "forge-std/Test.sol";
 import {
     InsufficientShares,
     NothingToUnwrap,
@@ -710,34 +709,20 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
 
     function test_UnsoldRemainder_EmitsNetSharesAndSoldAlpha() public {
         _setRemoveStakeRate(1, 1);
-        _depositForAlice(100 ether);
-        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, 5e6, 0, 40 ether);
-        uint256 shares = _sharesForExactAssets(TOKEN1, 5e6 + 1e6, total);
-        uint256 sharesBefore = vault.balanceOf(alice, TOKEN1);
+        uint256 sharesBefore = _depositForAlice(60e6);
+        assertEq(sharesBefore, 60e15);
+        _setVaultStakesAndWriteOffShortfalls(NETUID1, 5e6, 0, 55e6);
+        uint256 balanceBefore = alice.balance;
 
-        vm.recordLogs();
+        // At the initial share price, the 6-million-alpha request sells 5 million;
+        // the sub-minimum million is returned as shares, leaving a known net burn.
+        vm.expectEmit(true, true, false, true, address(vault));
+        emit UnwrappedForTao(alice, TOKEN1, 5e15, 5e6, 5e6);
         vm.prank(alice);
-        vault.unwrapForTao(TOKEN1, shares, 0);
-        uint256 burned = sharesBefore - vault.balanceOf(alice, TOKEN1);
-        Vm.Log[] memory logs = vm.getRecordedLogs();
-        bytes32 signature = keccak256("UnwrappedForTao(address,uint256,uint256,uint256,uint256)");
-        Vm.Log memory exitLog;
-        uint256 matches;
-        for (uint256 i; i < logs.length; ++i) {
-            if (logs[i].emitter == address(vault) && logs[i].topics.length > 0 && logs[i].topics[0] == signature) {
-                exitLog = logs[i];
-                ++matches;
-            }
-        }
-        assertEq(matches, 1, "one exit event describes the transaction");
-        assertEq(exitLog.topics.length, 3);
-        assertEq(exitLog.topics[1], bytes32(uint256(uint160(alice))));
-        assertEq(exitLog.topics[2], bytes32(TOKEN1));
-        (uint256 reportedBurn, uint256 sold, uint256 paid) = abi.decode(exitLog.data, (uint256, uint256, uint256));
-        assertEq(reportedBurn, burned, "event agrees with the observed share decrease");
-        assertEq(sold, 5e6);
-        assertEq(paid, 5e6);
-        assertLt(burned, shares, "the refund is netted out of the reported burn");
+        vault.unwrapForTao(TOKEN1, 6e15, 0);
+
+        assertEq(sharesBefore - vault.balanceOf(alice, TOKEN1), 5e15);
+        assertEq(alice.balance - balanceBefore, 5e6);
     }
 
     function test_RevertWhen_UnsoldRemainderBreaksMinTaoOut() public {

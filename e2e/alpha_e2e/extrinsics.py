@@ -296,7 +296,7 @@ def hotkey_is_registered(
     return bool(value)
 
 
-# Sentinel returned for a hotkey with no owner.
+# An unowned hotkey returns the zero account rather than an absent value; normalize it to an empty owner.
 UNOWNED_ACCOUNT = "5C4hrfjw9DjXZTzV3MwzrrAr9P1MJhSrvWGWqi1eSuyUpnhM"
 
 

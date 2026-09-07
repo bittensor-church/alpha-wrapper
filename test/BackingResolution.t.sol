@@ -5,9 +5,42 @@ import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { VaultReads } from "src/libraries/VaultReads.sol";
 import { AttestedHotkeyRetired, BackingShortfall, SwappedHotkeyStillAttested } from "src/VaultErrors.sol";
 import { CHAIN_MIN_TRANSFER, MockStaking } from "./mocks/MockStaking.sol";
-import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
+import { IStaking, STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 contract BackingResolutionTest is AlphaVaultTestBase {
+    function test_SelfSuccessorResponse_LeavesBackingAndValidatorsUnchanged() public {
+        _depositAndWrap(alice, NETUID1, 30e9);
+        bytes32[] memory keysBefore = lens.lastSeenHotkeys(TOKEN1);
+        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey1);
+
+        assertEq(lens.totalStake(TOKEN1), 30e9);
+        assertTrue(lens.isBackingIntact(TOKEN1));
+        vault.rebalance(NETUID1);
+
+        assertEq(lens.totalStake(TOKEN1), 30e9);
+        assertEq(lens.lastSeenHotkeys(TOKEN1), keysBefore);
+        assertEq(_vaultStakeAcross(keysBefore, NETUID1), 30e9);
+        assertTrue(lens.isBackingIntact(TOKEN1));
+    }
+
+    function test_SelfSuccessorWithMissingBacking_LeavesTheShortfallUnresolved() public {
+        _depositAndWrap(alice, NETUID1, 30e9);
+        bytes32[] memory keysBefore = lens.lastSeenHotkeys(TOKEN1);
+        uint256 tracked = _getVaultStake(hotkey1, NETUID1);
+        uint256 missing = 2 * BACKING_SLACK_RAO;
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(NETUID1), NETUID1, tracked - missing);
+        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey1);
+
+        // A shortfall forces a successor lookup; naming itself cannot supply missing alpha.
+        vm.expectCall(STAKING_PRECOMPILE, abi.encodeCall(IStaking.getHotkeySuccessor, (hotkey1, uint16(NETUID1))));
+        assertFalse(lens.isBackingIntact(TOKEN1));
+        vm.expectRevert(abi.encodeWithSelector(BackingShortfall.selector, NETUID1, hotkey1, tracked));
+        vault.rebalance(NETUID1);
+
+        assertEq(lens.lastSeenHotkeys(TOKEN1), keysBefore);
+        assertEq(_vaultStakeAcross(keysBefore, NETUID1), 30e9 - missing);
+    }
+
     function test_TwoHopSwap_FailsClosedOnEveryPath() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
         _depositAndWrap(bob, NETUID1, 30 ether);

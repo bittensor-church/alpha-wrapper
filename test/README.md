@@ -26,21 +26,25 @@ per successful mint or exit in this bounded, constant-price campaign; the exact
 conservation check still accounts for that entire residue as held alpha.
 
 The donation model keeps a simple ledger per arrival, without reconstructing the
-vault's index or debt checkpoints. Its comparison permits one native transfer
-quantum plus four wei per action for accumulated integer rounding. The exact
-cash-conservation assertion has no tolerance. Donations received at zero supply
-are assigned when the next holders enter.
+vault's index or debt checkpoints. The campaign asserts supply stays below `1e36`,
+so each index-truncation step changes a holder's entitlement by less than one wei.
+For each holder, a donation has two rounding steps (allocation and index truncation);
+an exit with a share refund has at most four checkpoint/debt floors. Four wei per
+action cover either case, with one extra action's allowance for the pending read
+and one native transfer quantum for quote truncation. The exact cash-conservation
+assertion has no tolerance. Donations received at zero supply are assigned when
+the next holders enter. The separate near-cap fuzz case below permits the larger
+index-rounding residue at that supply.
 
-The two older reserve bounds are useful checks against overpayment. They are
-insufficient on their own: disabling all TAO accrual still satisfies them. Likewise,
-a vault that refuses every exit can still satisfy backing bounds. During this
-review, those mutations passed the old campaigns at 32 runs and depth 128, while
-the new entitlement and mandatory-exit checks failed on single-action sequences.
+Reserve bounds detect overpayment but cannot detect missing accrual. The holder
+entitlement check also requires earned donations to remain claimable. Backing
+bounds cannot detect a vault that refuses every exit; the healthy campaign
+requires withdrawals to succeed and closes every holder's position.
 
 ## Fixtures and expectations
 
-- The new accounting campaigns use alpha quantities in RAO and enable native
-  precompile payouts at `1e9` wei per TAO RAO. Older arithmetic stress fixtures
+- The accounting campaigns use alpha quantities in RAO and enable native
+  precompile payouts at `1e9` wei per TAO RAO. Arithmetic stress fixtures
   deliberately retain their simplified one-wei payout scale. They test wrapper
   arithmetic, not the fidelity of a blockchain implementation.
 - The staking mock controls observable precompile responses: balances, ownership,
@@ -58,14 +62,17 @@ the new entitlement and mandatory-exit checks failed on single-action sequences.
   positions. Only deterministic tests contribute to `.gas-snapshot`; fuzz and
   invariant campaigns run separately in CI. See the root README for regeneration.
 
-## Public behavior replacing internal helper tests
+## Public API coverage
 
-The public suites already cover first deposits, zero deposits, share round trips,
+The public suites cover first deposits, zero deposits, share round trips,
 token generation, validator validation, successor recovery, dissolution phases,
 reserved claims, and supply bounds. `AlphaVaultPublicPropertiesTest` additionally
-checks claim quantization, the backing-slack boundary, and a full deposit/exit
-with configured transfer losses. Pure array helpers and duplicated arithmetic
-formulas are intentionally not independent test targets.
+checks claim quantization, the backing-slack boundary and full error payload,
+and a full deposit/exit with configured transfer losses. Its near-cap fuzz grows
+supply through finalized losses and recapitalization to 90–100% of the share cap,
+then exercises public quotes, exits, donations, and claims against 64 validators
+with individual stake balances bounded by `uint64`. Pure array helpers and
+duplicated arithmetic formulas are intentionally not independent test targets.
 
 ## Live scenarios
 

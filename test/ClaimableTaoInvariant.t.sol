@@ -136,7 +136,11 @@ contract ClaimableTaoInvariantTest is AlphaVaultTestBase {
     }
 
     function invariant_EachHolderKeepsTheirShareOfEveryArrival() public view {
-        // Each allocation/checkpoint can differ by a few wei. The public quote also floors to 1 RAO.
+        assertLt(vault.totalSupply(TOKEN1), 1e36, "campaign keeps an index-rounding step below one wei");
+        // Per holder, a donation has two rounding steps: allocation and index truncation.
+        // An exit with a share refund has at most four checkpoint/debt floors.
+        // Four wei per action cover either; one extra action covers the pending read,
+        // and the public quote can additionally retain less than one native RAO.
         uint256 rounding = 1e9 + 4 * (handler.actions() + 1);
         for (uint256 i; i < 3; ++i) {
             address actor = handler.actors(i);

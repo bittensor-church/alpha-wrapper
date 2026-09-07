@@ -18,7 +18,7 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
         assertEq(address(lens.vault()), address(vault));
     }
 
-    function testFuzz_SharePriceAgreesWithThePreviewOfOneShareUnit(uint256 deposit, uint256 emissions, uint256 shares)
+    function testFuzz_SharePrice_AgreesWithThePreviewOfOneShareUnit(uint256 deposit, uint256 emissions, uint256 shares)
         public
     {
         deposit = bound(deposit, 1e7, 1e20);

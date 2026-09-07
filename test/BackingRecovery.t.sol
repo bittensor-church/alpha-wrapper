@@ -375,7 +375,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
     }
 
     /// @dev This fixture explicitly finalizes through `syncBacking` before rebalancing.
-    function test_RebalanceAndDepositsResumeAfterSyncBackingFinalizesTheLoss() public {
+    function test_FinalizedBackingLoss_AllowsRebalancingAndDeposits() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _buildSwapTrail(NETUID1, hotkey1, 2);
         _runOutRecoveryWindow(TOKEN1);

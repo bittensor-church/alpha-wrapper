@@ -168,7 +168,7 @@ contract BackingInvariantTest is AlphaVaultTestBase {
         for (uint256 i; i < slots.length; ++i) {
             uint256 held = _getStakeForColdkey(slots[i].active, coldkey, NETUID1);
             // Check the chain ledger directly; recovery must leave each persisted slot covered.
-            covered[i] = held >= slots[i].tracked || slots[i].tracked - held <= 1_000;
+            covered[i] = held >= slots[i].tracked || slots[i].tracked - held <= BACKING_SLACK_RAO;
         }
     }
 
@@ -230,6 +230,6 @@ contract BackingInvariantTest is AlphaVaultTestBase {
         for (uint256 i; i < keys.length; ++i) {
             held += _getVaultStake(keys[i], NETUID1);
         }
-        assertLe(owed, held + 1_000 * slots.length, "the record expects more than exists");
+        assertLe(owed, held + BACKING_SLACK_RAO * slots.length, "the record expects more than exists");
     }
 }

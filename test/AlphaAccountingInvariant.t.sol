@@ -63,6 +63,8 @@ contract AlphaAccountingHandler is Test {
     function _exit(address actor, bool forTao) private {
         uint256 shares = vault.balanceOf(actor, tokenId);
         if (shares == 0) return;
+        // This campaign fixes the precompile quote at 1 TAO RAO per alpha RAO,
+        // so the alpha quote also measures the sale minimum in TAO RAO.
         // A share transfer can leave a sub-floor holder. A real top-up makes that position exit-able.
         (uint256 quoted,) = lens.previewUnwrap(tokenId, shares);
         if (quoted < CHAIN_MIN_STAKE) {

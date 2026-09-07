@@ -819,12 +819,18 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.currentTokenId(42);
     }
 
-    function testFuzz_CurrentTokenIdRoundTripsNetuidAndRegistrationBlock(uint16 netuid, uint64 regBlock) public {
+    function testFuzz_CurrentTokenId_RoundTripsAndRejectsAChangedRegistration(uint16 netuid, uint64 regBlock) public {
         netuid = uint16(bound(netuid, 1, type(uint16).max));
         regBlock = uint64(bound(regBlock, 1, type(uint64).max));
         _setRegBlock(netuid, regBlock);
 
-        assertEq(vault.currentTokenId(netuid), uint256(netuid) | (uint256(regBlock) << 16));
+        uint256 tokenId = vault.currentTokenId(netuid);
+        assertEq(tokenId, uint256(netuid) | (uint256(regBlock) << 16));
+        assertEq(lens.previewWrap(tokenId, 1e9), 1e18);
+
+        _setRegBlock(netuid, regBlock == type(uint64).max ? 1 : type(uint64).max);
+        vm.expectRevert(SubnetDissolved.selector);
+        lens.previewWrap(tokenId, 1e9);
     }
 
     function testFuzz_RevertWhen_CurrentTokenIdNetuidOutOfRange(uint256 netuid) public {

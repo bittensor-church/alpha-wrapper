@@ -147,22 +147,26 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         vault.claimTao(TOKEN1, payable(address(0)));
     }
 
-    function test_ClaimPaysTheChosenRecipientAndDebitsOnlyTheHolder() public {
+    function test_ClaimToAnotherRecipient_PaysThemAndDebitsOnlyTheHolder() public {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
         _donateToTokenClone(TOKEN1, 5 ether);
         uint256 quote = lens.claimableTaoOf(alice, TOKEN1);
+        vm.deal(alice, 2 ether);
+        vm.deal(bob, 3 ether);
+        uint256 aliceBefore = alice.balance;
+        uint256 bobBefore = bob.balance;
 
         vm.prank(alice);
         vault.claimTao(TOKEN1, payable(bob));
 
-        assertEq(alice.balance, 0);
-        assertEq(bob.balance, quote);
-        assertApproxEqAbs(bob.balance, 5 ether, NATIVE_TRANSFER_QUANTUM);
+        assertEq(alice.balance, aliceBefore);
+        assertEq(bob.balance - bobBefore, quote);
+        assertApproxEqAbs(bob.balance - bobBefore, 5 ether, NATIVE_TRANSFER_QUANTUM);
         assertEq(lens.claimableTaoOf(alice, TOKEN1), 0);
         assertEq(lens.claimableTaoOf(bob, TOKEN1), 0, "recipient acquires no entitlement");
     }
 
-    function test_RejectedClaimPreservesTheCreditForARetryToAnotherRecipient() public {
+    function test_RejectedClaim_PreservesCreditForAnotherRecipient() public {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
         _donateToTokenClone(TOKEN1, 5 ether);
         _touch(alice, TOKEN1);
@@ -183,7 +187,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         assertApproxEqAbs(bob.balance, 5 ether, NATIVE_TRANSFER_QUANTUM);
     }
 
-    function test_ClaimReceiverCannotReenterThePayout() public {
+    function test_ClaimReceiver_CannotReenterThePayout() public {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
         _donateToTokenClone(TOKEN1, 5 ether);
         ClaimReentrantReceiver receiver = new ClaimReentrantReceiver(vault, TOKEN1);
@@ -196,7 +200,7 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         assertApproxEqAbs(address(receiver).balance, 5 ether, NATIVE_TRANSFER_QUANTUM);
     }
 
-    function test_TransferBatchKeepsDonationsSeparateAcrossInterleavedTokenIds() public {
+    function test_InterleavedBatchTransfer_KeepsEachTokensHistoricalDonations() public {
         _depositAndWrap(alice, NETUID1, DEPOSIT);
         _depositAndWrap(alice, NETUID2, DEPOSIT);
         _donateToTokenClone(TOKEN1, 3 ether);

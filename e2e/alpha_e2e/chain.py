@@ -30,7 +30,8 @@ def run(
     input: Optional[str] = None,
 ) -> subprocess.CompletedProcess:
     env = dict(os.environ)
-    # Suppress noisy receipt-poller diagnostics; retain other error-level logging.
+    # An omitted optional mixHash field causes a benign receipt-poller diagnostic.
+    # Silence that module; transaction failures still surface through receipts/errors.
     env.setdefault("RUST_LOG", "error,alloy_provider::blocks=off")
     completed = subprocess.run(
         cmd, capture_output=capture, text=True, env=env, input=input,

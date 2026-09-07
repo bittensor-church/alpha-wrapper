@@ -7,7 +7,7 @@ import { ZeroAmount } from "src/VaultErrors.sol";
 contract ClaimableTaoRoundingRegressionTest is AlphaVaultTestBase {
     /// @dev Arithmetic stress regression. Exact effective inputs from the original shrunk trace;
     ///      independent of handler seed mapping and future changes to fuzz bounds.
-    function test_TinyTransfersAndNearFullExitsPreservePreviouslyEarnedClaims() public {
+    function test_TinyTransfersAndNearFullExits_PreserveHistoricalClaims() public {
         address carol = makeAddr("carol");
         _depositAndWrap(alice, NETUID1, 50 ether);
         _depositAndWrap(bob, NETUID1, 50 ether);
