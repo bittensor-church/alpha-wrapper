@@ -36,7 +36,7 @@ WRAP_SLIPPAGE_TOLERANCE_PCT = 1
 
 
 @pytest.mark.scenario
-def test_full_flow(env):
+def test_deposits_and_both_exits_survive_emissions_and_validator_rotation(env):
     # --- Phase 6: transfer alpha to the deposit mailboxes (3 validators each) ---
     for subnet_index, netuid in enumerate(env.netuids):
         mailbox = env.mailbox_address(netuid)
@@ -276,7 +276,7 @@ def test_full_flow(env):
     assert mailbox_alpha_before > 0, "mailbox has zero alpha before reclaim"
 
     user_tao_before = env.user_tao_wei()
-    env.vault_send(
+    reclaim_receipt = env.vault_send(
         1_500_000, "reclaimMailboxAlphaAsTao failed",
         "reclaimMailboxAlphaAsTao(uint256,bytes32,uint256)",
         reclaim_netuid, reclaim_hotkey_pubkey, 0,
@@ -285,10 +285,13 @@ def test_full_flow(env):
     assert mailbox_alpha_after == 0, (
         f"mailbox still holds {mailbox_alpha_after} RAO after reclaim"
     )
-    gained = checks.assert_positive_gain(
-        user_tao_before, env.user_tao_wei(), "user did not gain TAO from reclaim",
+    checks.assert_payout_near_quote(
+        user_tao_before, env.user_tao_wei(), reclaim_receipt, reclaim_netuid, mailbox_alpha_before,
+        "mailbox sale payout", checks.MAILBOX_TAO_RECLAIM,
     )
-    print(f"  User gained {gained} wei from the mailbox reclaim (net of gas)")
+    checks.assert_payout_matches_emitted(
+        user_tao_before, env.user_tao_wei(), reclaim_receipt, "mailbox sale delivery", checks.MAILBOX_TAO_RECLAIM,
+    )
 
     # --- Phase 12: unwrap shares for TAO --------------------------------------------
     tao_exit_netuid = env.netuids[1]
@@ -303,18 +306,21 @@ def test_full_flow(env):
     )
     tao_exit_shares = env.vault_shares(tao_exit_token_id)
     assert tao_exit_shares != 0, f"no shares minted by wrap on netuid {tao_exit_netuid}"
+    tao_exit_alpha = env.vault_total_stake(tao_exit_token_id)
 
     user_tao_before = env.user_tao_wei()
-    env.vault_send(
+    tao_receipt = env.vault_send(
         2_500_000, "unwrapForTao failed",
         "unwrapForTao(uint256,uint256,uint256)", tao_exit_token_id, tao_exit_shares, 0,
     )
     remaining_shares = env.vault_shares(tao_exit_token_id)
     assert remaining_shares == 0, f"shares still {remaining_shares} after unwrapForTao"
-    gained = checks.assert_positive_gain(
-        user_tao_before, env.user_tao_wei(), "user did not gain TAO from unwrapForTao",
+    checks.assert_payout_near_quote(
+        user_tao_before, env.user_tao_wei(), tao_receipt, tao_exit_netuid, tao_exit_alpha, "full TAO exit payout",
     )
-    print(f"  User gained {gained} wei from unwrapForTao (net of gas)")
+    checks.assert_payout_matches_emitted(
+        user_tao_before, env.user_tao_wei(), tao_receipt, "full TAO exit delivery",
+    )
 
     tao_exit_block_end = chain.cast_block_number()
     checks.assert_csv(

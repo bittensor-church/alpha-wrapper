@@ -5,9 +5,42 @@ import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { VaultReads } from "src/libraries/VaultReads.sol";
 import { AttestedHotkeyRetired, BackingShortfall, SwappedHotkeyStillAttested } from "src/VaultErrors.sol";
 import { CHAIN_MIN_TRANSFER, MockStaking } from "./mocks/MockStaking.sol";
-import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
+import { IStaking, STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 contract BackingResolutionTest is AlphaVaultTestBase {
+    function test_SelfSuccessorResponse_LeavesBackingAndValidatorsUnchanged() public {
+        _depositAndWrap(alice, NETUID1, 30e9);
+        bytes32[] memory keysBefore = lens.lastSeenHotkeys(TOKEN1);
+        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey1);
+
+        assertEq(lens.totalStake(TOKEN1), 30e9);
+        assertTrue(lens.isBackingIntact(TOKEN1));
+        vault.rebalance(NETUID1);
+
+        assertEq(lens.totalStake(TOKEN1), 30e9);
+        assertEq(lens.lastSeenHotkeys(TOKEN1), keysBefore);
+        assertEq(_vaultStakeAcross(keysBefore, NETUID1), 30e9);
+        assertTrue(lens.isBackingIntact(TOKEN1));
+    }
+
+    function test_SelfSuccessorWithMissingBacking_LeavesTheShortfallUnresolved() public {
+        _depositAndWrap(alice, NETUID1, 30e9);
+        bytes32[] memory keysBefore = lens.lastSeenHotkeys(TOKEN1);
+        uint256 tracked = _getVaultStake(hotkey1, NETUID1);
+        uint256 missing = 2 * BACKING_SLACK_RAO;
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(NETUID1), NETUID1, tracked - missing);
+        MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey1);
+
+        // A shortfall forces a successor lookup; naming itself cannot supply missing alpha.
+        vm.expectCall(STAKING_PRECOMPILE, abi.encodeCall(IStaking.getHotkeySuccessor, (hotkey1, uint16(NETUID1))));
+        assertFalse(lens.isBackingIntact(TOKEN1));
+        vm.expectRevert(abi.encodeWithSelector(BackingShortfall.selector, NETUID1, hotkey1, tracked));
+        vault.rebalance(NETUID1);
+
+        assertEq(lens.lastSeenHotkeys(TOKEN1), keysBefore);
+        assertEq(_vaultStakeAcross(keysBefore, NETUID1), 30e9 - missing);
+    }
+
     function test_TwoHopSwap_FailsClosedOnEveryPath() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
         _depositAndWrap(bob, NETUID1, 30 ether);
@@ -122,7 +155,7 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
 
         assertTrue(lens.isBackingIntact(TOKEN1), "no balance answers for two slots");
-        assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "the whole position is counted once");
+        assertEq(lens.totalStake(TOKEN1), 30 ether, "the whole position is counted once");
         uint256 quarter = vault.balanceOf(alice, TOKEN1) / 4;
         vm.prank(alice);
         vault.unwrap(TOKEN1, quarter, _toSubstrate(alice), 0);
@@ -171,7 +204,7 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         }
         assertEq(slots[0].active, hotkey4, "the emptied slot kept its resolved key");
         assertEq(slots[1].active, hotkey1, "beside the slot whose alpha its name carries");
-        assertApproxEqAbs(lens.totalStake(TOKEN1), held, 0.01 ether, "and the total counts each balance once");
+        assertEq(lens.totalStake(TOKEN1), held, "and the total counts each balance once");
     }
 
     function _positionWithAnEmptiedSlotOnAnotherKey() private {
@@ -258,6 +291,7 @@ contract BackingResolutionTest is AlphaVaultTestBase {
     function test_RegistryUpdate_NeitherClearsALossNorAddsBacking() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 located = lens.locatedStake(TOKEN1);
+        uint256 lost = _getVaultStake(hotkey1, NETUID1);
         _buildSwapTrail(NETUID1, hotkey1, 2);
         vault.syncBacking(TOKEN1);
 
@@ -267,12 +301,8 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         );
 
         assertFalse(lens.isBackingIntact(TOKEN1), "the rotation settled nothing");
-        assertEq(lens.locatedStake(TOKEN1), located - _lostToTheTrail(located), "and added no backing of its own");
+        assertEq(lens.locatedStake(TOKEN1), located - lost, "and added no backing of its own");
         vm.expectPartialRevert(BackingShortfall.selector);
         vault.rebalance(NETUID1);
-    }
-
-    function _lostToTheTrail(uint256 located) private view returns (uint256) {
-        return located - _getVaultStake(hotkey2, NETUID1) - _getVaultStake(hotkey3, NETUID1);
     }
 }

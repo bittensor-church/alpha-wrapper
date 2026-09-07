@@ -86,6 +86,7 @@ contract BackingHandler is Test {
     function swapHotkey(uint256 fromSeed, uint256 toSeed) external {
         bytes32 from = touchedHotkeys[bound(fromSeed, 0, touchedHotkeys.length - 1)];
         bytes32 to = keccak256(abi.encode("swapped", toSeed));
+        if (from == to) return;
         _remember(to);
         harness.simulateSwap(from, to);
     }
@@ -93,6 +94,7 @@ contract BackingHandler is Test {
     function swapWithoutAnEdge(uint256 fromSeed, uint256 toSeed) external {
         bytes32 from = touchedHotkeys[bound(fromSeed, 0, touchedHotkeys.length - 1)];
         bytes32 to = keccak256(abi.encode("stray", toSeed));
+        if (from == to) return;
         _remember(to);
         harness.simulateSilentMove(from, to);
     }
@@ -101,14 +103,13 @@ contract BackingHandler is Test {
         if (vault.recordedSlots(tokenId).length == 0) return;
         bytes32 source = touchedHotkeys[bound(sourceSeed, 0, touchedHotkeys.length - 1)];
         bool[] memory coveredBefore = harness.coveredSlots();
+        bool hadShort = !harness.backingIntact();
         try vault.recoverStray(tokenId, source) {
             bool[] memory coveredAfter = harness.coveredSlots();
-            bool hadShort;
             bool healedOne;
             for (uint256 i; i < coveredBefore.length; ++i) {
                 assertTrue(!coveredBefore[i] || coveredAfter[i], "recovery left a covered slot short");
                 if (!coveredBefore[i]) {
-                    hadShort = true;
                     if (coveredAfter[i]) healedOne = true;
                 }
             }
@@ -133,6 +134,8 @@ contract BackingHandler is Test {
     }
 }
 
+/// forge-config: default.invariant.fail-on-revert = true
+/// forge-config: ci.invariant.fail-on-revert = true
 contract BackingInvariantTest is AlphaVaultTestBase {
     BackingHandler internal handler;
     bytes32[] internal currentSet;
@@ -154,13 +157,18 @@ contract BackingInvariantTest is AlphaVaultTestBase {
         return currentSet;
     }
 
+    function backingIntact() external view returns (bool) {
+        return lens.isBackingIntact(TOKEN1);
+    }
+
     function coveredSlots() external view returns (bool[] memory covered) {
         VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
         covered = new bool[](slots.length);
         bytes32 coldkey = _subnetColdkey(NETUID1);
-        VaultReads.Backing memory backing = VaultReads.resolveBacking(slots, coldkey, uint16(NETUID1));
         for (uint256 i; i < slots.length; ++i) {
-            covered[i] = !backing.short[i];
+            uint256 held = _getStakeForColdkey(slots[i].active, coldkey, NETUID1);
+            // Check the chain ledger directly; recovery must leave each persisted slot covered.
+            covered[i] = held >= slots[i].tracked || slots[i].tracked - held <= BACKING_SLACK_RAO;
         }
     }
 
@@ -187,7 +195,7 @@ contract BackingInvariantTest is AlphaVaultTestBase {
         }
         weights[set.length - 1] = BPS_BASE - assigned;
         for (uint256 i; i < set.length; ++i) {
-            _simulateHotkeyRegistered(set[i]);
+            _simulateHotkeyOwnerPresent(set[i]);
         }
         _setValidators(NETUID1, set, weights);
         currentSet = set;
@@ -211,7 +219,7 @@ contract BackingInvariantTest is AlphaVaultTestBase {
         assertLe(lens.locatedStake(TOKEN1), held, "the position reports backing the chain does not hold");
     }
 
-    function invariant_NoSlotIsOwedMoreThanTheChainEverHeld() public view {
+    function invariant_TotalTrackedBackingIsBoundedByCurrentChainHoldings() public view {
         VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
         uint256 owed;
         for (uint256 i; i < slots.length; ++i) {
@@ -222,6 +230,6 @@ contract BackingInvariantTest is AlphaVaultTestBase {
         for (uint256 i; i < keys.length; ++i) {
             held += _getVaultStake(keys[i], NETUID1);
         }
-        assertLe(owed, held + VaultReads.TRACKED_SLACK_RAO * slots.length, "the record expects more than exists");
+        assertLe(owed, held + BACKING_SLACK_RAO * slots.length, "the record expects more than exists");
     }
 }

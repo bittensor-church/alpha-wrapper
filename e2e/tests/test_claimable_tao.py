@@ -85,16 +85,13 @@ def test_root_sweep_tao_becomes_claimable(env):
         except Exception as restore_error:  # noqa: BLE001
             print(f"  WARNING: dust threshold not restored to {previous_factor}: {restore_error}")
 
-    # How empty the clearing pass leaves the position depends on the runtime build. A position it
-    # emptied can no longer account for itself, and the vault holds that open rather than writing
-    # it off on the spot; one it left whole retires its shares the ordinary way.
+    # A short position must open recovery; an intact position can exit immediately.
     all_shares = env.vault_shares(token_id)
     if not env.backing_intact(token_id):
         located = env.vault_located_stake(token_id)
         print(f"  Position reads short by design; {located} alpha RAO still located")
 
-        # Putting the loss on file needs no quorum, no registry and no signature - only the one
-        # fact the chain cannot work out for itself, which is when the vault first saw it.
+        # Any caller can ask the vault to open the recovery window.
         env.sync_backing(token_id)
         opens_from = env.frozen_until(token_id)
         assert opens_from > 0, "syncBacking did not start the recovery window"

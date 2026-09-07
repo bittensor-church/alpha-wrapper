@@ -779,6 +779,71 @@ contract ValidatorRegistryTest is AttestationHelper {
         assertEq(wts[0], 10_000);
     }
 
+    function test_SignatureForAnotherRegistry_RejectsTheValidatorSet() public {
+        address[] memory signers = new address[](2);
+        signers[0] = s1;
+        signers[1] = s2;
+        ValidatorRegistry other = new ValidatorRegistry(admin, signers, 2);
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 2, 1);
+        bytes[] memory signatures = _sign(att, _pks2(PK2, PK1));
+
+        vm.expectPartialRevert(ValidatorRegistry.UnknownSigner.selector);
+        other.updateValidators(att, signatures);
+        assertEq(other.nonces(SN1), 0);
+    }
+
+    function test_SignatureFromAnotherChain_RejectsTheValidatorSet() public {
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 2, 1);
+        bytes[] memory signatures = _sign(att, _pks2(PK2, PK1));
+        vm.chainId(block.chainid + 1);
+
+        vm.expectPartialRevert(ValidatorRegistry.UnknownSigner.selector);
+        registry.updateValidators(att, signatures);
+        assertEq(registry.nonces(SN1), 0);
+    }
+
+    function test_ChangedSignedNetuid_RejectsTheAttestation() public {
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 2, 1);
+        bytes[] memory signatures = _sign(att, _pks2(PK2, PK1));
+        att.netuid = SN2;
+
+        _assertSignatureRejected(att, signatures);
+    }
+
+    function test_ChangedSignedHotkey_RejectsTheAttestation() public {
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 2, 1);
+        bytes[] memory signatures = _sign(att, _pks2(PK2, PK1));
+        att.hotkeys[0] = hk3;
+
+        _assertSignatureRejected(att, signatures);
+    }
+
+    function test_ChangedSignedWeights_RejectsTheAttestation() public {
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 2, 1);
+        bytes[] memory signatures = _sign(att, _pks2(PK2, PK1));
+        att.weights[0] = 6001;
+        att.weights[1] = 3999;
+
+        _assertSignatureRejected(att, signatures);
+    }
+
+    function test_ChangedSignedNonce_RejectsTheAttestation() public {
+        ValidatorRegistry.WeightAttestation memory att = _att(SN1, 2, 2);
+        bytes[] memory signatures = _sign(att, _pks2(PK2, PK1));
+        att.nonce = 1;
+
+        _assertSignatureRejected(att, signatures);
+    }
+
+    function _assertSignatureRejected(ValidatorRegistry.WeightAttestation memory att, bytes[] memory signatures)
+        private
+    {
+        // The altered payload passes shape and nonce checks, isolating signature binding.
+        vm.expectPartialRevert(ValidatorRegistry.UnknownSigner.selector);
+        registry.updateValidators(att, signatures);
+        assertEq(registry.nonces(att.netuid), 0);
+    }
+
     function test_Batch_CommitsAllEntries() public {
         ValidatorRegistry.WeightAttestation[] memory atts = new ValidatorRegistry.WeightAttestation[](3);
         atts[0] = _att(SN1, 3, 1);

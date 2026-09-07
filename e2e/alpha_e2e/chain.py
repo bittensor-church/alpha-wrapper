@@ -30,9 +30,8 @@ def run(
     input: Optional[str] = None,
 ) -> subprocess.CompletedProcess:
     env = dict(os.environ)
-    # Subtensor's EVM omits mixHash from eth_getBlockByNumber, so forge/cast's
-    # receipt-wait block poller logs a benign deserialization ERROR per broadcast.
-    # Silence that module; keep error-level logging otherwise.
+    # An omitted optional mixHash field causes a benign receipt-poller diagnostic.
+    # Silence that module; transaction failures still surface through receipts/errors.
     env.setdefault("RUST_LOG", "error,alloy_provider::blocks=off")
     completed = subprocess.run(
         cmd, capture_output=capture, text=True, env=env, input=input,
@@ -80,11 +79,21 @@ def cast_send(
         check=False,
     )
     try:
-        return json.loads(completed.stdout)
-    except (json.JSONDecodeError, ValueError):
-        # A revert / send failure leaves non-JSON on stdout+stderr; surface it as
-        # a receipt without a success status so receipt_ok() returns False.
-        return {"status": "0x0", "raw": completed.stdout + completed.stderr}
+        receipt = json.loads(completed.stdout)
+    except ValueError as error:
+        raise ChainError(
+            f"cast send returned no transaction receipt:\n{completed.stdout}{completed.stderr}"
+        ) from error
+    if not isinstance(receipt, dict) or receipt.get("status") not in ("0x0", "0x1"):
+        raise ChainError(f"cast send returned an invalid transaction receipt: {receipt!r}")
+    # A transport, signing, or submission failure is not an executed EVM revert.
+    if (
+        not receipt.get("transactionHash")
+        or receipt.get("blockNumber") is None
+        or receipt_gas_used(receipt) is None
+    ):
+        raise ChainError(f"cast send returned an unmined or incomplete receipt: {receipt!r}")
+    return receipt
 
 
 # Printed once per on-chain call so a CI log can be grepped for the real cost of every

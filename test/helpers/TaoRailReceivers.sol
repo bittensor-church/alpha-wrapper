@@ -101,3 +101,23 @@ contract ClaimDuringTransferReceiver {
 
     receive() external payable { }
 }
+
+contract ClaimReentrantReceiver {
+    AlphaVault private immutable vault;
+    uint256 private immutable tokenId;
+    bytes public reentryError;
+    bool public reentrySucceeded;
+
+    constructor(AlphaVault target, uint256 id) {
+        vault = target;
+        tokenId = id;
+    }
+
+    receive() external payable {
+        try vault.claimTao(tokenId, payable(address(this))) {
+            reentrySucceeded = true;
+        } catch (bytes memory reason) {
+            reentryError = reason;
+        }
+    }
+}

@@ -57,8 +57,7 @@ def _submit(client, call, signer_uri: str = "//Alice") -> str:
 
 
 def _sudo(client, call):
-    """Wrap `call` in root origin. The inner call is encoded against the runtime
-    first, because sudo carries an encoded call rather than a builder."""
+    """Encode an administrative call for submission through Sudo."""
     return _sdk().calls.Sudo.sudo(call=client.compose(call))
 
 
@@ -161,10 +160,7 @@ def toggle_transfer(
 def set_admin_freeze_window(
     window: int, *, chain_endpoint: str = config.CHAIN_ENDPOINT,
 ) -> str:
-    """Set the global admin freeze window via Sudo. On the fast-runtime localnet
-    the window equals the tempo, so owner/root hyperparameter writes are only
-    accepted near each subnet epoch boundary and otherwise silently miss. The
-    bootstrap sets the window to 0 so those sudo writes apply on the first try."""
+    """Set and verify the administrative update window used by scenario setup."""
     with _connect(chain_endpoint) as client:
         block_hash = _submit(client, _sudo(
             client, _sdk().calls.AdminUtils.sudo_set_admin_freeze_window(window=window),
@@ -292,11 +288,7 @@ def associate_hotkey(
 def hotkey_is_registered(
     hotkey_ss58: str, netuid: int, *, chain_endpoint: str = config.CHAIN_ENDPOINT,
 ) -> bool:
-    """Whether `hotkey_ss58` currently has subnet membership on `netuid`.
-
-    Association and registration are deliberately separate runtime states: an
-    abandoned key only needs an Owner entry before stake can move from it.
-    """
+    """Whether `hotkey_ss58` currently has subnet membership on `netuid`."""
     with _connect(chain_endpoint) as client:
         value = client.query(
             _sdk().storage.SubtensorModule.IsNetworkMember, [hotkey_ss58, netuid],
@@ -304,16 +296,14 @@ def hotkey_is_registered(
     return bool(value)
 
 
-# The ownership map answers for every hotkey, so "nobody owns this" arrives as the
-# all-zero account rather than as an absent entry.
+# An unowned hotkey returns the zero account rather than an absent value; normalize it to an empty owner.
 UNOWNED_ACCOUNT = "5C4hrfjw9DjXZTzV3MwzrrAr9P1MJhSrvWGWqi1eSuyUpnhM"
 
 
 def hotkey_owner(
     hotkey_ss58: str, *, chain_endpoint: str = config.CHAIN_ENDPOINT,
 ) -> str:
-    """The coldkey recorded as owning `hotkey_ss58`, or "" when nobody does. This
-    record is what every stake operation checks the hotkey against."""
+    '''Return the hotkey owner, or "" when nobody owns it.'''
     with _connect(chain_endpoint) as client:
         value = client.query(_sdk().storage.SubtensorModule.Owner, [hotkey_ss58])
     owner = "" if value is None else str(value)

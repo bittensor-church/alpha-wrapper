@@ -59,7 +59,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         _simulateAlphaDeposit(alice, NETUID1, 100 ether);
         _wrap(alice, NETUID1);
 
-        uint256 total = _setVaultStakes(NETUID1, 60 ether, 0, 40 ether);
+        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, 60 ether, 0, 40 ether);
         // The 1e6 remainder is a sub-floor partial, refunded as shares.
         uint256 shares = _sharesForExactAssets(TOKEN1, 60 ether + 1e6, total);
 
@@ -95,7 +95,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         vm.snapshotGasLastCall("AlphaVaultLens", "claimableTaoOf");
     }
 
-    function test_gas_batchClaimableTaoOf_20Positions() public {
+    function test_gas_batchClaimableTaoOf_20RepeatedIds() public {
         _seedClaimableTao();
         uint256[] memory ids = new uint256[](20);
         for (uint256 i = 0; i < ids.length; i++) {
@@ -103,7 +103,21 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         }
 
         lens.batchClaimableTaoOf(alice, ids);
-        vm.snapshotGasLastCall("AlphaVaultLens", "batchClaimableTaoOf (20 positions)");
+        vm.snapshotGasLastCall("AlphaVaultLens", "batchClaimableTaoOf (20 repeated ids)");
+    }
+
+    function test_gas_batchClaimableTaoOf_20DistinctPositions() public {
+        uint256[] memory ids = new uint256[](20);
+        for (uint256 i; i < ids.length; ++i) {
+            uint256 netuid = 100 + i;
+            _registerSubnet(netuid, hotkey1);
+            _depositAndWrap(alice, netuid, 10e9);
+            ids[i] = vault.currentTokenId(netuid);
+            _donateToClone(vault.subnetClone(ids[i]), 3 ether);
+        }
+
+        lens.batchClaimableTaoOf(alice, ids);
+        vm.snapshotGasLastCall("AlphaVaultLens", "batchClaimableTaoOf (20 distinct positions)");
     }
 
     function _seedClaimableTao() private {

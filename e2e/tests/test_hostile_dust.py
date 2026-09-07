@@ -20,7 +20,7 @@ from alpha_e2e.substrate import h160_to_ss58, h160_to_substrate_b32
 
 
 @pytest.mark.scenario
-def test_hostile_dust(env):
+def test_foreign_dust_is_absorbed_without_blocking_holder_flows(env):
     chain_min_stake = env.chain_min_stake_tao()
     print(f"  chain minimum stake = {chain_min_stake} RAO")
 

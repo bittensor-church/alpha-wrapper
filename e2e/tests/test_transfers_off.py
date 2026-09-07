@@ -22,7 +22,7 @@ from alpha_e2e.substrate import h160_to_ss58, h160_to_substrate_b32
 
 
 @pytest.mark.scenario
-def test_transfers_off(env):
+def test_disabling_alpha_transfers_preserves_both_tao_exit_rails(env):
     # --- Phase 6: seed a wrapped position in the deposit clone (transfers ON) ---
     position_netuid = env.netuids[0]
     position_token_id = env.token_ids[0]

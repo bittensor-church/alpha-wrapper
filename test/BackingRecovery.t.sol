@@ -5,7 +5,6 @@ import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { AlphaVaultLens } from "src/AlphaVaultLens.sol";
 import { VaultReads } from "src/libraries/VaultReads.sol";
-import { VaultMath } from "src/libraries/VaultMath.sol";
 import {
     BackingShortfall,
     BackingUnchanged,
@@ -147,7 +146,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
         assertTrue(lens.isBackingIntact(TOKEN1), "the found alpha accounts for the loss");
         assertEq(lens.frozenUntil(TOKEN1), 0, "finding it ends the window");
-        assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "backing whole after recovery");
+        assertEq(lens.totalStake(TOKEN1), 30 ether, "backing whole after recovery");
         assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey1, "and the alpha is back where the slot expects it");
     }
 
@@ -160,7 +159,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.recoverStray(TOKEN1, tip);
 
         assertTrue(lens.isBackingIntact(TOKEN1), "the watcher-supplied source accounts for the loss");
-        assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "backing whole again");
+        assertEq(lens.totalStake(TOKEN1), 30 ether, "backing whole again");
     }
 
     function test_RecoverStray_WaitsForAnOutsiderToClaimTheAbandonedKey() public {
@@ -273,7 +272,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vm.prank(bob);
         vault.recoverStray(TOKEN1, hotkey4);
         assertTrue(lens.isBackingIntact(TOKEN1), "both lumps are home");
-        assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "with nothing lost in routing");
+        assertEq(lens.totalStake(TOKEN1), 30 ether, "with nothing lost in routing");
     }
 
     function test_RecoverStray_AimsACoveringSourceAtTheLargestShortSlot() public {
@@ -324,7 +323,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         }
 
         assertTrue(lens.isBackingIntact(TOKEN1), "every loss is healed");
-        assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "and the whole deposit is accounted for");
+        assertEq(lens.totalStake(TOKEN1), 30 ether, "and the whole deposit is accounted for");
     }
 
     function test_RecoverStray_HealsALossNobodyRecorded() public {
@@ -352,7 +351,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.recoverStray(TOKEN1, hotkey4);
 
         assertTrue(lens.isBackingIntact(TOKEN1), "the loss is healed");
-        assertApproxEqAbs(lens.totalStake(TOKEN1), 32 ether, 0.01 ether, "and the emissions came home with the lump");
+        assertEq(lens.totalStake(TOKEN1), 32 ether, "and the emissions came home with the lump");
     }
 
     function test_RecoveryWindow_SetAtDeploymentDrivesTheDeadline() public {
@@ -376,7 +375,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
     }
 
     /// @dev This fixture explicitly finalizes through `syncBacking` before rebalancing.
-    function test_RebalanceAfterTheWindow_WritesTheLossOff() public {
+    function test_FinalizedBackingLoss_AllowsRebalancingAndDeposits() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _buildSwapTrail(NETUID1, hotkey1, 2);
         _runOutRecoveryWindow(TOKEN1);
@@ -402,7 +401,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.recoverStray(TOKEN1, hotkey4);
 
         assertTrue(lens.isBackingIntact(TOKEN1), "the alpha came home in the overtime");
-        assertApproxEqAbs(lens.totalStake(TOKEN1), 30 ether, 0.01 ether, "and the backing is whole again");
+        assertEq(lens.totalStake(TOKEN1), 30 ether, "and the backing is whole again");
     }
 
     function test_LateFoundAlpha_IsAWindfallForTheCurrentCohort() public {
@@ -420,7 +419,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vm.prank(alice);
         vault.recoverStray(TOKEN1, hotkey4);
 
-        assertApproxEqAbs(lens.totalStake(TOKEN1), navBefore + lost, 0.01 ether, "the find is new backing");
+        assertEq(lens.totalStake(TOKEN1), navBefore + lost, "the find is new backing");
         (uint256 bobsAlpha,) = lens.previewUnwrap(TOKEN1, bobShares);
         assertGt(bobsAlpha, 10 ether, "and it belongs to whoever holds shares now");
         assertEq(vault.balanceOf(alice, TOKEN1), 0, "not to the cohort that bore the loss");
@@ -615,7 +614,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         recapitalizerGain = recapitalizerValueAfter - cohorts.recapitalizerValueBefore;
         assertGe(
             recapitalizerGain,
-            (recovered * cohorts.recapitalizerShares) / (cohorts.supplyAtRecovery + VaultMath.VIRTUAL_SHARES),
+            (recovered * cohorts.recapitalizerShares) / (cohorts.supplyAtRecovery + 1e9),
             "the late cohort receives its pro-rata share of the returned balance"
         );
     }

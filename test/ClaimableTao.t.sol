@@ -3,7 +3,9 @@ pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { ClaimBelowNativePrecision, SupplyCapExceeded, ZeroAddress, ZeroAmount } from "src/VaultErrors.sol";
-import { ClaimDuringTransferReceiver } from "./helpers/TaoRailReceivers.sol";
+import { ClaimDuringTransferReceiver, RevertingReceiver, ClaimReentrantReceiver } from "./helpers/TaoRailReceivers.sol";
+import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import { Address } from "@openzeppelin/contracts/utils/Address.sol";
 
 contract ClaimableTaoTest is AlphaVaultTestBase {
     event TaoClaimed(address indexed user, uint256 indexed tokenId, address recipient, uint256 amount);
@@ -143,6 +145,83 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
         vm.expectRevert(ZeroAddress.selector);
         vm.prank(alice);
         vault.claimTao(TOKEN1, payable(address(0)));
+    }
+
+    function test_ClaimToAnotherRecipient_PaysThemAndDebitsOnlyTheHolder() public {
+        _depositAndWrap(alice, NETUID1, DEPOSIT);
+        _donateToTokenClone(TOKEN1, 5 ether);
+        uint256 quote = lens.claimableTaoOf(alice, TOKEN1);
+        vm.deal(alice, 2 ether);
+        vm.deal(bob, 3 ether);
+        uint256 aliceBefore = alice.balance;
+        uint256 bobBefore = bob.balance;
+
+        vm.prank(alice);
+        vault.claimTao(TOKEN1, payable(bob));
+
+        assertEq(alice.balance, aliceBefore);
+        assertEq(bob.balance - bobBefore, quote);
+        assertApproxEqAbs(bob.balance - bobBefore, 5 ether, NATIVE_TRANSFER_QUANTUM);
+        assertEq(lens.claimableTaoOf(alice, TOKEN1), 0);
+        assertEq(lens.claimableTaoOf(bob, TOKEN1), 0, "recipient acquires no entitlement");
+    }
+
+    function test_RejectedClaim_PreservesCreditForAnotherRecipient() public {
+        _depositAndWrap(alice, NETUID1, DEPOSIT);
+        _donateToTokenClone(TOKEN1, 5 ether);
+        _touch(alice, TOKEN1);
+        RevertingReceiver receiver = new RevertingReceiver();
+        uint256 credit = vault.claimableTao(TOKEN1, alice);
+        uint256 liability = vault.taoLiability(TOKEN1);
+        uint256 cloneBalance = vault.subnetClone(TOKEN1).balance;
+
+        vm.expectRevert(Address.FailedInnerCall.selector);
+        vm.prank(alice);
+        vault.claimTao(TOKEN1, payable(address(receiver)));
+
+        assertEq(vault.claimableTao(TOKEN1, alice), credit);
+        assertEq(vault.taoLiability(TOKEN1), liability);
+        assertEq(vault.subnetClone(TOKEN1).balance, cloneBalance);
+        vm.prank(alice);
+        vault.claimTao(TOKEN1, payable(bob));
+        assertApproxEqAbs(bob.balance, 5 ether, NATIVE_TRANSFER_QUANTUM);
+    }
+
+    function test_ClaimReceiver_CannotReenterThePayout() public {
+        _depositAndWrap(alice, NETUID1, DEPOSIT);
+        _donateToTokenClone(TOKEN1, 5 ether);
+        ClaimReentrantReceiver receiver = new ClaimReentrantReceiver(vault, TOKEN1);
+
+        vm.prank(alice);
+        vault.claimTao(TOKEN1, payable(address(receiver)));
+
+        assertEq(receiver.reentryError(), abi.encodeWithSelector(ReentrancyGuard.ReentrancyGuardReentrantCall.selector));
+        assertFalse(receiver.reentrySucceeded());
+        assertApproxEqAbs(address(receiver).balance, 5 ether, NATIVE_TRANSFER_QUANTUM);
+    }
+
+    function test_InterleavedBatchTransfer_KeepsEachTokensHistoricalDonations() public {
+        _depositAndWrap(alice, NETUID1, DEPOSIT);
+        _depositAndWrap(alice, NETUID2, DEPOSIT);
+        _donateToTokenClone(TOKEN1, 3 ether);
+        _donateToTokenClone(TOKEN2, 7 ether);
+        uint256[] memory ids = new uint256[](3);
+        ids[0] = TOKEN1;
+        ids[1] = TOKEN2;
+        ids[2] = TOKEN1;
+        uint256[] memory amounts = new uint256[](3);
+        amounts[0] = vault.balanceOf(alice, TOKEN1) / 2;
+        amounts[1] = vault.balanceOf(alice, TOKEN2);
+        amounts[2] = amounts[0];
+        vm.prank(alice);
+        vault.setApprovalForAll(bob, true);
+        vm.prank(bob);
+        vault.safeBatchTransferFrom(alice, bob, ids, amounts, "");
+
+        assertApproxEqAbs(_claimQuotedAmount(alice, TOKEN1), 3 ether, NATIVE_TRANSFER_QUANTUM);
+        assertApproxEqAbs(_claimQuotedAmount(alice, TOKEN2), 7 ether, NATIVE_TRANSFER_QUANTUM);
+        assertEq(lens.claimableTaoOf(bob, TOKEN1), 0);
+        assertEq(lens.claimableTaoOf(bob, TOKEN2), 0);
     }
 
     function test_ClaimAfterFullExit_StillPays() public {

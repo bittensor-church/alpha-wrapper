@@ -1,17 +1,8 @@
-"""Scenario: a holder stranded by a hotkey swap can still get their alpha out.
+"""A holder can exit after an unrelated account re-associates an abandoned hotkey.
 
-A hotkey swap that keeps its stake carries the validator's identity to a new key
-across every subnet and leaves the vault's alpha behind under the old one, which
-the chain no longer records an owner for. The vault can still see that alpha and
-still counts it - the backing is exactly where its record expects, so nothing is
-missing and no recovery window opens - but every stake operation naming the
-abandoned key is refused, so nobody can exit.
-
-What matters is that this is not where the money stops. Association of a hotkey
-is free for the taking once nobody owns it, so an account with no part in the
-vault, the subnet or the swap can make the position movable again. The old key
-does not need to be registered on the subnet: an Owner entry alone satisfies the
-runtime's stake-operation guard. The exit that was refused then pays out in full.
+The staking precompile initially reports the position's alpha but refuses its
+transfer. After association, the same wrapper exit must deliver alpha and burn
+only the requested shares, without registering the hotkey on the subnet.
 """
 import pytest
 
@@ -46,12 +37,11 @@ def test_stranded_holder_exits_after_watcher_associates_without_registration(env
     assert parked > 0, "the setup left no stake on the hotkey about to be stranded"
 
     successor_ss58 = extrinsics.keypair_ss58("//ParkedSuccessor")
-    # Only a runtime lacking the call may skip; a failed dispatch on one that knows it must
-    # fail the scenario, or the suite's one test goes green with no coverage.
+    # Skip only when the setup operation is unavailable; a failed operation must fail the test.
     try:
         extrinsics.swap_hotkey_keep_stake(hotkey_ss58, successor_ss58)
     except AttributeError as error:
-        pytest.skip(f"this runtime cannot strand stake under an unowned hotkey: {error}")
+        pytest.skip(f"the setup API cannot strand stake under an unowned hotkey: {error}")
 
     # The identity moved and the owner went with it; the alpha stayed put.
     assert extrinsics.hotkey_owner(hotkey_ss58) == "", "the swap left the hotkey owned"
@@ -75,8 +65,7 @@ def test_stranded_holder_exits_after_watcher_associates_without_registration(env
         "unwrap(uint256,uint256,bytes32,uint256)", token_id, exit_shares, env.wrapper_substrate_coldkey, 1,
     )
 
-    # Anyone may take an abandoned hotkey. Funding the claimant here keeps the test
-    # off whatever the chainspec happened to endow.
+    # Fund the claimant explicitly so the scenario does not depend on its initial balance.
     stranger_ss58 = extrinsics.keypair_ss58(STRANGER_URI)
     extrinsics.fund_account(stranger_ss58, STRANGER_FUNDING_RAO)
     extrinsics.associate_hotkey(hotkey_ss58, signer_uri=STRANGER_URI)
@@ -92,6 +81,8 @@ def test_stranded_holder_exits_after_watcher_associates_without_registration(env
     )
 
     # The same exit, now paid: the holder's own coldkey receives the alpha.
+    quoted_alpha, _ = env.preview_unwrap(token_id, exit_shares)
+    assert quoted_alpha > config.ROUNDING_DUST_TOTAL_RAO, "the retry must deliver a meaningful payout"
     delivered_before = env.total_stake_across(env.wrapper_substrate_coldkey, netuid, hotkeys)
     env.vault_send(
         2_500_000, "Parked: the exit should succeed once the hotkey is owned again",
@@ -99,5 +90,7 @@ def test_stranded_holder_exits_after_watcher_associates_without_registration(env
     )
     delivered = env.total_stake_across(env.wrapper_substrate_coldkey, netuid, hotkeys) - delivered_before
 
-    assert delivered > 0, "the exit burned shares without delivering alpha"
+    assert delivered >= quoted_alpha - config.ROUNDING_DUST_TOTAL_RAO, (
+        f"the retry delivered {delivered} alpha against a quote of {quoted_alpha}"
+    )
     assert env.vault_shares(token_id) == shares - exit_shares, "the exit burned the wrong shares"
