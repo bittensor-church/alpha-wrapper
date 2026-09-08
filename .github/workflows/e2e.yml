@@ -38,6 +38,7 @@ jobs:
           - tests/test_min_stake_liveness.py
           - tests/test_claimable_tao.py
           - tests/test_parked_stake.py
+          - tests/test_parked_recovery.py
 
     services:
       subtensor:

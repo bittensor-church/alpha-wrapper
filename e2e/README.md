@@ -41,8 +41,10 @@ Scenario files in `tests/` cover:
   minimums, top-ups, dust and repeated position changes.
 - `test_hostile_dust.py`: third-party stake donations.
 - `test_claimable_tao.py`: forced-sale proceeds and holder entitlements.
-- `test_parked_stake.py`: ownerless parked stake; an unrelated watcher associates
-  the hotkey without subnet re-registration, restoring the tested exit.
+- `test_parked_stake.py`: a funded hotkey left without an owner; partial exits wait
+  for the attesters to replace the name, then the vault claims the key itself.
+- `test_parked_recovery.py`: a stranger cuts the trail behind a rename; the watcher
+  parks the position, exits pay from the parking hotkey, a new attestation releases.
 
 Each module's docstring describes its sequence. These scenarios exercise specific
 recovery conditions, not an unconditional exit guarantee; see the
