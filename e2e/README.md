@@ -49,11 +49,16 @@ Scenario files in `tests/` cover:
   its own balance, the other keeps trading, and each releases on its own attestation.
 - `test_subnet_generation.py`: a rewritten registration block leaves the token and its
   exits untouched; dissolving and re-registering the netuid yields a new token.
+- `test_dust_exit.py`: on a pool deepened to where most subnets trade, a leftover the
+  pool refuses to quote makes the plain TAO exit burn its gas; the exit that excludes
+  that slot pays partial and full exits from live backing on a hotkey outside the
+  metagraph, which no emissions touch.
 
 Each module's docstring describes its sequence. These scenarios exercise specific
 recovery conditions, not an unconditional exit guarantee; see the
 [design](../docs/hotkey-swaps.md).
 
-Chainless harness tests are `test_substrate.py`, `test_chain_unit.py` and
-`test_checks_unit.py`. Bootstrap creates three subnets, nine validators, the
-contracts and funded test accounts once per scenario process.
+Chainless harness tests are `test_substrate.py`, `test_chain_unit.py`,
+`test_checks_unit.py`, `test_environment_unit.py` and `test_plan_tao_exit_unit.py`.
+Bootstrap creates three subnets, nine validators, the contracts and funded test
+accounts once per scenario process.

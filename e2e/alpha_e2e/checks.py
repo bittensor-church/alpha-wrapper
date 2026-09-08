@@ -47,6 +47,14 @@ def assert_gas_within(receipt: dict, bound: int, message: str) -> None:
     assert gas_used <= bound, f"{message} (consumed {gas_used} gas, bound {bound})"
 
 
+def assert_gas_exceeds(receipt: dict, bound: int, message: str) -> None:
+    """Assert the transaction consumed more than `bound` gas: the signature of a dispatch
+    the chain refused after the vault forwarded its gas."""
+    gas_used = chain.receipt_gas_used(receipt)
+    assert gas_used is not None, f"{message}: could not parse gasUsed"
+    assert gas_used > bound, f"{message} (consumed {gas_used} gas, bound {bound})"
+
+
 def assert_positive_gain(balance_before_wei: int, balance_after_wei: int, message: str) -> int:
     """Assert a strictly positive wei delta and return it."""
     gain = balance_after_wei - balance_before_wei

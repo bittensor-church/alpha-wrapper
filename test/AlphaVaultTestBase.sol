@@ -352,6 +352,10 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         subnet.setRegisteredAt(uint16(netuid), uint64(block.number) + 500);
     }
 
+    function _setTransfersEnabled(uint256 netuid, bool value) internal {
+        MockSubnetPrecompile(SUBNET_PRECOMPILE).setTransfersEnabled(uint16(netuid), value);
+    }
+
     function _setDissolving(uint256 netuid, bool value) internal {
         MockSubnetPrecompile(SUBNET_PRECOMPILE).setDissolving(uint16(netuid), value);
     }

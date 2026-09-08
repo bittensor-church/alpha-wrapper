@@ -62,3 +62,25 @@ def test_receipt_gas_used_is_none_when_unparseable():
     assert chain.receipt_gas_used({}) is None
     assert chain.receipt_gas_used({"gasUsed": None}) is None
     assert chain.receipt_gas_used({"gasUsed": "not-a-number"}) is None
+
+
+
+def _probe(monkeypatch, returncode: int, stdout: str = "", stderr: str = ""):
+    monkeypatch.setattr(chain, "run", lambda cmd, **kwargs: CompletedProcess(cmd, returncode, stdout, stderr))
+
+
+def test_quote_returns_the_pool_answer(monkeypatch):
+    _probe(monkeypatch, 0, stdout="1234\n")
+    assert chain.quote_alpha_for_tao(2, 5) == 1234
+
+
+def test_quote_reports_a_refusal_as_none(monkeypatch):
+    refusal = 'Error: server returned an error response: error code -32603: evm error: Other("ReservesTooLow")'
+    _probe(monkeypatch, 1, stderr=refusal)
+    assert chain.quote_alpha_for_tao(2, 1) is None
+
+
+def test_quote_raises_on_a_transport_failure(monkeypatch):
+    _probe(monkeypatch, 1, stderr="error sending request for url: connection refused")
+    with pytest.raises(chain.ChainError):
+        chain.quote_alpha_for_tao(2, 1)

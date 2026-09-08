@@ -5,11 +5,18 @@ bootstrap.build_environment() with typed on-chain getters (stakes, shares,
 prices, quotes) and scenario actions (vault sends, deposits, share transfers,
 validator rotations, revert assertions).
 """
+import re
 import time
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from . import chain, config, extrinsics, substrate, validators
+
+
+def largest_burn_leaving_alpha(total: int, supply: int) -> int:
+    """The most shares whose alpha payout, `shares * (total + 1) // (supply + 1e9)`, stays below
+    `total`, and never the whole supply, so the position outlives the burn."""
+    return min(supply - 1, (total * (supply + 10**9) - 1) // (total + 1))
 
 
 def alpha_to_tao_quote(netuid: int, alpha_rao: int, block: Optional[int] = None) -> int:
@@ -170,6 +177,15 @@ class Environment:
             self.lens_address, "previewWrap(uint256,uint256)(uint256)", token_id, assets,
         ))
 
+    def recorded_slot_index(self, token_id: int, hotkey_pubkey: str) -> int:
+        """Index of the recorded slot whose active key is `hotkey_pubkey`; bit `index` of a
+        TAO exit's mask names it."""
+        printout = chain.cast_call_raw(
+            self.vault_address, "recordedSlots(uint256)((bytes32,bytes32,uint256)[])", token_id,
+        )
+        actives = re.findall(r"0x[0-9a-fA-F]{64}", printout)[1::2]
+        return [key.lower() for key in actives].index(hotkey_pubkey.lower())
+
     def preview_unwrap(self, token_id: int, shares: int) -> Tuple[int, int]:
         """(alpha RAO, native-TAO wei) legs an unwrap of `shares` would pay out."""
         lines = chain.cast_call_lines(
@@ -201,6 +217,10 @@ class Environment:
         return int(chain.cast_call(
             config.ALPHA_PRECOMPILE, "getAlphaInPool(uint16)(uint64)", netuid,
         ))
+
+    def tao_quote(self, netuid: int, alpha_rao: int) -> Optional[int]:
+        """The pool's quote for selling `alpha_rao`, or None when it refuses; free through eth_call."""
+        return chain.quote_alpha_for_tao(netuid, alpha_rao)
 
     def current_token_id(self, netuid: int) -> int:
         return int(chain.cast_call(self.vault_address, "currentTokenId(uint256)(uint256)", netuid))

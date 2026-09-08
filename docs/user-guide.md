@@ -61,6 +61,20 @@ There is no TAO market-sale preview. `minTaoOut` bounds execution proceeds in we
 Unsold alpha is refunded as shares, except that a burn of the entire token supply
 discards a sub-floor remainder. A sale yielding nothing reverts `WithdrawTooSmall`.
 
+A recorded slot the pool will not pay for, such as a few RAO left behind by
+rounding, makes the plain call fail, and a refused chain call burns the gas it
+was given. `unwrapForTao(tokenId, shares, minTaoOut, excludedSlots)` sells
+around it: bit `i` of the mask leaves out slot `i` of `recordedSlots(tokenId)`
+as the record stands when the call runs. Your entitlement still counts every
+slot, and what an excluded slot would have sold comes back as shares. Before a
+TAO exit, quote each recorded slot's balance with `simSwapAlphaForTao` on the
+alpha precompile through `eth_call`, where a refused quote costs nothing,
+exclude the slots that fail or quote zero, then dry-run the masked call the
+same way; `scripts/plan_tao_exit.py` does exactly this, quoting each slot from
+the key the vault would sell it from. Quotes are taken one at a time and earlier
+sales move the pool, so the dry run is the real check, and a state change
+between it and inclusion can still call for one retry.
+
 A full-supply burn uses floor-exempt full stake drains. This is not an unconditional
 exit guarantee: ownership, backing, pool execution and slippage checks still apply.
 A small holder with co-holders may need a top-up or combine shares with another

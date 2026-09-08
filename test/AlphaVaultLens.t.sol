@@ -4,7 +4,13 @@ pragma solidity ^0.8.20;
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { AlphaVaultLens } from "src/AlphaVaultLens.sol";
-import { Parked, SharePriceBelowPrecision, ShortfallOnFile, ZeroAddress } from "src/VaultErrors.sol";
+import {
+    AlphaTransfersDisabled,
+    Parked,
+    SharePriceBelowPrecision,
+    ShortfallOnFile,
+    ZeroAddress
+} from "src/VaultErrors.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
@@ -156,6 +162,18 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
         _reattestCurrentSet(NETUID1);
         assertFalse(lens.awaitingAttestation(TOKEN1), "a newer attestation releases it");
         assertGt(lens.previewWrap(TOKEN1, 1 ether), 0, "and the mint quote answers again");
+    }
+
+    function test_DisabledTransfers_RefuseTheAlphaQuotesOnly() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _setTransfersEnabled(NETUID1, false);
+
+        bytes memory refusal = abi.encodeWithSelector(AlphaTransfersDisabled.selector, uint16(NETUID1));
+        vm.expectRevert(refusal);
+        lens.previewWrap(TOKEN1, 1 ether);
+        vm.expectRevert(refusal);
+        lens.previewUnwrap(TOKEN1, 1 ether);
+        assertGt(lens.sharePrice(TOKEN1), 0, "the position still prices");
     }
 
     function test_DeclaredShortfall_ReadsAsNotIntactUntilSynced() public {

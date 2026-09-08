@@ -32,6 +32,7 @@ import {
     RecoveryIncomplete,
     ShortfallOnFile,
     SlippageExceeded,
+    SlotMaskOutOfRange,
     SubnetNotRegistered,
     SupplyCapExceeded,
     SwappedHotkeyStillAttested,
@@ -175,6 +176,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // forge-lint: disable-next-line(unsafe-typecast)
         uint16 nid = uint16(netuid);
         VaultReads.requireNotDissolving(nid);
+        VaultReads.requireTransfersEnabled(nid);
         (bytes32[] memory hotkeys, uint16[] memory weights, bytes32[] memory owners) =
             VaultReads.resolveValidators(validatorRegistry, nid);
         uint256 chosenIndex = VaultMath.indexOf(hotkeys, chosenHotkey);
@@ -197,17 +199,14 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             revert DepositTooSmall();
         }
 
+        uint256 heldBefore = IStaking(STAKING_PRECOMPILE).getStake(chosenHotkey, destColdkey, nid);
         // A fresh deposit can carry rotated-out dust through above-floor consolidation hops.
         _flush(userClone, chosenHotkey, destColdkey, nid, totalDeposit);
-        // Mint pricing reads only active keys; move the deposit onto one before pricing.
+        // Mint pricing reads only active keys; move the deposit onto one before pricing. Anything else
+        // sitting on a superseded name is a stray for recovery, not part of this mint.
         if (!VaultMath.contains(actives, chosenHotkey)) {
-            _move(
-                clone,
-                chosenHotkey,
-                actives[chosenIndex],
-                nid,
-                IStaking(STAKING_PRECOMPILE).getStake(chosenHotkey, destColdkey, netuid)
-            );
+            uint256 landed = IStaking(STAKING_PRECOMPILE).getStake(chosenHotkey, destColdkey, nid) - heldBefore;
+            _move(clone, chosenHotkey, actives[chosenIndex], nid, landed);
         }
         VaultAllocation.consolidateRotatedStake(clone, destColdkey, nid, backing.keys, actives, alphaPriceE18, false);
         VaultAllocation.rebalance(tokenId, clone, actives, weights, destColdkey, alphaPriceE18);
@@ -254,6 +253,23 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ///      Full drains bypass the stake minimum, not ownership, backing or pool checks.
     /// @param minTaoOut Minimum native TAO in EVM wei (18 decimals, unlike alpha's 9).
     function unwrapForTao(uint256 tokenId, uint256 shares, uint256 minTaoOut) external nonReentrant {
+        _unwrapForTao(tokenId, shares, minTaoOut, 0);
+    }
+
+    /// @notice `unwrapForTao` that leaves the recorded slots named in `excludedSlots` unsold.
+    /// @dev Bit `i` excludes slot `i` of `recordedSlots(tokenId)` as the record stands at execution.
+    ///      The pool refuses a sale it cannot pay for, and a refused precompile call burns all the gas
+    ///      forwarded to it, so callers quote each slot off chain and exclude the ones the pool turns
+    ///      down. Entitlement still counts every slot; what an excluded slot would have sold refunds
+    ///      as shares under the usual rules.
+    function unwrapForTao(uint256 tokenId, uint256 shares, uint256 minTaoOut, uint256 excludedSlots)
+        external
+        nonReentrant
+    {
+        _unwrapForTao(tokenId, shares, minTaoOut, excludedSlots);
+    }
+
+    function _unwrapForTao(uint256 tokenId, uint256 shares, uint256 minTaoOut, uint256 excludedSlots) private {
         if (shares == 0) revert ZeroAmount();
         if (balanceOf(msg.sender, tokenId) < shares) revert InsufficientShares();
         address clone = subnetClone[tokenId];
@@ -263,6 +279,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32 vaultColdkey = VaultReads.coldkeyOf(clone);
         (, VaultReads.Backing memory backing) = _openBacking(tokenId, vaultColdkey, netuid);
         bytes32[] memory hotkeys = backing.keys;
+        if (excludedSlots >> hotkeys.length != 0) revert SlotMaskOutOfRange();
         uint256[] memory balances = backing.balances;
         uint256 total = backing.total;
         if (total == 0) revert NothingToUnwrap();
@@ -277,8 +294,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 balanceBefore = clone.balance;
         uint256 dustThresholdTao = IStaking(STAKING_PRECOMPILE).getNominatorMinRequiredStake();
         // Full drains precede partials so a shrunken partial cannot consume a later floor-exempt drain.
-        uint256 remaining = _sellRound(clone, netuid, hotkeys, balances, assets, dustThresholdTao, false);
-        _sellRound(clone, netuid, hotkeys, balances, remaining, dustThresholdTao, true);
+        uint256 remaining = _sellRound(clone, netuid, hotkeys, balances, excludedSlots, assets, dustThresholdTao, false);
+        _sellRound(clone, netuid, hotkeys, balances, excludedSlots, remaining, dustThresholdTao, true);
 
         uint256 taoOut = clone.balance - balanceBefore;
         if (taoOut == 0) revert WithdrawTooSmall();
@@ -332,6 +349,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint16 netuid,
         uint256 minAlphaOut
     ) private {
+        VaultReads.requireTransfersEnabled(netuid);
         bytes32 coldkey = VaultReads.coldkeyOf(clone);
         (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _openBacking(tokenId, coldkey, netuid);
         bytes32[] memory hotkeys;
@@ -446,7 +464,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
         _ensureMailboxClone(msg.sender, netuid);
         // forge-lint: disable-next-line(unsafe-typecast)
-        _flush(predicted, hotkey, destSubstrateColdkey, uint16(netuid), amount);
+        uint16 nid = uint16(netuid);
+        VaultReads.requireTransfersEnabled(nid);
+        _flush(predicted, hotkey, destSubstrateColdkey, nid, amount);
     }
 
     /// @param minTaoOut Minimum native TAO in EVM wei.
@@ -492,12 +512,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint16 netuid,
         bytes32[] memory hotkeys,
         uint256[] memory balances,
+        uint256 excludedSlots,
         uint256 remaining,
         uint256 dustThresholdTao,
         bool includePartials
     ) private returns (uint256) {
         for (uint256 i; i < hotkeys.length && remaining != 0;) {
-            uint256 balance = balances[i];
+            uint256 balance = (excludedSlots >> i) & 1 == 0 ? balances[i] : 0;
             uint256 chunk;
             if (balance <= remaining) {
                 chunk = balance;

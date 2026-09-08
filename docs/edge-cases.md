@@ -28,15 +28,18 @@ A refund on an unwrapped deposit's mailbox is collected with
 ## Disabled alpha transfers
 
 Disabling alpha transfers blocks wrapping, live alpha exits and alpha mailbox
-reclaims. Their reverts preserve shares and stake. `unwrapForTao` and
-`reclaimMailboxAlphaAsTao` unstake instead, so this setting does not block them;
-ownership, backing, minimums and pool execution still can.
+reclaims. The vault reads the switch first and reverts `AlphaTransfersDisabled`,
+so shares and stake are preserved and the caller keeps the gas the chain would
+have taken. `unwrapForTao` and `reclaimMailboxAlphaAsTao` unstake instead, so
+this setting does not block them; ownership, backing, minimums and pool
+execution still can.
 
 ## Minimum stake size and rounding
 
 The chain uses TAO-denominated minimums: higher for partial unstakes, lower for
-transfers and same-subnet moves. Only the higher minimum is exposed to the vault,
-so it uses that conservative floor. A precompile rejection consumes forwarded gas.
+transfers and same-subnet moves. The vault applies the higher one to every move
+as a conservative floor, so alpha worth less than it waits until it grows. A
+precompile rejection consumes forwarded gas.
 
 - Small deposits revert `DepositTooSmall`; top up the mailbox to retry.
 - Small alpha exits revert `WithdrawTooSmall`. Internal moves can instead fail
@@ -61,6 +64,15 @@ A dropped validator's dust can block consolidation if no balance is large enough
 to carry it. A later deposit can supply that balance because it lands before
 consolidation. A full-supply TAO exit avoids consolidation, subject to its own
 checks; neither route bypasses independent recovery restrictions.
+
+A slot the pool would not pay for makes the plain TAO exit fail and burn its gas.
+The exit that takes an exclusion mask sells the other slots and refunds the
+rest as shares; the user guide describes the pre-flight that finds such slots.
+
+The chain's root can raise the minimum a nominator may hold and sweep every
+smaller position into TAO. A vault slot swept that way arrives as TAO on the
+clone, claimable by holders, while the record reads short: the shortfall clock
+starts and the position parks after the window.
 
 ## Stray TAO and alpha
 

@@ -41,8 +41,20 @@ contract MockAlpha {
         _simQuoteSet[alpha] = true;
     }
 
+    mapping(uint64 => bool) private _simQuoteRefused;
+
+    /// @dev The chain refuses a quote it cannot fill and the refusal consumes every unit of forwarded gas.
+    function setSimSwapRefused(uint64 alpha, bool refused) external {
+        _simQuoteRefused[alpha] = refused;
+    }
+
     function simSwapAlphaForTao(uint16, uint64 alpha) external view returns (uint256) {
         require(!simSwapReverts, "MockAlpha: simSwap reverted");
+        if (_simQuoteRefused[alpha]) {
+            assembly {
+                invalid()
+            }
+        }
         if (_simQuoteSet[alpha]) return _simQuoteOverride[alpha];
         return MockStaking(STAKING_PRECOMPILE).quoteTaoOut(alpha);
     }

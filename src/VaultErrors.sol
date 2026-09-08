@@ -30,6 +30,10 @@ error BackingShortfall(uint16 netuid, bytes32 hotkey, uint256 tracked);
 error ShortfallOnFile();
 error BackingUnchanged();
 error NothingToRecover();
+/// @dev The subnet owner disabled alpha transfers; TAO exits and TAO mailbox reclaims still work.
+error AlphaTransfersDisabled(uint16 netuid);
+/// @dev A bit of the exclusion mask names a slot the record does not have.
+error SlotMaskOutOfRange();
 /// @dev The located balances must cover the whole recorded expectation before the position parks.
 error RecoveryIncomplete();
 /// @dev The position rests on the parking hotkey until the registry publishes a newer set.

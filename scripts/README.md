@@ -12,6 +12,7 @@ build the contracts before using them.
 | `get_validator_updates.py` | Registry updates |
 | `get_volumes.py` | Alpha/TAO exit metrics, optionally filtered by user |
 | `get_vault_state.py` | Token state and lens quotes |
+| `plan_tao_exit.py` | Pre-flight for a TAO exit: per-slot quotes, the exclusion mask, a dry run |
 
 `get_vault_state.py` requires `--lens-address` and `--vault-address`. Use a trusted
 lens: checking its `vault()` catches a mismatch, not fabricated quotes.

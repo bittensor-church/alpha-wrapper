@@ -6,11 +6,13 @@ import {
     InsufficientShares,
     NothingToUnwrap,
     SlippageExceeded,
+    SlotMaskOutOfRange,
     WithdrawTooSmall,
     ZeroAmount
 } from "src/VaultErrors.sol";
 import { MockAlpha } from "./mocks/MockAlpha.sol";
-import { CHAIN_MIN_STAKE } from "./mocks/MockStaking.sol";
+import { CHAIN_MIN_STAKE, MockStaking } from "./mocks/MockStaking.sol";
+import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 import {
     RefundRejectingReceiver,
@@ -26,6 +28,176 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
 
     function _depositForAlice(uint256 amount) internal returns (uint256 shares) {
         shares = _depositAndWrap(alice, NETUID1, amount);
+    }
+
+    function test_UnwrapForTao_IgnoresDisabledTransfers() public {
+        _setRemoveStakeRate(1, 1);
+        uint256 shares = _depositForAlice(100 ether);
+        _plantVaultStakes(NETUID1, 100 ether, 0, 0);
+        _setTransfersEnabled(NETUID1, false);
+
+        vault.rebalance(NETUID1);
+        assertGt(_getVaultStake(hotkey2, NETUID1), 0, "alignment still moves stake without transfers");
+        uint256 before = alice.balance;
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares / 2, 0);
+        assertEq(alice.balance - before, 50 ether, "and the TAO exit still pays");
+    }
+
+    // --- Excluding slots the pool would refuse ------------------------------------------------
+
+    /// @dev A refused quote or sale burns every unit of gas it is given; an excluded slot gets neither.
+    function test_UnwrapForTao_LeavesExcludedSlotsUntouched() public {
+        _setRemoveStakeRate(1, 1);
+        uint256 shares = _depositForAlice(100 ether);
+        _plantVaultStakes(NETUID1, 60 ether, 1, 40 ether);
+        MockAlpha(ALPHA_PRECOMPILE).setSimSwapRefused(1, true);
+        MockStaking(STAKING_PRECOMPILE).setRemoveStakeRevertsFor(hotkey2, true);
+        MockStaking(STAKING_PRECOMPILE).setConsumeAllGasOnFailure(true);
+        uint256 burn = shares * 70 / 100;
+        (uint256 assets,) = lens.previewUnwrap(TOKEN1, burn);
+
+        uint256 before = alice.balance;
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, burn, 0, 1 << 1);
+
+        assertEq(alice.balance - before, assets, "the entitlement sells from the other slots");
+        assertEq(_getVaultStake(hotkey2, NETUID1), 1, "the excluded slot is never touched");
+        assertEq(vault.balanceOf(alice, TOKEN1), shares - burn, "with nothing to refund");
+    }
+
+    function test_UnwrapForTao_FullExitRefundsAnExcludedSlotAsShares() public {
+        _setRemoveStakeRate(1, 1);
+        uint256 shares = _depositForAlice(100 ether);
+        _plantVaultStakes(NETUID1, 60 ether, 0, 40 ether);
+
+        uint256 before = alice.balance;
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares, 0, 1 << 2);
+
+        assertEq(alice.balance - before, 60 ether, "the allowed slot sells");
+        assertEq(_getVaultStake(hotkey3, NETUID1), 40 ether, "the excluded slot stays");
+        assertApproxEqAbs(_positionValue(alice), 40 ether, 1e9, "and its value comes back as shares");
+    }
+
+    function test_UnwrapForTao_PartialRefundKeepsCoHoldersWhole() public {
+        _setRemoveStakeRate(1, 1);
+        uint256 aliceShares = _depositForAlice(60 ether);
+        _depositAndWrap(bob, NETUID1, 40 ether);
+        _plantVaultStakes(NETUID1, 60 ether, 0, 40 ether);
+        _donateToClone(vault.subnetClone(TOKEN1), 4 ether);
+        uint256 bobValue = _positionValue(bob);
+        uint256 bobClaim = lens.claimableTaoOf(bob, TOKEN1);
+
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, aliceShares, 0, 1 << 0);
+
+        assertEq(_positionValue(bob), bobValue, "the co-holder's value is unchanged");
+        assertEq(lens.claimableTaoOf(bob, TOKEN1), bobClaim, "and so is the co-holder's TAO claim");
+        assertApproxEqAbs(_positionValue(alice), 20 ether, 1e9, "the unsold part came back as shares");
+    }
+
+    function test_RevertWhen_EveryFundedSlotIsExcluded() public {
+        _setRemoveStakeRate(1, 1);
+        uint256 shares = _depositForAlice(100 ether);
+        _plantVaultStakes(NETUID1, 60 ether, 0, 40 ether);
+
+        vm.prank(alice);
+        vm.expectRevert(WithdrawTooSmall.selector);
+        vault.unwrapForTao(TOKEN1, shares / 2, 0, (1 << 0) | (1 << 2));
+        assertEq(vault.balanceOf(alice, TOKEN1), shares, "shares intact");
+        assertEq(_getVaultStake(hotkey1, NETUID1), 60 ether, "and stake intact");
+    }
+
+    function test_RevertWhen_TheMaskNamesASlotTheRecordLacks() public {
+        _setRemoveStakeRate(1, 1);
+        uint256 shares = _depositForAlice(100 ether);
+
+        vm.prank(alice);
+        vm.expectRevert(SlotMaskOutOfRange.selector);
+        vault.unwrapForTao(TOKEN1, shares / 2, 0, 1 << 3);
+    }
+
+    function test_UnwrapForTao_ZeroMaskMatchesThePlainCall() public {
+        _setRemoveStakeRate(1, 1);
+        uint256 shares = _depositForAlice(100 ether);
+        _plantVaultStakes(NETUID1, 60 ether, 1, 40 ether);
+        uint256 before = alice.balance;
+        uint256 state = vm.snapshotState();
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares / 2, 0);
+        uint256 plainPayout = alice.balance - before;
+        uint256 plainShares = vault.balanceOf(alice, TOKEN1);
+        vm.revertToState(state);
+
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares / 2, 0, 0);
+
+        assertEq(alice.balance - before, plainPayout, "same payout");
+        assertEq(vault.balanceOf(alice, TOKEN1), plainShares, "same shares");
+    }
+
+    function test_UnwrapForTao_MaskFollowsTheSlotToItsSuccessor() public {
+        _setRemoveStakeRate(1, 1);
+        uint256 shares = _depositForAlice(90 ether);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        uint256 successorBalance = _getVaultStake(hotkey4, NETUID1);
+        uint256 othersBefore = _getVaultStake(hotkey2, NETUID1) + _getVaultStake(hotkey3, NETUID1);
+        uint256 taoBefore = alice.balance;
+
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares / 2, 0, 1 << 0);
+
+        assertEq(_getVaultStake(hotkey4, NETUID1), successorBalance, "the key the slot resolved to is untouched");
+        uint256 othersAfter = _getVaultStake(hotkey2, NETUID1) + _getVaultStake(hotkey3, NETUID1);
+        assertEq(othersBefore - othersAfter, alice.balance - taoBefore, "the whole sale came from the other slots");
+    }
+
+    function test_UnwrapForTao_MaskFollowsTheRecordOrderAtExecution() public {
+        _setRemoveStakeRate(1, 1);
+        uint256 shares = _depositForAlice(90 ether);
+        _setValidators(
+            NETUID1, _hotkeys(hotkey2, hotkey1, hotkey3), _weights(NETUID1_BPS_HK1, NETUID1_BPS_HK2, NETUID1_BPS_HK3)
+        );
+        vault.rebalance(NETUID1);
+        assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey2, "the record now leads with hotkey2");
+        uint256 firstSlot = _getVaultStake(hotkey2, NETUID1);
+
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares / 4, 0, 1 << 0);
+
+        assertEq(_getVaultStake(hotkey2, NETUID1), firstSlot, "bit 0 excludes whichever slot comes first now");
+    }
+
+    function testFuzz_UnwrapForTao_SellsOnlyTheAllowedSlots(uint256 mask, uint256 burnBps) public {
+        _setRemoveStakeRate(1, 1);
+        uint256 shares = _depositForAlice(100 ether);
+        _plantVaultStakes(NETUID1, 50 ether, 30 ether, 20 ether);
+        mask = bound(mask, 0, 7);
+        uint256 burn = shares * bound(burnBps, 1000, 9000) / 10_000;
+        bytes32[3] memory keys = [hotkey1, hotkey2, hotkey3];
+        uint256[3] memory before;
+        for (uint256 i; i < 3; ++i) {
+            before[i] = _getVaultStake(keys[i], NETUID1);
+        }
+        uint256 taoBefore = alice.balance;
+
+        vm.prank(alice);
+        if (mask == 7) {
+            vm.expectRevert(WithdrawTooSmall.selector);
+            vault.unwrapForTao(TOKEN1, burn, 0, mask);
+            return;
+        }
+        vault.unwrapForTao(TOKEN1, burn, 0, mask);
+
+        uint256 sold;
+        for (uint256 i; i < 3; ++i) {
+            uint256 balance = _getVaultStake(keys[i], NETUID1);
+            if ((mask >> i) & 1 == 1) assertEq(balance, before[i], "an excluded slot moved");
+            sold += before[i] - balance;
+        }
+        assertEq(alice.balance - taoBefore, sold, "the payout is exactly what the allowed slots sold");
+        assertGe(vault.balanceOf(alice, TOKEN1), shares - burn, "unsold entitlement came back as shares");
     }
 
     function _positionValue(address holder) internal view returns (uint256 alpha) {
@@ -105,7 +277,8 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         uint256 balanceBefore = alice.balance;
 
         vm.prank(alice);
-        (bool ok, bytes memory ret) = address(vault).call(abi.encodeCall(vault.unwrapForTao, (TOKEN1, shares, 0)));
+        (bool ok, bytes memory ret) =
+            address(vault).call(abi.encodeWithSignature("unwrapForTao(uint256,uint256,uint256)", TOKEN1, shares, 0));
 
         // Up to six sells each lose less than one RAO to payout rounding.
         if (ok) {
@@ -573,8 +746,12 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         uint256 bobValueBefore = _positionValue(bob);
 
         vm.prank(alice);
-        (bool ok,) =
-            address(vault).call(abi.encodeCall(vault.unwrapForTao, (TOKEN1, (aliceShares * shareBps) / 10_000, 0)));
+        (bool ok,) = address(vault)
+            .call(
+                abi.encodeWithSignature(
+                    "unwrapForTao(uint256,uint256,uint256)", TOKEN1, (aliceShares * shareBps) / 10_000, 0
+                )
+            );
         ok;
 
         assertApproxEqAbs(_positionValue(bob), bobValueBefore, 2, "an exit never enriches the holders who stayed");
@@ -835,7 +1012,8 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         uint256 supplyBefore = vault.balanceOf(alice, TOKEN1);
 
         vm.prank(alice);
-        (bool ok, bytes memory reason) = address(vault).call(abi.encodeCall(vault.unwrapForTao, (TOKEN1, shares, 0)));
+        (bool ok, bytes memory reason) =
+            address(vault).call(abi.encodeWithSignature("unwrapForTao(uint256,uint256,uint256)", TOKEN1, shares, 0));
 
         uint256 slotAfter = _getVaultStake(hotkey1, NETUID1);
         assertTrue(
