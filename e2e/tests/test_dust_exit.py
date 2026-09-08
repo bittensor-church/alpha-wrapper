@@ -1,15 +1,20 @@
 """A slot the pool will not pay for is excluded from a TAO exit instead of blocking it.
 
-A single-validator position is reduced to a leftover the pool refuses to quote, and
-the plain TAO exit burns its gas at that slot. Live backing then lands on a second
-attested hotkey that no emissions touch, and the exit that excludes the leftover pays
-a partial and then a full exit for exactly what that backing was worth.
+On a pool deepened to where most subnets trade, a single-validator position is reduced
+to a leftover the pool refuses to quote, and the plain TAO exit burns its gas at that
+slot. Live backing then lands on a second attested hotkey that no emissions touch, and
+the exit that excludes the leftover pays a partial and then a full exit for exactly
+what that backing was worth.
 """
 import pytest
 
 from alpha_e2e import checks, config, extrinsics
 from alpha_e2e.environment import largest_burn_leaving_alpha
 
+# The localnet prices alpha above one TAO, where the pool refuses no sale; most subnets trade
+# far below that. Deepening the pool's alpha side by this much puts a few RAO of alpha under
+# one RAO of TAO.
+POOL_DEEPENING = 100
 # An owned hotkey with no subnet membership earns nothing, so the backing it holds is exact.
 LIVE_HOTKEY_URI = "//DustExitLive"
 LIVE_DEPOSIT_RAO = 1_000_000_000
@@ -39,6 +44,11 @@ def test_tao_exit_sells_around_a_slot_the_pool_refuses(env):
     hotkeys = env.subnet_hotkey_pubkeys(0)
     clone_coldkey = env.clone_coldkey(token_id)
 
+    deepened_alpha = env.alpha_in_pool(netuid) * POOL_DEEPENING
+    extrinsics.set_subnet_alpha_in(netuid, deepened_alpha)
+    assert env.alpha_in_pool(netuid) >= deepened_alpha, "the pool's alpha side should read back deepened"
+    assert env.tao_quote(netuid, REFUSED_LEFTOVER_RAO) is None, "a few RAO of alpha should now be worth no TAO"
+
     live_pubkey = extrinsics.keypair_pubkey(LIVE_HOTKEY_URI)
     live_ss58 = extrinsics.keypair_ss58(LIVE_HOTKEY_URI)
     extrinsics.associate_hotkey(live_ss58)
@@ -50,10 +60,6 @@ def test_tao_exit_sells_around_a_slot_the_pool_refuses(env):
     env.deposit_and_wrap(
         netuid, hotkeys[0], env.hotkey_ss58s[0],
         config.PER_HOTKEY_TRANSFER_RAO, 1_500_000, "Dust exit: wrap failed",
-    )
-    env.crash_price_until_refused(
-        netuid, [(hotkeys[1], env.hotkey_ss58s[1]), (hotkeys[2], env.hotkey_ss58s[2])],
-        REFUSED_LEFTOVER_RAO, "Dust exit",
     )
     leftover = _leave_a_refused_leftover(env, netuid, token_id, hotkeys[0], clone_coldkey)
 

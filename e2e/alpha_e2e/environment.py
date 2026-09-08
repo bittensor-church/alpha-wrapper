@@ -8,7 +8,7 @@ validator rotations, revert assertions).
 import re
 import time
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from . import chain, config, extrinsics, substrate, validators
 
@@ -415,38 +415,19 @@ class Environment:
         a quarter of the pool's alpha so a single sell cannot overshoot the
         target band. Alice's stake under one hotkey can move the price by about
         half, so deeper targets are out of reach."""
-        self._dump_alpha_until(
-            netuid, [(hotkey_pubkey, hotkey_ss58)],
-            lambda: self.alpha_value_tao(netuid, alpha_rao) < target_tao_rao, context,
-        )
+        for _ in range(18):
+            if self.alpha_value_tao(netuid, alpha_rao) < target_tao_rao:
+                return
+            alice_stake = self.stake(hotkey_pubkey, config.ALICE_COLDKEY_PUBKEY, netuid)
+            pool_alpha = self.alpha_in_pool(netuid)
+            chunk = min(alice_stake // 3, max(pool_alpha // 4, 1))
+            if chunk == 0:
+                break
+            try:
+                extrinsics.remove_stake(hotkey_ss58, netuid, chunk)
+            except extrinsics.ExtrinsicError as error:
+                raise AssertionError(f"{context}: alpha sell rejected") from error
         assert self.alpha_value_tao(netuid, alpha_rao) < target_tao_rao, (
             f"{context}: could not crash the price "
             f"({alpha_rao} alpha RAO still worth >= {target_tao_rao} RAO)"
         )
-
-    def crash_price_until_refused(
-        self, netuid: int, sellers: List[Tuple[str, str]], alpha_rao: int, context: str,
-    ) -> None:
-        """Alice sells under each `(hotkey pubkey, hotkey ss58)` in turn until the pool
-        refuses to quote a sale of `alpha_rao`."""
-        self._dump_alpha_until(netuid, sellers, lambda: self.tao_quote(netuid, alpha_rao) is None, context)
-        assert self.tao_quote(netuid, alpha_rao) is None, (
-            f"{context}: the pool still quotes {alpha_rao} alpha RAO after every seller ran dry"
-        )
-
-    def _dump_alpha_until(
-        self, netuid: int, sellers: List[Tuple[str, str]], done: Callable[[], bool], context: str,
-    ) -> None:
-        for hotkey_pubkey, hotkey_ss58 in sellers:
-            for _ in range(18):
-                if done():
-                    return
-                alice_stake = self.stake(hotkey_pubkey, config.ALICE_COLDKEY_PUBKEY, netuid)
-                pool_alpha = self.alpha_in_pool(netuid)
-                chunk = min(alice_stake // 3, max(pool_alpha // 4, 1))
-                if chunk == 0:
-                    break
-                try:
-                    extrinsics.remove_stake(hotkey_ss58, netuid, chunk)
-                except extrinsics.ExtrinsicError as error:
-                    raise AssertionError(f"{context}: alpha sell rejected") from error

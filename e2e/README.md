@@ -49,9 +49,10 @@ Scenario files in `tests/` cover:
   its own balance, the other keeps trading, and each releases on its own attestation.
 - `test_subnet_generation.py`: a rewritten registration block leaves the token and its
   exits untouched; dissolving and re-registering the netuid yields a new token.
-- `test_dust_exit.py`: a leftover the pool refuses to quote makes the plain TAO exit
-  burn its gas; the exit that excludes that slot pays partial and full exits from
-  live backing on a hotkey outside the metagraph, which no emissions touch.
+- `test_dust_exit.py`: on a pool deepened to where most subnets trade, a leftover the
+  pool refuses to quote makes the plain TAO exit burn its gas; the exit that excludes
+  that slot pays partial and full exits from live backing on a hotkey outside the
+  metagraph, which no emissions touch.
 
 Each module's docstring describes its sequence. These scenarios exercise specific
 recovery conditions, not an unconditional exit guarantee; see the

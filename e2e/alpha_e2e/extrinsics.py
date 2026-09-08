@@ -247,11 +247,8 @@ def network_registration_block(netuid: int, *, chain_endpoint: str = config.CHAI
         return int(client.query(_sdk().storage.SubtensorModule.NetworkRegisteredAt, [netuid]))
 
 
-def set_network_registration_block(
-    netuid: int, block_number: int, *, chain_endpoint: str = config.CHAIN_ENDPOINT,
-) -> str:
-    """Rewrite a live subnet's registration block through Sudo, the way chain
-    migrations have done to extend a subnet's immunity period."""
+def _set_subnet_u64(item: bytes, netuid: int, value: int, chain_endpoint: str) -> str:
+    """Write one entry of a per-netuid `SubtensorModule` map through Sudo."""
     import xxhash
 
     def twox128(data: bytes) -> bytes:
@@ -259,17 +256,34 @@ def set_network_registration_block(
             xxhash.xxh64(data, seed=seed).intdigest().to_bytes(8, "little") for seed in (0, 1)
         )
 
-    # `NetworkRegisteredAt` is keyed by the netuid's own bytes (Identity hasher).
-    key = twox128(b"SubtensorModule") + twox128(b"NetworkRegisteredAt") + netuid.to_bytes(2, "little")
-    value = block_number.to_bytes(8, "little")
+    # These maps are keyed by the netuid's own bytes (Identity hasher).
+    key = twox128(b"SubtensorModule") + twox128(item) + netuid.to_bytes(2, "little")
     with _connect(chain_endpoint) as client:
-        block_hash = _submit(client, _sudo(
-            client, _sdk().calls.System.set_storage(items=[(key, value)]),
+        return _submit(client, _sudo(
+            client, _sdk().calls.System.set_storage(items=[(key, value.to_bytes(8, "little"))]),
         ))
+
+
+def set_network_registration_block(
+    netuid: int, block_number: int, *, chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Rewrite a live subnet's registration block through Sudo, the way chain
+    migrations have done to extend a subnet's immunity period."""
+    block_hash = _set_subnet_u64(b"NetworkRegisteredAt", netuid, block_number, chain_endpoint)
     written = network_registration_block(netuid, chain_endpoint=chain_endpoint)
     if written != block_number:
         raise ExtrinsicError(f"set_network_registration_block wrote {written}, wanted {block_number}")
     return block_hash
+
+
+def set_subnet_alpha_in(
+    netuid: int, alpha_rao: int, *, chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Rewrite the alpha side of a subnet's pool through Sudo. The localnet prices alpha
+    above one TAO, where the pool refuses no sale; deepening the alpha side brings the
+    price down to where most subnets trade. Read the result back through the alpha
+    precompile: emissions keep adding to it every block."""
+    return _set_subnet_u64(b"SubnetAlphaIn", netuid, alpha_rao, chain_endpoint)
 
 
 def keypair_pubkey(uri: str) -> str:
