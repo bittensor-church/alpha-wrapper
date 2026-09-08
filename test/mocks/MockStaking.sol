@@ -144,15 +144,37 @@ contract MockStaking {
     }
 
     /// @dev Seed owner presence separately from balances so tests can model ownerless stake.
+    ///      A hotkey without an explicit owner is owned by a coldkey derived from its own name.
     mapping(bytes32 => bool) private _hotkeyOwned;
+    mapping(bytes32 => bytes32) private _hotkeyOwner;
 
     function setHotkeyOwned(bytes32 hotkey, bool owned) external {
         _hotkeyOwned[hotkey] = owned;
     }
 
+    function setHotkeyOwner(bytes32 hotkey, bytes32 coldkey) external {
+        _hotkeyOwned[hotkey] = true;
+        _hotkeyOwner[hotkey] = coldkey;
+    }
+
+    /// @dev The owner a hotkey answers with while it has one, ignoring a deleted record.
+    function ownerOf(bytes32 hotkey) public view returns (bytes32) {
+        bytes32 owner = _hotkeyOwner[hotkey];
+        return owner == bytes32(0) ? keccak256(abi.encodePacked("owner:", hotkey)) : owner;
+    }
+
+    /// @dev The neuron mock's association: an ownerless hotkey goes to `coldkey`; an owned one stays put.
+    function associate(bytes32 hotkey, bytes32 coldkey) external {
+        (bool exists,) = this.getHotkeyOwner(hotkey);
+        if (exists) return;
+        hotkeyDeleted[hotkey] = false;
+        _hotkeyOwned[hotkey] = true;
+        _hotkeyOwner[hotkey] = coldkey;
+    }
+
     function getHotkeyOwner(bytes32 hotkey) external view returns (bool, bytes32) {
         bool exists = _hotkeyOwned[hotkey] && !hotkeyDeleted[hotkey];
-        return (exists, exists ? keccak256(abi.encodePacked("owner:", hotkey)) : bytes32(0));
+        return (exists, exists ? ownerOf(hotkey) : bytes32(0));
     }
 
     mapping(bytes32 => mapping(uint256 => bytes32)) private _successor;

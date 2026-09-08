@@ -1,22 +1,20 @@
-"""A holder can exit after an unrelated account re-associates an abandoned hotkey.
+"""A funded hotkey loses its owner; the attesters replace the name and the vault claims the key.
 
-The staking precompile initially reports the position's alpha but refuses its
-transfer. After association, the same wrapper exit must deliver alpha and burn
-only the requested shares, without registering the hotkey on the subnet.
+A validator moves its identity to a new hotkey while its stake stays behind. The old
+hotkey then has no owner record, so the chain would refuse to move alpha off it, and
+the attested name no longer answers to the coldkey that was attested. The vault keeps
+the position quotable but refuses partial exits until the attesters publish a set that
+names the successor. The next exit then claims the abandoned key for the vault's own
+coldkey, rolls the stake onto the successor and pays the holder, with no watcher and
+no subnet re-registration involved.
 """
 import pytest
 
-from alpha_e2e import config, extrinsics
-
-# A dev account with no role in the vault, the subnet, or the swap.
-STRANGER_URI = "//Bob"
-
-# Enough to cover the claim's transaction fee.
-STRANGER_FUNDING_RAO = 1_000_000_000
+from alpha_e2e import config, extrinsics, substrate
 
 
 @pytest.mark.scenario
-def test_stranded_holder_exits_after_watcher_associates_without_registration(env):
+def test_holder_exits_after_attesters_replace_the_ownerless_name(env):
     netuid = env.netuids[0]
     token_id = env.token_ids[0]
     hotkeys = env.subnet_hotkey_pubkeys(0)
@@ -33,10 +31,11 @@ def test_stranded_holder_exits_after_watcher_associates_without_registration(env
     # A live subnet emits, so the position only ever grows between reads; the
     # comparisons below are floors rather than equalities for that reason.
     clone_coldkey = env.clone_coldkey(token_id)
-    parked = env.stake(hotkey_pubkey, clone_coldkey, netuid)
-    assert parked > 0, "the setup left no stake on the hotkey about to be stranded"
+    stranded = env.stake(hotkey_pubkey, clone_coldkey, netuid)
+    assert stranded > 0, "the setup left no stake on the hotkey about to be stranded"
 
     successor_ss58 = extrinsics.keypair_ss58("//ParkedSuccessor")
+    successor_pubkey = extrinsics.keypair_pubkey("//ParkedSuccessor")
     # Skip only when the setup operation is unavailable; a failed operation must fail the test.
     try:
         extrinsics.swap_hotkey_keep_stake(hotkey_ss58, successor_ss58)
@@ -48,49 +47,48 @@ def test_stranded_holder_exits_after_watcher_associates_without_registration(env
     assert not extrinsics.hotkey_is_registered(hotkey_ss58, netuid), (
         "the old hotkey should no longer be registered after its identity moved"
     )
-    assert env.stake(hotkey_pubkey, clone_coldkey, netuid) >= parked, (
+    assert env.stake(hotkey_pubkey, clone_coldkey, netuid) >= stranded, (
         "the swap was meant to leave the stake where it was"
     )
 
-    # The vault is not the one objecting. Its record still finds the alpha exactly where it
-    # expects, so nothing is missing, no recovery window opens, and the token stays quotable -
-    # the refusal below can only be the chain declining to move alpha off a hotkey nobody owns.
+    # The record still finds the alpha where it expects it: nothing is missing and no
+    # loss goes on file. What the vault refuses is allocating to a name nobody owns.
     assert env.backing_intact(token_id), "the backing check should be satisfied, not tripped"
     assert env.frozen_until(token_id) == 0, "an intact position must not be holding anything shut"
     assert env.vault_total_stake(token_id) > 0, "the vault stopped counting the stranded alpha"
 
     exit_shares = shares // 2
-    env.vault_send_expect_revert(
-        2_500_000, "Parked: the exit should be refused while the hotkey has no owner",
+    env.assert_vault_reverts_with(
+        "AttestedHotkeyRetired(bytes32)", 2_500_000,
+        "Parked: a partial exit should be refused while the attested name has no owner",
         "unwrap(uint256,uint256,bytes32,uint256)", token_id, exit_shares, env.wrapper_substrate_coldkey, 1,
     )
 
-    # Fund the claimant explicitly so the scenario does not depend on its initial balance.
-    stranger_ss58 = extrinsics.keypair_ss58(STRANGER_URI)
-    extrinsics.fund_account(stranger_ss58, STRANGER_FUNDING_RAO)
-    extrinsics.associate_hotkey(hotkey_ss58, signer_uri=STRANGER_URI)
+    # The attesters name the successor in place of the abandoned key.
+    env.set_validators(netuid, [successor_pubkey, hotkeys[1], hotkeys[2]], [5000, 3000, 2000])
 
-    assert extrinsics.hotkey_owner(hotkey_ss58) == stranger_ss58, (
-        "the stranger's claim did not take"
-    )
-    assert not extrinsics.hotkey_is_registered(hotkey_ss58, netuid), (
-        "try_associate_hotkey must not re-register the abandoned key"
-    )
-    assert env.stake(hotkey_pubkey, clone_coldkey, netuid) >= parked, (
-        "owning the hotkey must carry no claim on the stake delegated under it"
-    )
-
-    # The same exit, now paid: the holder's own coldkey receives the alpha.
+    # The same exit, now paid: the vault claims the abandoned key, rolls the stake onto the
+    # successor and delivers to the holder's own coldkey.
     quoted_alpha, _ = env.preview_unwrap(token_id, exit_shares)
     assert quoted_alpha > config.ROUNDING_DUST_TOTAL_RAO, "the retry must deliver a meaningful payout"
-    delivered_before = env.total_stake_across(env.wrapper_substrate_coldkey, netuid, hotkeys)
+    delivery_keys = hotkeys + [successor_pubkey]
+    delivered_before = env.total_stake_across(env.wrapper_substrate_coldkey, netuid, delivery_keys)
     env.vault_send(
-        2_500_000, "Parked: the exit should succeed once the hotkey is owned again",
+        4_000_000, "Parked: the exit should succeed once the attesters replaced the name",
         "unwrap(uint256,uint256,bytes32,uint256)", token_id, exit_shares, env.wrapper_substrate_coldkey, 1,
+        label="unwrap [claims the abandoned key]",
     )
-    delivered = env.total_stake_across(env.wrapper_substrate_coldkey, netuid, hotkeys) - delivered_before
+    delivered = env.total_stake_across(env.wrapper_substrate_coldkey, netuid, delivery_keys) - delivered_before
 
     assert delivered >= quoted_alpha - config.ROUNDING_DUST_TOTAL_RAO, (
         f"the retry delivered {delivered} alpha against a quote of {quoted_alpha}"
     )
     assert env.vault_shares(token_id) == shares - exit_shares, "the exit burned the wrong shares"
+    assert extrinsics.hotkey_owner(hotkey_ss58) == substrate.h160_to_ss58(env.vault_address), (
+        "the vault should have claimed the abandoned key for its own coldkey"
+    )
+    assert not extrinsics.hotkey_is_registered(hotkey_ss58, netuid), (
+        "claiming the key must not register it on the subnet"
+    )
+    assert env.stake(hotkey_pubkey, clone_coldkey, netuid) == 0, "the stake should have left the abandoned key"
+    assert env.stake(successor_pubkey, clone_coldkey, netuid) > 0, "the successor should carry the position"

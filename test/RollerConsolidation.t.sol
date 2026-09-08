@@ -14,7 +14,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, 99, 10 ether, hotkey4);
         _wrapHotkey(alice, 99, hotkey4);
         tokenId = vault.currentTokenId(99);
-        _setVaultStakeAndWriteOffShortfalls(hotkey4, 99, CHAIN_MIN_STAKE - 1);
+        _plantVaultStake(hotkey4, 99, CHAIN_MIN_STAKE - 1);
         _setValidators(99, _hotkeys(hotkey1), _weights(10_000));
     }
 
@@ -93,8 +93,8 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         uint256 tokenId = vault.currentTokenId(99);
 
         uint256 dust = CHAIN_MIN_STAKE - 1;
-        _setVaultStakeAndWriteOffShortfalls(hotkey1, 99, 30 ether);
-        _setVaultStakeAndWriteOffShortfalls(hotkey2, 99, dust);
+        _plantVaultStake(hotkey1, 99, 30 ether);
+        _plantVaultStake(hotkey2, 99, dust);
         _setValidators(99, _hotkeys(hotkey4), _weights(10_000));
         MockStaking(STAKING_PRECOMPILE).setMoveStakeRoundingLoss(1);
 
@@ -157,7 +157,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
 
     function test_Unwrap_GathersAcrossValidatorsForSingleDelivery() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 10 ether, 10 ether, 10 ether);
+        _plantVaultStakes(NETUID1, 10 ether, 10 ether, 10 ether);
 
         uint256 burnShares = vault.balanceOf(alice, TOKEN1) * 60 / 100;
         (uint256 previewAssets,) = lens.previewUnwrap(TOKEN1, burnShares);
@@ -175,7 +175,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
 
     function test_UnwrapEventReportsCappedAlphaPayoutAfterGatherRounding() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 10 ether, 10 ether, 10 ether);
+        _plantVaultStakes(NETUID1, 10 ether, 10 ether, 10 ether);
         MockStaking(STAKING_PRECOMPILE).setMoveStakeRoundingLoss(1);
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
@@ -215,7 +215,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
     function test_UnwrapForTao_TailWaitsWhenPriceReadsZero() public {
         _setRemoveStakeRate(1, 1);
         _depositAndWrap(alice, NETUID1, 100 ether);
-        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, 5e6, 0, 40 ether);
+        uint256 total = _plantVaultStakes(NETUID1, 5e6, 0, 40 ether);
         uint256 shares = _sharesForExactAssets(TOKEN1, 5e6 + 1e6, total);
         uint256 sharesBefore = vault.balanceOf(alice, TOKEN1);
 

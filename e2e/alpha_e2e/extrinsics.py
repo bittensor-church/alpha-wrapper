@@ -242,6 +242,11 @@ def dissolve_network(
     return block_hash
 
 
+def keypair_pubkey(uri: str) -> str:
+    """The 32-byte public key of a dev URI, hex-encoded, as the vault and precompiles take it."""
+    return "0x" + bytes(_sdk().sp_core.Keypair.create_from_uri(uri).public_key).hex()
+
+
 def keypair_ss58(uri: str) -> str:
     """The ss58 address behind a dev key URI, for keys that only need an identity."""
     return _sdk().sp_core.Keypair.create_from_uri(uri).ss58_address
@@ -271,6 +276,32 @@ def swap_hotkey_keep_stake(
         return _submit(client, _sdk().calls.SubtensorModule.swap_hotkey_v2(
             hotkey=hotkey_ss58, new_hotkey=new_hotkey_ss58, netuid=None, keep_stake=True,
         ))
+
+
+def swap_hotkey(
+    hotkey_ss58: str, new_hotkey_ss58: str,
+    *, signer_uri: str = "//Alice", chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Rename a hotkey across every subnet, carrying its stake to the new name and
+    leaving the old name without an owner record. The chain records the
+    old -> new edge the vault follows."""
+    with _connect(chain_endpoint) as client:
+        return _submit(client, _sdk().calls.SubtensorModule.swap_hotkey_v2(
+            hotkey=hotkey_ss58, new_hotkey=new_hotkey_ss58, netuid=None, keep_stake=False,
+        ), signer_uri=signer_uri)
+
+
+def swap_hotkey_on_subnet(
+    hotkey_ss58: str, new_hotkey_ss58: str, netuid: int,
+    *, signer_uri: str = "//Alice", chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Rename a hotkey on one subnet. The target may be any name with no owner
+    record, and the rename erases that name's own outgoing edge, which is how a
+    stranger can cut the trail the vault follows."""
+    with _connect(chain_endpoint) as client:
+        return _submit(client, _sdk().calls.SubtensorModule.swap_hotkey_v2(
+            hotkey=hotkey_ss58, new_hotkey=new_hotkey_ss58, netuid=netuid, keep_stake=False,
+        ), signer_uri=signer_uri)
 
 
 def associate_hotkey(

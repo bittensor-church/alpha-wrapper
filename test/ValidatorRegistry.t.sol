@@ -109,6 +109,42 @@ contract ValidatorRegistryTest is AttestationHelper {
         pks[2] = c;
     }
 
+    function test_UpdateValidators_RecordsTheOwnerOfEachAttestedHotkey() public {
+        bytes32[] memory hks = new bytes32[](2);
+        hks[0] = hk1;
+        hks[1] = hk2;
+        uint16[] memory wts = new uint16[](2);
+        wts[0] = 6000;
+        wts[1] = 4000;
+        MockStaking mock = MockStaking(STAKING_PRECOMPILE);
+
+        _submitAttestation(registry, SN1, hks, wts, _pks2(PK2, PK1));
+
+        (,, bytes32[] memory owners) = registry.getValidators(SN1);
+        assertEq(owners.length, 2, "one owner per attested name");
+        assertEq(owners[0], mock.ownerOf(hk1), "the first name is bound to its owner");
+        assertEq(owners[1], mock.ownerOf(hk2), "and so is the second");
+        (,, bytes32[] memory none) = registry.getValidators(SN2);
+        assertEq(none.length, 0, "a subnet never attested has no owners on record");
+    }
+
+    function test_UpdateValidators_RecordsWhoeverHoldsARepublishedName() public {
+        bytes32[] memory hks = new bytes32[](2);
+        hks[0] = hk1;
+        hks[1] = hk2;
+        uint16[] memory wts = new uint16[](2);
+        wts[0] = 6000;
+        wts[1] = 4000;
+        _submitAttestation(registry, SN1, hks, wts, _pks2(PK2, PK1));
+        bytes32 squatter = keccak256("squatter");
+        MockStaking(STAKING_PRECOMPILE).setHotkeyOwner(hk1, squatter);
+
+        _submitAttestation(registry, SN1, hks, wts, _pks2(PK2, PK1));
+
+        (,, bytes32[] memory owners) = registry.getValidators(SN1);
+        assertEq(owners[0], squatter, "the registry binds the name to its current holder");
+    }
+
     function test_RevertWhen_AdminIsZeroAddress() public {
         address[] memory init = new address[](2);
         init[0] = s1;
@@ -358,7 +394,7 @@ contract ValidatorRegistryTest is AttestationHelper {
         registry.updateValidators(att, sigs);
 
         assertEq(registry.nonces(SN1), 1);
-        (bytes32[] memory hks, uint16[] memory wts) = registry.getValidators(SN1);
+        (bytes32[] memory hks, uint16[] memory wts,) = registry.getValidators(SN1);
         assertEq(hks.length, 2);
         assertEq(wts.length, 2);
         assertEq(hks[0], hk1);
@@ -375,7 +411,7 @@ contract ValidatorRegistryTest is AttestationHelper {
         registry.updateValidators(narrow, _sign(narrow, _pks2(PK2, PK1)));
 
         assertEq(registry.nonces(SN1), 2);
-        (bytes32[] memory hks, uint16[] memory wts) = registry.getValidators(SN1);
+        (bytes32[] memory hks, uint16[] memory wts,) = registry.getValidators(SN1);
         assertEq(hks.length, 3);
         assertEq(wts.length, 3);
         for (uint256 i; i < 3; ++i) {
@@ -391,7 +427,7 @@ contract ValidatorRegistryTest is AttestationHelper {
         ValidatorRegistry.WeightAttestation memory wide = _attN(SN1, MAX_VALIDATORS, 2);
         registry.updateValidators(wide, _sign(wide, _pks2(PK2, PK1)));
 
-        (bytes32[] memory hks, uint16[] memory wts) = registry.getValidators(SN1);
+        (bytes32[] memory hks, uint16[] memory wts,) = registry.getValidators(SN1);
         assertEq(hks.length, MAX_VALIDATORS);
         assertEq(wts.length, MAX_VALIDATORS);
         uint256 sum;
@@ -410,7 +446,7 @@ contract ValidatorRegistryTest is AttestationHelper {
         registry.updateValidators(att2, _sign(att2, _pks2(PK2, PK1)));
 
         assertEq(registry.nonces(SN1), 2);
-        (bytes32[] memory hks, uint16[] memory wts) = registry.getValidators(SN1);
+        (bytes32[] memory hks, uint16[] memory wts,) = registry.getValidators(SN1);
         assertEq(hks[0], hk1);
         assertEq(hks[1], hk2);
         assertEq(hks[2], hk3);
@@ -432,13 +468,13 @@ contract ValidatorRegistryTest is AttestationHelper {
         assertEq(registry.nonces(SN1), 2);
         assertEq(registry.nonces(SN2), 1);
 
-        (bytes32[] memory hks1, uint16[] memory wts1) = registry.getValidators(SN1);
+        (bytes32[] memory hks1, uint16[] memory wts1,) = registry.getValidators(SN1);
         assertEq(hks1.length, 1);
         assertEq(wts1.length, 1);
         assertEq(hks1[0], hk1);
         assertEq(wts1[0], 10_000);
 
-        (bytes32[] memory hks2, uint16[] memory wts2) = registry.getValidators(SN2);
+        (bytes32[] memory hks2, uint16[] memory wts2,) = registry.getValidators(SN2);
         assertEq(hks2.length, 3);
         assertEq(hks2[0], hk1);
         assertEq(hks2[1], hk2);
@@ -454,7 +490,7 @@ contract ValidatorRegistryTest is AttestationHelper {
 
         registry.updateValidators(att, _sign(att, _pks2(PK2, PK1)));
 
-        (bytes32[] memory hks, uint16[] memory wts) = registry.getValidators(SN1);
+        (bytes32[] memory hks, uint16[] memory wts,) = registry.getValidators(SN1);
         assertEq(hks.length, count);
         assertEq(wts.length, count);
         uint256 sum;
@@ -476,7 +512,7 @@ contract ValidatorRegistryTest is AttestationHelper {
         ValidatorRegistry.WeightAttestation memory second = _attN(SN1, secondCount, 2);
         registry.updateValidators(second, _sign(second, _pks2(PK2, PK1)));
 
-        (bytes32[] memory hks, uint16[] memory wts) = registry.getValidators(SN1);
+        (bytes32[] memory hks, uint16[] memory wts,) = registry.getValidators(SN1);
         assertEq(hks.length, secondCount, "size follows the latest commit");
         assertEq(wts.length, secondCount);
         for (uint256 i; i < secondCount; ++i) {
@@ -622,7 +658,7 @@ contract ValidatorRegistryTest is AttestationHelper {
         ValidatorRegistry.WeightAttestation memory att = _buildAttestation(SN1, hotkeys, _evenWeights(count), 1);
         registry.updateValidators(att, _sign(att, _pks2(PK2, PK1)));
 
-        (bytes32[] memory hks,) = registry.getValidators(SN1);
+        (bytes32[] memory hks,,) = registry.getValidators(SN1);
         assertEq(hks.length, count);
         for (uint256 i; i < count; ++i) {
             assertEq(hks[i], hotkeys[i]);
@@ -679,7 +715,7 @@ contract ValidatorRegistryTest is AttestationHelper {
         registry.updateValidators(att, sigs);
 
         assertEq(registry.nonces(SN1), 1);
-        (bytes32[] memory hks,) = registry.getValidators(SN1);
+        (bytes32[] memory hks,,) = registry.getValidators(SN1);
         assertEq(hks.length, 3);
     }
 
@@ -772,7 +808,7 @@ contract ValidatorRegistryTest is AttestationHelper {
         registry.updateValidators(a2, sigs2);
 
         assertEq(registry.nonces(SN1), 1);
-        (bytes32[] memory hks, uint16[] memory wts) = registry.getValidators(SN1);
+        (bytes32[] memory hks, uint16[] memory wts,) = registry.getValidators(SN1);
         assertEq(hks.length, 1);
         assertEq(wts.length, 1);
         assertEq(hks[0], hk1);
@@ -861,9 +897,9 @@ contract ValidatorRegistryTest is AttestationHelper {
         assertEq(registry.nonces(SN2), 1);
         assertEq(registry.nonces(100), 1);
 
-        (bytes32[] memory hksA,) = registry.getValidators(SN1);
-        (bytes32[] memory hksB,) = registry.getValidators(SN2);
-        (bytes32[] memory hksC, uint16[] memory wtsC) = registry.getValidators(100);
+        (bytes32[] memory hksA,,) = registry.getValidators(SN1);
+        (bytes32[] memory hksB,,) = registry.getValidators(SN2);
+        (bytes32[] memory hksC, uint16[] memory wtsC,) = registry.getValidators(100);
         assertEq(hksA[2], hk3);
         assertEq(hksB[1], hk2);
         assertEq(hksC[0], hk1);
@@ -961,7 +997,7 @@ contract ValidatorRegistryTest is AttestationHelper {
         registry.updateValidatorsBatch(atts, sigs);
 
         assertEq(registry.nonces(SN1), 2);
-        (bytes32[] memory hks,) = registry.getValidators(SN1);
+        (bytes32[] memory hks,,) = registry.getValidators(SN1);
         assertEq(hks[1], hk2);
     }
 }

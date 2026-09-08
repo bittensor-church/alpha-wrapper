@@ -24,10 +24,10 @@ contract AlphaVaultPublicPropertiesTest is AlphaVaultTestBase {
         // Finalized losses followed by recapitalization grow supply through public calls.
         // Each individual deposit and precompile stake balance stays within uint64.
         for (uint256 i; i < 2; ++i) {
-            _setVaultStakeAndWriteOffShortfalls(hotkey1, NETUID1, 0);
+            _plantVaultStake(hotkey1, NETUID1, 0);
             _depositAndWrap(alice, NETUID1, 1e9);
         }
-        _setVaultStakeAndWriteOffShortfalls(hotkey1, NETUID1, 0);
+        _plantVaultStake(hotkey1, NETUID1, 0);
         uint256 supply = _depositAndWrap(alice, NETUID1, recapitalization);
         assertGe(supply, 9e44);
         assertLe(supply, 1e45);

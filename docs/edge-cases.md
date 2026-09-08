@@ -75,5 +75,5 @@ refund. Already-indexed claim liabilities stay separate.
 
 Third-party alpha under tracked keys increases backing; stake elsewhere is not
 automatically counted. Mailbox wraps credit only the caller's chosen key.
-Untracked vault alpha can be recovered under the [recovery rules](hotkey-swaps.md),
-including their late-recovery ownership policy.
+Untracked vault alpha joins the position through `recoverStray` under the
+[recovery rules](hotkey-swaps.md), including their late-recovery ownership policy.

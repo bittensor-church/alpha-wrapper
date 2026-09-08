@@ -18,14 +18,19 @@ library VaultReads {
         return IAddressMapping(ADDRESS_MAPPING_PRECOMPILE).addressMapping(evmAddress);
     }
 
+    function ownedBy(bytes32 hotkey, bytes32 coldkey) internal view returns (bool) {
+        (bool exists, bytes32 owner) = IStaking(STAKING_PRECOMPILE).getHotkeyOwner(hotkey);
+        return exists && owner == coldkey;
+    }
+
     function resolveValidators(IValidatorRegistry registry, uint16 netuid)
         internal
         view
-        returns (bytes32[] memory hotkeys, uint16[] memory weights)
+        returns (bytes32[] memory hotkeys, uint16[] memory weights, bytes32[] memory owners)
     {
-        (hotkeys, weights) = registry.getValidators(netuid);
+        (hotkeys, weights, owners) = registry.getValidators(netuid);
         if (hotkeys.length == 0) revert NoValidatorFound();
-        if (hotkeys.length != weights.length) revert ValidatorSetMalformed();
+        if (hotkeys.length != weights.length || hotkeys.length != owners.length) revert ValidatorSetMalformed();
     }
 
     function fetchBalances(bytes32[] memory hotkeys, bytes32 coldkey, uint16 netuid)
@@ -80,11 +85,11 @@ library VaultReads {
     }
 
     /// @dev `logical` is the attested name; `active` is the recorded stake location, possibly a successor.
+    ///      A parked position has one slot with no name whose `active` is the vault's parking hotkey.
     struct Slot {
         bytes32 logical;
         bytes32 active;
         uint256 tracked;
-        uint64 shortSince;
     }
 
     /// @dev Bundled to avoid stack exhaustion in unoptimized builds.
@@ -93,6 +98,16 @@ library VaultReads {
         uint256[] balances;
         bool[] short;
         uint256 total;
+    }
+
+    function logicalsOf(Slot[] memory slots) internal pure returns (bytes32[] memory logicals) {
+        logicals = new bytes32[](slots.length);
+        for (uint256 i; i < slots.length;) {
+            logicals[i] = slots[i].logical;
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     /// @dev Accepted accounting dust; smaller discrepancies do not start recovery.

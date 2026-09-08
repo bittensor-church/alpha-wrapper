@@ -120,6 +120,25 @@ class Environment:
             1_500_000, "syncBacking failed", "syncBacking(uint256)", token_id, label=label,
         )
 
+    def recover_stray(self, token_id: int, source_pubkeys: List[str], message: str) -> dict:
+        """Park everything the vault can locate, including the alpha under `source_pubkeys`,
+        on the vault's own hotkey. Anyone may call it."""
+        sources = "[" + ",".join(source_pubkeys) + "]"
+        return self.vault_send(
+            4_000_000, message, "recoverStray(uint256,bytes32[])", token_id, sources,
+            label="recoverStray",
+        )
+
+    def awaiting_attestation(self, token_id: int) -> bool:
+        """Whether the position rests on the parking hotkey with deposits and alignment shut
+        until the registry publishes a newer set."""
+        return chain.cast_call(
+            self.lens_address, "awaitingAttestation(uint256)(bool)", token_id,
+        ).strip() == "true"
+
+    def parking_hotkey(self) -> str:
+        return chain.cast_call(self.vault_address, "parkingHotkey()(bytes32)")
+
     def share_price(self, token_id: int) -> int:
         return int(chain.cast_call(
             self.lens_address, "sharePrice(uint256)(uint256)", token_id,

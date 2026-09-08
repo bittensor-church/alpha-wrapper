@@ -26,11 +26,16 @@ error ConsolidationBelowFloor();
 error GatherBelowFloor();
 /// @dev Located backing falls short of the recorded expectation, allowing for accounting dust.
 error BackingShortfall(uint16 netuid, bytes32 hotkey, uint256 tracked);
+/// @dev A declared shortfall holds priced operations shut until `syncBacking` observes full coverage.
+error ShortfallOnFile();
 error BackingUnchanged();
 error NothingToRecover();
-error RecoveryBelowFloor();
-/// @dev The recovered balance must cover the selected slot's full expectation.
+/// @dev The located balances must cover the whole recorded expectation before the position parks.
 error RecoveryIncomplete();
+/// @dev The position rests on the parking hotkey until the registry publishes a newer set.
+error Parked();
+/// @dev The parking hotkey already belongs to another coldkey; deploy with an unused one.
+error ParkingHotkeyUnavailable();
 /// @dev Two attested entries would share one backing key; attesters must resolve the collision.
 error SwappedHotkeyStillAttested();
 /// @dev No owned receiving key was resolved for this attested name.

@@ -16,8 +16,9 @@ Holders rely on:
 
 - Subtensor and its precompiles for stake ownership, moves, accounting and refunds.
 - Registry governance and validator performance.
-- A funded, responsive watcher to repair unresolved swaps and recover backing.
-  These permissionless tasks have no on-chain completion guarantee.
+- A funded, responsive watcher to repair unresolved swaps and park backing, and
+  attesters who publish a new set to release a parked position. These
+  permissionless tasks have no on-chain completion guarantee.
 - Trusted vault/lens builds and addresses. The lens's `vault()` checks pairing,
   not authenticity; mid-operation callback quotes may observe unfinished state.
 
@@ -30,18 +31,23 @@ Holders rely on:
 - Virtual shares/assets limit first-depositor inflation; a supply cap protects
   claim-index precision.
 - Caller-selected minimum outputs make insufficient fills revert atomically.
-- Unresolved backing blocks live pricing and exits until recovery or explicit
-  write-off; recovery moves only the vault's own stake.
+- Unresolved backing blocks live pricing and exits until the position parks or
+  the loss is written off; recovery moves only the vault's own stake, onto a
+  hotkey only the vault's coldkey controls.
+- A receiving key is usable only under the coldkey that owned the attested name;
+  a name claimed by anyone else receives nothing.
 - Alpha exits avoid pool trades. TAO exits are opt-in market sales with fees and
   price impact, including price impact borne by remaining holders.
 
 ## Recovery-window tradeoff and late-recovery attack
 
-The [hotkey-swap runbook](hotkey-swaps.md) separates two failures: unusable ownerless
-keys and unlocated alpha. Association repairs ownership. `syncBacking` only
-handles accounting: it starts a shortfall clock and, on a later call after the
-immutable recovery window, writes off what remains missing. It cannot restore
-ownership or guarantee either exit is otherwise executable.
+The [hotkey-swap runbook](hotkey-swaps.md) separates two failures: names that
+answer to the wrong coldkey and unlocated alpha. Attestation repairs the first.
+`syncBacking` handles the second: it puts a shortfall on file, holds the token
+shut until a later call observes full coverage, and after the immutable
+recovery window parks what is located and writes off the rest. Parking moves
+the alpha onto a hotkey only the vault's coldkey controls, so a repaired
+position cannot be captured again by whoever claims a vacated name.
 
 Write-off chooses repricing over indefinite waiting for missing alpha. It is a
 real loss of accounted backing for holders at finalization, not proof the alpha
@@ -51,8 +57,9 @@ A validator can exploit that policy:
 
 1. Swap its hotkey, carrying vault alpha, then re-register the old key on the
    subnet to erase the successor edge.
-2. If watchers cannot recover the funded key in time, finalize the write-off.
-3. Deposit against the reduced backing to acquire a larger share of the supply.
+2. If watchers cannot park the funded key in time, finalize the write-off.
+3. Once the attesters publish again, deposit against the reduced backing to
+   acquire a larger share of the supply.
 4. Reveal/recover the hidden alpha, or have a later attestation and settlement
    count it. The new shares now participate in that recovery.
 
@@ -60,8 +67,10 @@ For hidden principal `H` with no growth, the original holders' aggregate loss
 from this ordering is bounded by `H`: it reallocates the late recovery, rather
 than also extracting another `H` from located backing. Emissions or surplus on
 the hidden key can make the later windfall exceed the `BackingWrittenOff` amount.
+Deposits stay shut between the write-off and the next attestation, so the
+attesters decide when step 3 becomes possible.
 
-This is accepted policy and a reason to recover before write-off. Afterward,
+This is accepted policy and a reason to park before write-off. Afterward,
 neither `recoverStray` nor a new attestation reconstructs the old holders' claims.
 Following a complete write-off, a zero-floor `unwrap` voluntarily burns worthless
 shares and gives up their claim on future recovery. A positive floor preserves
@@ -77,6 +86,9 @@ them; accrued TAO survives either way.
   not the pool-price effect on remaining holders.
 - A mailbox deposit moved by a swap needs manual reclaim and redeposit if its
   actual key is no longer attested.
+- A parked position earns no emissions until the attesters publish a new set.
+  Any validator in the set can force a parking event by renaming its key and
+  cutting the trail.
 - Signatures have no expiry; landing a replacement retires a competing old list.
 - A dissolved token can wait through a successor's late cleanup when the chain
   no longer distinguishes their registration state.

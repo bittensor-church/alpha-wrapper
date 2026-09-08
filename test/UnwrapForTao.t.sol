@@ -52,7 +52,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_FullBurnAfterEmissionGrowth_DrainsSubFloorDust() public {
         uint256 supply = _depositForAlice(3_000_000);
         // Virtual rounding leaves a one-RAO gap; using exact backing is necessary for the full-drain exemption.
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 3_200_000, 0, 0);
+        _plantVaultStakes(NETUID1, 3_200_000, 0, 0);
         _setAlphaPrice(NETUID1, 0.5e18);
         _setRemoveStakeRate(0.5e18, 1e18);
         uint256 aliceBalanceBefore = alice.balance;
@@ -69,7 +69,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         growth = bound(growth, 0, 1e12);
         chainPriceE18 = bound(chainPriceE18, 1e15, 100e18);
         uint256 supply = _depositForAlice(3_000_000);
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 3_000_000 + growth, 0, 0);
+        _plantVaultStakes(NETUID1, 3_000_000 + growth, 0, 0);
         _setAlphaPrice(NETUID1, chainPriceE18);
         _setRemoveStakeRate(chainPriceE18, 1e18);
 
@@ -96,7 +96,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         uint256 supply = _depositForAlice(30 ether);
         _setAlphaPrice(NETUID1, chainPriceE18);
         _setRemoveStakeRate(chainPriceE18, 1e18);
-        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, a, b, c);
+        uint256 total = _plantVaultStakes(NETUID1, a, b, c);
         uint256 shares = (supply * shareBps) / 10_000;
         uint256 expected = (shares * (total + 1)) / (supply + 1e9);
         uint256 read = _alphaPriceRead(NETUID1);
@@ -132,7 +132,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
 
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 60 ether, 40 ether, 0);
+        _plantVaultStakes(NETUID1, 60 ether, 40 ether, 0);
 
         uint256 half = shares / 2;
         uint256 balanceBefore = alice.balance;
@@ -160,7 +160,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
 
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 100 ether, 0, 0);
+        _plantVaultStakes(NETUID1, 100 ether, 0, 0);
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
@@ -269,7 +269,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_RevertWhen_OneFullSliceSellFails() public {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
-        (bytes32[] memory hotkeys,) = registry.getValidators(NETUID1);
+        (bytes32[] memory hotkeys,,) = registry.getValidators(NETUID1);
         _setRemoveStakeRevertsFor(hotkeys[1], true);
 
         uint256 balanceBefore = alice.balance;
@@ -284,8 +284,8 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_RevertWhen_AboveFloorPartialSellFails() public {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(60e6);
-        (bytes32[] memory hotkeys,) = registry.getValidators(NETUID1);
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 40e6, 20e6, 0);
+        (bytes32[] memory hotkeys,,) = registry.getValidators(NETUID1);
+        _plantVaultStakes(NETUID1, 40e6, 20e6, 0);
         _setRemoveStakeRevertsFor(hotkeys[0], true);
 
         vm.prank(alice);
@@ -383,7 +383,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
 
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 60 ether, 40 ether, 10 ether);
+        _plantVaultStakes(NETUID1, 60 ether, 40 ether, 10 ether);
 
         uint256 balanceBefore = alice.balance;
         vm.prank(alice);
@@ -420,7 +420,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
 
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 60 ether, 40 ether, 0);
+        _plantVaultStakes(NETUID1, 60 ether, 40 ether, 0);
 
         uint256 sharesForThirty = (shares * 30) / 100;
 
@@ -470,7 +470,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_SubFloorFullDrain_SoldViaFullUnstakeExemption() public {
         _setRemoveStakeRate(1, 1);
         _depositForAlice(100 ether);
-        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, 1e6, 40 ether, 0);
+        uint256 total = _plantVaultStakes(NETUID1, 1e6, 40 ether, 0);
         uint256 assets = 1e6 + 5e6;
         uint256 shares = _sharesForExactAssets(TOKEN1, assets, total);
 
@@ -486,7 +486,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_TailOnExactValidatorBoundary_SoldAsFullDrain() public {
         _setRemoveStakeRate(1, 1);
         _depositForAlice(100 ether);
-        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, 60 ether, 40 ether, 0);
+        uint256 total = _plantVaultStakes(NETUID1, 60 ether, 40 ether, 0);
         uint256 assets = 60 ether;
         uint256 shares = _sharesForExactAssets(TOKEN1, assets, total);
 
@@ -503,7 +503,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         _setRemoveStakeRate(1, 1);
         _depositForAlice(100 ether);
         uint256 sharesBefore = vault.balanceOf(alice, TOKEN1);
-        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, 40 ether, 0, 0);
+        uint256 total = _plantVaultStakes(NETUID1, 40 ether, 0, 0);
         uint256 shares = _sharesForExactAssets(TOKEN1, 1e6, total);
 
         vm.prank(alice);
@@ -516,7 +516,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_SubFloorFinalSlice_RefundsSharesBackingTheUnsoldDust() public {
         _setRemoveStakeRate(1, 1);
         _depositForAlice(100 ether);
-        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, 5e6, 0, 40 ether);
+        uint256 total = _plantVaultStakes(NETUID1, 5e6, 0, 40 ether);
         uint256 shares = _sharesForExactAssets(TOKEN1, 5e6 + 1e6, total);
         uint256 sharesBefore = vault.balanceOf(alice, TOKEN1);
         uint256 valueBefore = _positionValue(alice);
@@ -537,7 +537,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         _setRemoveStakeRate(1, 1);
         _depositForAlice(100 ether);
         _depositAndWrap(bob, NETUID1, 100 ether);
-        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, 5e6, 0, 40 ether);
+        uint256 total = _plantVaultStakes(NETUID1, 5e6, 0, 40 ether);
         uint256 shares = _sharesForExactAssets(TOKEN1, 5e6 + 1e6, total);
         uint256 bobValueBefore = _positionValue(bob);
         uint256 aliceValueBefore = _positionValue(alice);
@@ -568,7 +568,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         _depositAndWrap(bob, NETUID1, 30 ether);
         _setAlphaPrice(NETUID1, chainPriceE18);
         _setRemoveStakeRate(chainPriceE18, 1e18);
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, a, b, c);
+        _plantVaultStakes(NETUID1, a, b, c);
         _setRemoveStakeCap(sellCap);
         uint256 bobValueBefore = _positionValue(bob);
 
@@ -586,7 +586,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         _depositAndWrap(bob, NETUID1, 100 ether);
         address clone = vault.subnetClone(TOKEN1);
         _donateToClone(clone, 8 ether);
-        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, 5e6, 0, 40 ether);
+        uint256 total = _plantVaultStakes(NETUID1, 5e6, 0, 40 ether);
         uint256 shares = _sharesForExactAssets(TOKEN1, 5e6 + 1e6, total);
 
         vm.prank(alice);
@@ -602,7 +602,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         RefundRejectingReceiver receiver = new RefundRejectingReceiver();
         _simulateAlphaDeposit(address(receiver), NETUID1, 100 ether);
         _wrap(address(receiver), NETUID1);
-        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, 5e6, 0, 40 ether);
+        uint256 total = _plantVaultStakes(NETUID1, 5e6, 0, 40 ether);
         uint256 shares = _sharesForExactAssets(TOKEN1, 5e6 + 1e6, total);
         uint256 sharesBefore = vault.balanceOf(address(receiver), TOKEN1);
         receiver.rejectMints();
@@ -618,7 +618,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_SwapStoppedShortOnFullBurn_RefundsTheReturnedAlpha() public {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 100 ether, 0, 0);
+        _plantVaultStakes(NETUID1, 100 ether, 0, 0);
         _setRemoveStakeCap(60 ether);
 
         uint256 balanceBefore = alice.balance;
@@ -634,7 +634,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_FullBurnShortFillAfterAppreciation_NetsTheBurnToZero() public {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 300 ether, 0, 0);
+        _plantVaultStakes(NETUID1, 300 ether, 0, 0);
         _setRemoveStakeCap(60 ether);
 
         uint256 balanceBefore = alice.balance;
@@ -652,7 +652,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         _setRemoveStakeRate(1, 1);
         _depositForAlice(100 ether);
         uint256 total = bound(growth, 100 ether, 1000 ether);
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, total, 0, 0);
+        _plantVaultStakes(NETUID1, total, 0, 0);
         uint256 sold = bound(fill, 1 ether, total - 1 ether);
         _setRemoveStakeCap(sold);
 
@@ -670,7 +670,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_FullBurnWithChainRoundingDust_LeavesNoPosition() public {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 100 ether, 0, 0);
+        _plantVaultStakes(NETUID1, 100 ether, 0, 0);
         // Disable forced sweeping so chain-rounding residue remains staked.
         _setDustThreshold(0);
         _setRemoveStakeCap(100 ether - 1);
@@ -686,7 +686,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_PartialBurnWithChainRoundingDust_RefundsTheRemainder() public {
         _setRemoveStakeRate(1, 1);
         uint256 shares = _depositForAlice(100 ether);
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 100 ether, 0, 0);
+        _plantVaultStakes(NETUID1, 100 ether, 0, 0);
         uint256 half = shares / 2;
         _setRemoveStakeCap(50 ether - 1);
 
@@ -711,7 +711,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         _setRemoveStakeRate(1, 1);
         uint256 sharesBefore = _depositForAlice(60e6);
         assertEq(sharesBefore, 60e15);
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 5e6, 0, 55e6);
+        _plantVaultStakes(NETUID1, 5e6, 0, 55e6);
         uint256 balanceBefore = alice.balance;
 
         // At the initial share price, the 6-million-alpha request sells 5 million;
@@ -729,7 +729,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         _setRemoveStakeRate(1, 1);
         _depositForAlice(100 ether);
         uint256 sharesBefore = vault.balanceOf(alice, TOKEN1);
-        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, 5e6, 0, 40 ether);
+        uint256 total = _plantVaultStakes(NETUID1, 5e6, 0, 40 ether);
         uint256 shares = _sharesForExactAssets(TOKEN1, 5e6 + 1e6, total);
 
         vm.prank(alice);
@@ -768,7 +768,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_RevertWhen_PartialSellBelowSimFloor() public {
         _setRemoveStakeRate(999, 1000);
         _depositForAlice(100 ether);
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 100 ether, 0, 0);
+        _plantVaultStakes(NETUID1, 100 ether, 0, 0);
 
         uint256 targetAssets = CHAIN_MIN_STAKE;
         uint256 burnShares = _sharesForExactAssets(TOKEN1, targetAssets, 100 ether);
@@ -785,7 +785,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_PartialSell_ShrinksToLeaveSweepSafeLeftover() public {
         _setRemoveStakeRate(1, 1);
         _depositForAlice(100 ether);
-        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, 50e6, 0, 0);
+        uint256 total = _plantVaultStakes(NETUID1, 50e6, 0, 0);
         uint256 sweepSafeLeftover = DUST_THRESHOLD + 1;
         uint256 shares = _sharesForExactAssets(TOKEN1, 45e6, total);
         uint256 sharesBefore = vault.balanceOf(alice, TOKEN1);
@@ -808,7 +808,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_RevertWhen_PartialSellWouldStrandSweepableDust() public {
         _setRemoveStakeRate(1, 1);
         _depositForAlice(100 ether);
-        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, 15e6, 0, 0);
+        uint256 total = _plantVaultStakes(NETUID1, 15e6, 0, 0);
         uint256 sharesBefore = vault.balanceOf(alice, TOKEN1);
         uint256 shares = _sharesForExactAssets(TOKEN1, 10e6, total);
 
@@ -829,7 +829,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         _setAlphaPrice(NETUID1, priceE18);
         _setRemoveStakeRate(priceE18, 1e18);
         _depositForAlice(100 ether);
-        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, balance, 0, 0);
+        uint256 total = _plantVaultStakes(NETUID1, balance, 0, 0);
         uint256 shares = _sharesForExactAssets(TOKEN1, assets, total);
         uint256 balanceBefore = alice.balance;
         uint256 supplyBefore = vault.balanceOf(alice, TOKEN1);
@@ -853,7 +853,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_ExactFitLaterSlot_PreferredOverEarlierPartial() public {
         _setRemoveStakeRate(1, 1);
         _depositForAlice(100 ether);
-        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, 25e6, 10e6, 0);
+        uint256 total = _plantVaultStakes(NETUID1, 25e6, 10e6, 0);
         uint256 shares = _sharesForExactAssets(TOKEN1, 10e6, total);
 
         uint256 balanceBefore = alice.balance;
@@ -868,7 +868,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_PartialSellBelowSpotFloor_NeverReachesSimSwap() public {
         _setRemoveStakeRate(1, 1);
         _depositForAlice(100 ether);
-        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, 40 ether, 0, 0);
+        uint256 total = _plantVaultStakes(NETUID1, 40 ether, 0, 0);
         MockAlpha(ALPHA_PRECOMPILE).setSimSwapReverts(true);
         uint256 shares = _sharesForExactAssets(TOKEN1, 1e6, total);
 
@@ -880,7 +880,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     function test_PartialSellWithPriceImpact_SkipsWhenLeftoverWouldSweepPostSale() public {
         _setRemoveStakeRate(1, 1);
         _depositForAlice(100 ether);
-        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, 50e6, 0, 0);
+        uint256 total = _plantVaultStakes(NETUID1, 50e6, 0, 0);
         uint256 shares = _sharesForExactAssets(TOKEN1, 25e6, total);
         // Marginal leftover quote: 44e6 - 25e6 = 19e6, below the 20e6 sweep threshold.
         MockAlpha(ALPHA_PRECOMPILE).setSimSwapQuote(50e6, 44e6);

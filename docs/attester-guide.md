@@ -20,8 +20,11 @@ Submission requires:
 - 1–64 distinct, nonzero hotkeys with owner records at submission time.
 - One positive BPS weight per hotkey, summing to 10000.
 
-An ownerless entry reverts `OwnerlessHotkey`. Ownership can change after submission;
-this check does not replace watcher monitoring.
+An ownerless entry reverts `OwnerlessHotkey`. The registry records each entry's
+owner coldkey; the vault allocates to a name, its recorded key or its successor
+only while that coldkey holds it. A name that later answers to another coldkey
+receives nothing until it is replaced. This check does not replace watcher
+monitoring.
 
 All signers must sign identical bytes. Agree on a selection policy and evaluation
 block, then derive the same ordered hotkeys, weights and nonce.
@@ -64,7 +67,23 @@ share one backing key. Ordinary one-hop swaps are handled automatically, includi
 empty-slot receiving-key selection; unresolved cases rely on a watcher.
 See [Hotkey swaps and recovery](hotkey-swaps.md) for the exact restrictions.
 
-Do not use a new attestation as a substitute for recovering missing backing.
+## Releasing a parked position
+
+A recovery or write-off parks the whole position on the vault's parking hotkey
+and reports `awaitingAttestation`. Deposits and weight alignment stay shut, and
+nothing earns emissions, until an attestation newer than the one in force at
+parking lands for that netuid. Publish a set that names the intended successor
+and leaves out the lost or captured name. The registry records whoever owns
+each name at that moment as its attested owner, so re-publishing a captured
+name hands its allocation to the stranger holding it. Re-publishing an
+unchanged set under a new nonce releases a position parked for any other
+reason. The next wrap or `rebalance(netuid)` moves the parked alpha onto the set.
+
+A validator that swaps its coldkey needs a re-attestation as well: its names
+answer to the new coldkey only once a set records it, and until then they
+report `AttestedHotkeyRetired`.
+
+Do not use a new attestation as a substitute for parking missing backing.
 Coordinate `recoverStray` before write-off where possible. Adding a funded
 successor after write-off lets later settlement credit it to current holders,
 not reconstruct the original holders' claims. See the
