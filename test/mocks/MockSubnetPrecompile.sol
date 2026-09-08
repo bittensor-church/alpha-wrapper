@@ -7,6 +7,7 @@ contract MockSubnetPrecompile is ISubnet {
     mapping(uint16 => uint64) private _registeredAt;
     mapping(uint16 => uint64) private _registrations;
     mapping(uint16 => bool) private _dissolving;
+    mapping(uint16 => bool) private _transfersDisabled;
 
     function setRegisteredAt(uint16 netuid, uint64 blockNumber) external {
         _registeredAt[netuid] = blockNumber;
@@ -20,6 +21,10 @@ contract MockSubnetPrecompile is ISubnet {
         _dissolving[netuid] = value;
     }
 
+    function setTransfersEnabled(uint16 netuid, bool value) external {
+        _transfersDisabled[netuid] = !value;
+    }
+
     function getNetworkRegistrationBlock(uint16 netuid) external view returns (uint64) {
         return _registeredAt[netuid];
     }
@@ -30,5 +35,13 @@ contract MockSubnetPrecompile is ISubnet {
 
     function isSubnetDissolving(uint16 netuid) external view returns (bool) {
         return _dissolving[netuid];
+    }
+
+    function getSubnetCapacityConfig(uint16 netuid)
+        external
+        view
+        returns (uint16, uint16, uint16, uint16, uint16, uint16, uint16, uint16, bool, bool, uint16, uint8)
+    {
+        return (0, 0, 0, 0, 0, 0, 0, 0, false, !_transfersDisabled[netuid], 0, 0);
     }
 }

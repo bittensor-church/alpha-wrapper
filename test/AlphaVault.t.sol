@@ -6,6 +6,7 @@ import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { AlphaVaultLens } from "src/AlphaVaultLens.sol";
 import {
+    AlphaTransfersDisabled,
     ChosenHotkeyNotInSet,
     ClaimBelowNativePrecision,
     DepositTooSmall,
@@ -777,6 +778,50 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vm.prank(alice);
         vm.expectRevert(ZeroAmount.selector);
         vault.reclaimAlphaFromMailbox(NETUID1, hotkey4, aliceSub);
+    }
+
+    function test_RevertWhen_WrapWhileTransfersAreDisabled() public {
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _setTransfersEnabled(NETUID1, false);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(AlphaTransfersDisabled.selector, uint16(NETUID1)));
+        vault.wrap(NETUID1, hotkey1, 0);
+    }
+
+    function test_RevertWhen_UnwrapWhileTransfersAreDisabled() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 10 ether);
+        _setTransfersEnabled(NETUID1, false);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(AlphaTransfersDisabled.selector, uint16(NETUID1)));
+        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice), 0);
+    }
+
+    function test_RevertWhen_ReclaimAlphaFromMailboxWhileTransfersAreDisabled() public {
+        _simulateAlphaDepositHotkey(alice, NETUID1, 10 ether, hotkey4);
+        _setTransfersEnabled(NETUID1, false);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(AlphaTransfersDisabled.selector, uint16(NETUID1)));
+        vault.reclaimAlphaFromMailbox(NETUID1, hotkey4, _toSubstrate(alice));
+    }
+
+    /// @dev Anyone can park alpha under the clone's coldkey on an attested name; a deposit on that name
+    ///      must price only itself and leave the stray for recovery.
+    function test_Wrap_LeavesAStrayOnASupersededNameForRecovery() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        vault.rebalance(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _subnetColdkey(NETUID1), NETUID1, 3 ether);
+        _simulateAlphaDepositHotkey(bob, NETUID1, 5 ether, hotkey1);
+        uint256 quoted = lens.previewWrap(TOKEN1, 5 ether);
+
+        _wrapHotkey(bob, NETUID1, hotkey1);
+
+        assertEq(vault.balanceOf(bob, TOKEN1), quoted, "the mint matches the preview");
+        assertEq(_getVaultStake(hotkey1, NETUID1), 3 ether, "the stray stays where recovery can find it");
+        assertEq(lens.totalStake(TOKEN1), 35 ether, "and is not part of the backing yet");
     }
 
     function test_RevertWhen_ReclaimAlphaFromMailboxZeroColdkey() public {

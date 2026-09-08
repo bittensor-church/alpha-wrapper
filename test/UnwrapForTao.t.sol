@@ -28,6 +28,36 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         shares = _depositAndWrap(alice, NETUID1, amount);
     }
 
+    function test_UnwrapForTao_IgnoresDisabledTransfers() public {
+        _setRemoveStakeRate(1, 1);
+        uint256 shares = _depositForAlice(100 ether);
+        _setTransfersEnabled(NETUID1, false);
+
+        vault.rebalance(NETUID1);
+        uint256 before = alice.balance;
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares / 2, 0);
+
+        assertEq(alice.balance - before, 50 ether, "the TAO exit does not need alpha transfers");
+    }
+
+    function test_UnwrapForTao_SkipsAFullDrainThePoolWouldRefuse() public {
+        _setRemoveStakeRate(1, 1);
+        uint256 shares = _depositForAlice(100 ether);
+        _plantVaultStakes(NETUID1, 60 ether, 1, 40 ether);
+        MockAlpha(ALPHA_PRECOMPILE).setSimSwapQuote(1, 0);
+        uint256 burn = shares * 70 / 100;
+        (uint256 assets,) = lens.previewUnwrap(TOKEN1, burn);
+
+        uint256 before = alice.balance;
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, burn, 0);
+
+        assertEq(alice.balance - before, assets, "the exit sells what it quoted");
+        assertEq(_getVaultStake(hotkey2, NETUID1), 1, "the slot the pool would refuse is left alone");
+        assertEq(vault.balanceOf(alice, TOKEN1), shares - burn, "with nothing refunded");
+    }
+
     function _positionValue(address holder) internal view returns (uint256 alpha) {
         (alpha,) = lens.previewUnwrap(TOKEN1, vault.balanceOf(holder, TOKEN1));
     }

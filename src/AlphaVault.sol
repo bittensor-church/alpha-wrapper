@@ -175,6 +175,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // forge-lint: disable-next-line(unsafe-typecast)
         uint16 nid = uint16(netuid);
         VaultReads.requireNotDissolving(nid);
+        VaultReads.requireTransfersEnabled(nid);
         (bytes32[] memory hotkeys, uint16[] memory weights, bytes32[] memory owners) =
             VaultReads.resolveValidators(validatorRegistry, nid);
         uint256 chosenIndex = VaultMath.indexOf(hotkeys, chosenHotkey);
@@ -197,17 +198,14 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
             revert DepositTooSmall();
         }
 
+        uint256 heldBefore = IStaking(STAKING_PRECOMPILE).getStake(chosenHotkey, destColdkey, nid);
         // A fresh deposit can carry rotated-out dust through above-floor consolidation hops.
         _flush(userClone, chosenHotkey, destColdkey, nid, totalDeposit);
-        // Mint pricing reads only active keys; move the deposit onto one before pricing.
+        // Mint pricing reads only active keys; move the deposit onto one before pricing. Anything else
+        // sitting on a superseded name is a stray for recovery, not part of this mint.
         if (!VaultMath.contains(actives, chosenHotkey)) {
-            _move(
-                clone,
-                chosenHotkey,
-                actives[chosenIndex],
-                nid,
-                IStaking(STAKING_PRECOMPILE).getStake(chosenHotkey, destColdkey, netuid)
-            );
+            uint256 landed = IStaking(STAKING_PRECOMPILE).getStake(chosenHotkey, destColdkey, nid) - heldBefore;
+            _move(clone, chosenHotkey, actives[chosenIndex], nid, landed);
         }
         VaultAllocation.consolidateRotatedStake(clone, destColdkey, nid, backing.keys, actives, alphaPriceE18, false);
         VaultAllocation.rebalance(tokenId, clone, actives, weights, destColdkey, alphaPriceE18);
@@ -332,6 +330,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint16 netuid,
         uint256 minAlphaOut
     ) private {
+        VaultReads.requireTransfersEnabled(netuid);
         bytes32 coldkey = VaultReads.coldkeyOf(clone);
         (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _openBacking(tokenId, coldkey, netuid);
         bytes32[] memory hotkeys;
@@ -446,7 +445,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
         _ensureMailboxClone(msg.sender, netuid);
         // forge-lint: disable-next-line(unsafe-typecast)
-        _flush(predicted, hotkey, destSubstrateColdkey, uint16(netuid), amount);
+        uint16 nid = uint16(netuid);
+        VaultReads.requireTransfersEnabled(nid);
+        _flush(predicted, hotkey, destSubstrateColdkey, nid, amount);
     }
 
     /// @param minTaoOut Minimum native TAO in EVM wei.
@@ -499,10 +500,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         for (uint256 i; i < hotkeys.length && remaining != 0;) {
             uint256 balance = balances[i];
             uint256 chunk;
-            if (balance <= remaining) {
+            if (balance > remaining) {
+                if (includePartials) chunk = _sellableChunk(netuid, remaining, balance, dustThresholdTao);
+            } else if (balance != 0 && IAlpha(ALPHA_PRECOMPILE).simSwapAlphaForTao(netuid, _saturateU64(balance)) != 0)
+            {
+                // The pool refuses a sale whose TAO output rounds to zero, full drain or not.
                 chunk = balance;
-            } else if (includePartials) {
-                chunk = _sellableChunk(netuid, remaining, balance, dustThresholdTao);
             }
             if (chunk != 0) {
                 _sell(clone, hotkeys[i], netuid, chunk);

@@ -9,6 +9,7 @@ import { VaultMath } from "./VaultMath.sol";
 import {
     BackingShortfall,
     NoValidatorFound,
+    AlphaTransfersDisabled,
     SubnetInDissolutionBlackoutPeriod,
     ValidatorSetMalformed
 } from "../VaultErrors.sol";
@@ -77,6 +78,12 @@ library VaultReads {
 
     function requireNotDissolving(uint16 netuid) internal view {
         if (isDissolving(netuid)) revert SubnetInDissolutionBlackoutPeriod();
+    }
+
+    /// @dev A transfer the chain will refuse burns every unit of gas forwarded to it; refuse it here.
+    function requireTransfersEnabled(uint16 netuid) internal view {
+        (,,,,,,,,, bool transfersEnabled,,) = ISubnet(SUBNET_PRECOMPILE).getSubnetCapacityConfig(netuid);
+        if (!transfersEnabled) revert AlphaTransfersDisabled(netuid);
     }
 
     /// @dev TAO arriving during/after dissolution backs redemptions, not the claim index.
