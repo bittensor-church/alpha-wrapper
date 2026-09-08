@@ -304,6 +304,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         // Pay before minting: proceeds still on the clone would otherwise enter the claim index.
         uint256 refundShares = VaultMath.sharesFor(total - assets, supply - shares, unsold);
         if (refundShares != 0) _mint(msg.sender, tokenId, refundShares, "");
+        // With no shares left there is nothing to keep parked.
+        if (totalSupply(tokenId) == 0) delete recovery[tokenId];
 
         emit UnwrappedForTao(msg.sender, tokenId, refundShares < shares ? shares - refundShares : 0, sold, taoOut);
     }

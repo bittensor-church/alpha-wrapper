@@ -453,6 +453,18 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertTrue(lens.awaitingAttestation(TOKEN1), "which stays parked");
     }
 
+    function test_ParkedPosition_FullTaoExitReleasesIt() public {
+        uint256 shares = _parkedPosition();
+
+        vm.prank(alice);
+        vault.unwrapForTao(TOKEN1, shares, 0);
+
+        assertEq(vault.totalSupply(TOKEN1), 0, "nothing outstanding");
+        assertFalse(lens.awaitingAttestation(TOKEN1), "with no shares left there is nothing to hold");
+        _depositAndWrap(bob, NETUID1, 5 ether);
+        assertGe(lens.totalStake(TOKEN1), 5 ether, "and the next depositor starts a fresh position");
+    }
+
     function test_ParkedPosition_KeepsTransfersAndClaimsLive() public {
         uint256 shares = _parkedPosition();
         _donateToClone(vault.subnetClone(TOKEN1), 4 ether);
