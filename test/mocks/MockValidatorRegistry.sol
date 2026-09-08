@@ -31,13 +31,9 @@ contract MockValidatorRegistry is IValidatorRegistry {
         external
         view
         override
-        returns (bytes32[] memory hotkeys, uint16[] memory weights)
+        returns (bytes32[] memory hotkeys, uint16[] memory weights, bytes32[] memory owners)
     {
         Slot storage slot = _slots[netuid];
-        return (slot.hotkeys, slot.weights);
-    }
-
-    function attestedOwners(uint256 netuid) external view override returns (bytes32[] memory) {
-        return _slots[netuid].owners;
+        return (slot.hotkeys, slot.weights, slot.owners);
     }
 }

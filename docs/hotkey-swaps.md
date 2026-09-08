@@ -63,7 +63,9 @@ again.
 At deployment the vault claims one hotkey for its own coldkey, the parking
 hotkey. Nobody else can rename it, rename into it, or claim it. Every recovery
 and every write-off rolls what the vault can locate onto that hotkey and
-collapses the token's record to that single slot. The position is then parked:
+collapses the token's record to that single slot. A write-off keeps a slot for
+any remainder the chain would not let it move, and the next deposit or release
+carries that remainder along. The position is then parked:
 
 - Deposits and weight alignment wait for an attestation newer than the one in
   force when the position parked.

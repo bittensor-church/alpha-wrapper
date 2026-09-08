@@ -480,6 +480,34 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertGe(lens.totalStake(TOKEN1), 5 ether, "and the next depositor starts a fresh position");
     }
 
+    /// @dev A remainder below the vault's conservative floor stays on the books until a pile carries it.
+    function test_WriteOff_KeepsARemainderItCannotMove() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        bytes32 coldkey = _subnetColdkey(NETUID1);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 1e6);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, coldkey, NETUID1, 0);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, coldkey, NETUID1, 0);
+        vault.syncBacking(TOKEN1);
+        vm.warp(lens.frozenUntil(TOKEN1));
+
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit BackingWrittenOff(TOKEN1, 30 ether, 1e6);
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit BackingParked(TOKEN1, 1e6, registry.nonces(NETUID1));
+        vault.syncBacking(TOKEN1);
+
+        VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
+        assertEq(slots.length, 2, "the parking slot and the remainder");
+        assertEq(slots[1].active, hotkey1, "the remainder stays where the chain left it");
+        assertEq(slots[1].tracked, 1e6, "and on the books");
+        assertEq(lens.totalStake(TOKEN1), 1e6, "so the quote still counts it");
+        assertTrue(lens.awaitingAttestation(TOKEN1), "while the position waits");
+
+        _reattestCurrentSet(NETUID1);
+        _depositAndWrap(bob, NETUID1, 5 ether);
+        assertEq(lens.totalStake(TOKEN1), 5 ether + 1e6, "and the next deposit carries it along");
+    }
+
     /// @dev The vault's stake on the parking hotkey is a nominator position the chain can sweep.
     function test_ParkedPosition_ThatGoesShort_IsWrittenOffAndPaysAgain() public {
         uint256 shares = _parkedPosition();

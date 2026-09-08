@@ -28,8 +28,7 @@ library VaultReads {
         view
         returns (bytes32[] memory hotkeys, uint16[] memory weights, bytes32[] memory owners)
     {
-        (hotkeys, weights) = registry.getValidators(netuid);
-        owners = registry.attestedOwners(netuid);
+        (hotkeys, weights, owners) = registry.getValidators(netuid);
         if (hotkeys.length == 0) revert NoValidatorFound();
         if (hotkeys.length != weights.length || hotkeys.length != owners.length) revert ValidatorSetMalformed();
     }

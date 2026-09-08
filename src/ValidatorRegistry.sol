@@ -96,15 +96,10 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         external
         view
         override
-        returns (bytes32[] memory hotkeys, uint16[] memory weights)
+        returns (bytes32[] memory hotkeys, uint16[] memory weights, bytes32[] memory owners)
     {
         ValidatorSet storage validatorSet = _validators[netuid];
-        return (validatorSet.hotkeys, validatorSet.weights);
-    }
-
-    /// @inheritdoc IValidatorRegistry
-    function attestedOwners(uint256 netuid) external view override returns (bytes32[] memory) {
-        return _validators[netuid].owners;
+        return (validatorSet.hotkeys, validatorSet.weights, validatorSet.owners);
     }
 
     function setSigners(address[] calldata newSigners, uint8 newThreshold) external onlyRole(DEFAULT_ADMIN_ROLE) {

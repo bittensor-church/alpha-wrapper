@@ -812,7 +812,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         _park(tokenId, clone, coldkey, netuid, VaultMath.concat(backing.keys, strays), false);
     }
 
-    /// @dev Roll every located balance onto the parking hotkey and collapse the record to that one slot.
+    /// @dev Roll every located balance onto the parking hotkey and collapse the record to that slot. A
+    ///      write-off that leaves a remainder the chain would not move keeps a slot for each key holding
+    ///      one, so nothing located drops off the books.
     function _park(
         uint256 tokenId,
         address clone,
@@ -821,15 +823,33 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32[] memory located,
         bool writeOff
     ) private {
-        uint256 parked = _gather(clone, coldkey, netuid, located, parkingHotkey, writeOff);
+        uint256 backing = _gather(clone, coldkey, netuid, located, parkingHotkey, writeOff);
         VaultReads.Slot[] storage tokenSlots = _slots[tokenId];
-        while (tokenSlots.length > 1) {
+        _writeSlot(tokenSlots, 0, parkingHotkey, parkingHotkey, backing);
+        uint256 count = 1;
+        if (writeOff) {
+            for (uint256 i; i < located.length;) {
+                bytes32 key = located[i];
+                uint256 remainder =
+                    key == parkingHotkey ? 0 : IStaking(STAKING_PRECOMPILE).getStake(key, coldkey, netuid);
+                if (remainder != 0) {
+                    _writeSlot(tokenSlots, count, key, key, remainder);
+                    backing += remainder;
+                    unchecked {
+                        ++count;
+                    }
+                }
+                unchecked {
+                    ++i;
+                }
+            }
+        }
+        while (tokenSlots.length > count) {
             tokenSlots.pop();
         }
-        tokenSlots[0] = VaultReads.Slot({ logical: parkingHotkey, active: parkingHotkey, tracked: parked });
         uint256 nonce = validatorRegistry.nonces(netuid);
         recovery[tokenId] = Recovery({ shortSince: 0, parkedAtNonce: nonce });
-        emit BackingParked(tokenId, parked, nonce);
+        emit BackingParked(tokenId, backing, nonce);
     }
 
     /// @dev With nothing short, strays join the first slot the way a dropped validator's stake does:
@@ -1006,15 +1026,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
         for (uint256 i; i < currentSet.length;) {
             uint256 tracked = IStaking(STAKING_PRECOMPILE).getStake(actives[i], coldkey, netuid);
-            bytes32 active = actives[i];
-            if (i < tokenSlots.length) {
-                VaultReads.Slot storage slot = tokenSlots[i];
-                if (slot.logical != currentSet[i]) slot.logical = currentSet[i];
-                if (slot.active != active) slot.active = active;
-                if (slot.tracked != tracked) slot.tracked = tracked;
-            } else {
-                tokenSlots.push(VaultReads.Slot({ logical: currentSet[i], active: active, tracked: tracked }));
-            }
+            _writeSlot(tokenSlots, i, currentSet[i], actives[i], tracked);
             total += tracked;
             unchecked {
                 ++i;
@@ -1022,6 +1034,23 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
         // An exit paid from the parking hotkey leaves the position parked while shares remain.
         if (!awaitingAttestation(tokenId) || totalSupply(tokenId) == 0) delete recovery[tokenId];
+    }
+
+    function _writeSlot(
+        VaultReads.Slot[] storage tokenSlots,
+        uint256 index,
+        bytes32 logical,
+        bytes32 active,
+        uint256 tracked
+    ) private {
+        if (index < tokenSlots.length) {
+            VaultReads.Slot storage slot = tokenSlots[index];
+            if (slot.logical != logical) slot.logical = logical;
+            if (slot.active != active) slot.active = active;
+            if (slot.tracked != tracked) slot.tracked = tracked;
+        } else {
+            tokenSlots.push(VaultReads.Slot({ logical: logical, active: active, tracked: tracked }));
+        }
     }
 
     /// @dev Preserve resolved keys even when emptied. Falling back to logical names can merge two slots

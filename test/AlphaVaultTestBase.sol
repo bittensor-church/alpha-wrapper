@@ -304,7 +304,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     /// @dev Lands the current set again under a new nonce, releasing a parked position.
     function _reattestCurrentSet(uint256 netuid) internal {
-        (bytes32[] memory hks, uint16[] memory wts) = registry.getValidators(netuid);
+        (bytes32[] memory hks, uint16[] memory wts,) = registry.getValidators(netuid);
         _setValidators(netuid, hks, wts);
     }
 
