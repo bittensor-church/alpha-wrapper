@@ -8,8 +8,9 @@ Recovery, chain minimums and subnet state can temporarily prevent exits.
 
 - `AlphaVault`: deposits, shares, exits and permissionless maintenance. No vault
   admin; code, registry address, recovery window and parking hotkey are fixed
-  at deployment. Its receiving-key rules live in `VaultAllocation`, a library
-  deployed once and linked into the vault's bytecode.
+  at deployment. Its receiving-key rules, stake consolidation, payout gathering and
+  weight alignment live in `VaultAllocation`, a library deployed once and linked into
+  the vault's bytecode. Share accounting and backing gates remain in the vault.
 - `AlphaVaultLens`: read-only backing and payout quotes. Use a trusted build paired
   with the vault; a quote does not guarantee transaction success.
 - `SubnetClone`: one vault-controlled coldkey per subnet registration, isolating

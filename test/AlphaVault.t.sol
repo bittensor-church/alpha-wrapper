@@ -523,7 +523,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _plantVaultStakes(NETUID1, 100 ether, 0, 0);
 
         uint256 tokenId = vault.currentTokenId(NETUID1);
-        vm.expectEmit(true, true, true, true);
+        vm.expectEmit(true, true, true, true, address(vault));
         emit Rebalanced(tokenId, hotkey1, hotkey2, 20 ether);
         vault.rebalance(NETUID1);
     }
@@ -568,7 +568,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 burned = deposit / 2;
         uint256 expectedMove = _weighted(burned, NETUID2_BPS_HK1);
 
-        vm.expectEmit(true, true, true, true);
+        vm.expectEmit(true, true, true, true, address(vault));
         emit Rebalanced(TOKEN2, hotkey1, hotkey2, expectedMove);
 
         vm.prank(alice);
