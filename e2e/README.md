@@ -45,6 +45,8 @@ Scenario files in `tests/` cover:
   for the attesters to replace the name, then the vault claims the key itself.
 - `test_parked_recovery.py`: a stranger cuts the trail behind a rename; the watcher
   parks the position, exits pay from the parking hotkey, a new attestation releases.
+- `test_parking_isolation.py`: two subnets park on the one parking hotkey; each keeps
+  its own balance, the other keeps trading, and each releases on its own attestation.
 
 Each module's docstring describes its sequence. These scenarios exercise specific
 recovery conditions, not an unconditional exit guarantee; see the

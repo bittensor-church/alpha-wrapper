@@ -13,12 +13,7 @@ vacated name. Exits keep working from the parking hotkey throughout.
 """
 import pytest
 
-from alpha_e2e import config, extrinsics
-
-# A dev account with no role in the vault, the subnet, or the swap.
-STRANGER_URI = "//Bob"
-# Enough for the association, the per-subnet rename fee and transaction fees.
-STRANGER_FUNDING_RAO = 2_000_000_000
+from alpha_e2e import config, incidents
 
 
 @pytest.mark.scenario
@@ -26,58 +21,29 @@ def test_watcher_parks_a_position_whose_trail_a_stranger_cut(env):
     netuid = env.netuids[0]
     token_id = env.token_ids[0]
     hotkeys = env.subnet_hotkey_pubkeys(0)
-    lost_pubkey = env.hotkey_pubkeys[0]
-    lost_ss58 = env.hotkey_ss58s[0]
     clone_coldkey = env.clone_coldkey(token_id)
     parking_hotkey = env.parking_hotkey()
 
     env.deposit_and_wrap(
-        netuid, lost_pubkey, lost_ss58,
+        netuid, hotkeys[0], env.hotkey_ss58s[0],
         config.PER_HOTKEY_TRANSFER_RAO, 1_500_000, "Parked recovery: wrap failed",
     )
     shares = env.vault_shares(token_id)
     assert shares != 0, "no shares minted by the setup wrap"
-    backing_before = env.vault_total_stake(token_id)
-    assert env.stake(lost_pubkey, clone_coldkey, netuid) > 0, "the setup left nothing under the hotkey about to move"
 
-    # The validator renames its hotkey across every subnet; the alpha follows the name.
-    successor_ss58 = extrinsics.keypair_ss58("//ParkedSuccessor")
-    successor_pubkey = extrinsics.keypair_pubkey("//ParkedSuccessor")
-    extrinsics.swap_hotkey(lost_ss58, successor_ss58)
-    assert extrinsics.hotkey_owner(lost_ss58) == "", "the rename should leave the old name without an owner"
-    assert env.stake(successor_pubkey, clone_coldkey, netuid) > 0, "the vault's alpha did not follow the rename"
-    assert env.backing_intact(token_id), "a plain rename is followed and is not a loss"
-
-    # A stranger renames a junk key onto the vacated name, erasing the edge the vault follows.
-    stranger_ss58 = extrinsics.keypair_ss58(STRANGER_URI)
-    junk_ss58 = extrinsics.keypair_ss58("//ParkedJunk")
-    extrinsics.fund_account(stranger_ss58, STRANGER_FUNDING_RAO)
-    extrinsics.associate_hotkey(junk_ss58, signer_uri=STRANGER_URI)
-    extrinsics.swap_hotkey_on_subnet(junk_ss58, lost_ss58, netuid, signer_uri=STRANGER_URI)
-    assert extrinsics.hotkey_owner(lost_ss58) == stranger_ss58, "the stranger did not take the vacated name"
-
-    assert not env.backing_intact(token_id), "with the edge gone the vault cannot find its alpha"
+    stranding = incidents.cut_trail(env, 0, 0, "//ParkedSuccessor", "//ParkedJunk", "Parked recovery")
+    lost_pubkey, successor_pubkey = stranding.lost_pubkey, stranding.successor_pubkey
     env.assert_vault_reverts_with(
         "BackingShortfall(uint16,bytes32,uint256)", 1_500_000,
         "Parked recovery: a priced operation should refuse while the alpha is unlocated",
         "rebalance(uint256)", netuid,
     )
-    env.sync_backing(token_id, label="syncBacking [declare]")
-    assert env.frozen_until(token_id) > 0, "the shortfall should be on file with a deadline"
 
     # The watcher names the successor; the vault parks everything it can locate.
-    env.recover_stray(token_id, [successor_pubkey], "Parked recovery: recoverStray failed")
-
-    parked = env.stake(parking_hotkey, clone_coldkey, netuid)
-    assert parked >= backing_before - config.CONSOLIDATION_ROUNDING_TOLERANCE_RAO, (
-        f"the parking hotkey holds {parked} against {backing_before} before the incident"
-    )
+    parked = incidents.park(env, token_id, [successor_pubkey], "Parked recovery")
     assert env.total_stake_across(clone_coldkey, netuid, hotkeys + [successor_pubkey]) <= (
         config.ROUNDING_DUST_TOTAL_RAO
     ), "alpha stayed behind on validator keys after parking"
-    assert env.awaiting_attestation(token_id), "the position should wait for the attesters"
-    assert env.backing_intact(token_id), "parked backing accounts for itself"
-    assert env.frozen_until(token_id) == 0, "and nothing is on file any more"
     assert env.vault_total_stake(token_id) == parked, "the quote prices the parked alpha"
 
     # Deposits and alignment wait; exits do not.

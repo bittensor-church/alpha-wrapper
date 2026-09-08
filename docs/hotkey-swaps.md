@@ -74,6 +74,11 @@ carries that remainder along. The position is then parked:
 - TAO exits sell from the parking hotkey. Share transfers and TAO claims work.
 - Nothing on the parking hotkey earns emissions until the position is released.
 
+One parking hotkey serves every subnet. The chain keys stake by hotkey, coldkey
+and subnet, and each subnet's position rests under its own clone coldkey, so
+parking one subnet moves nothing of another's and each position is released by
+its own attesters.
+
 The first wrap, rebalance or alpha exit after a newer attestation rolls the
 parked alpha onto the attested set, aligns it and clears the parked state.
 Re-publishing the same set under a new nonce releases a position whose lost

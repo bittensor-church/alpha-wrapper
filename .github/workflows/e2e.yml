@@ -39,6 +39,7 @@ jobs:
           - tests/test_claimable_tao.py
           - tests/test_parked_stake.py
           - tests/test_parked_recovery.py
+          - tests/test_parking_isolation.py
 
     services:
       subtensor:
