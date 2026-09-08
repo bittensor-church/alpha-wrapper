@@ -4,6 +4,10 @@ The wrapper keeps Bittensor alpha staked and issues transferable ERC-1155 shares
 A live position can normally redeem for staked alpha or sell it for native TAO.
 Recovery, chain minimums and subnet state can temporarily prevent exits.
 
+For a walkthrough of the implementation, read the
+[source flow guide](source-flow-guide.md), covering the position lifecycle,
+transaction ordering, and the separate alpha and TAO accounting.
+
 ## Contracts and addresses
 
 - `AlphaVault`: deposits, shares, exits and permissionless maintenance. No vault
