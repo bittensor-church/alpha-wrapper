@@ -18,10 +18,9 @@ reverts `NothingToUnwrap` and `previewUnwrap` reverts `SubnetDissolved`.
 `sharePrice` and `previewWrap` reject dissolved positions. Accrued `claimTao`
 entitlements remain available.
 
-A later subnet using the same netuid has a separate token and clone. Its cleanup
-normally does not block the old refund. The exception is late cleanup, when the
-registration block reads zero: the vault cannot distinguish that from its own
-generation's unfinished refund and waits.
+A later subnet using the same netuid has a separate token and clone. Its
+cleanup never blocks the old refund: the vault tells generations apart by the
+chain's registration counter.
 
 A refund on an unwrapped deposit's mailbox is collected with
 `reclaimTaoFromMailbox(netuid)`.

@@ -181,7 +181,7 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
         _depositAndWrap(alice, NETUID1, 30 ether);
         uint256 staked = _totalVaultStakeAcrossHotkeys(NETUID1);
 
-        _setRegBlock(NETUID1, 999);
+        _reregisterSubnet(NETUID1);
 
         assertEq(lens.locatedStake(TOKEN1), staked, "the reading counts what the record names");
         assertTrue(lens.isBackingIntact(TOKEN1), "with nothing to be short against");

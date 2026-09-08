@@ -242,6 +242,36 @@ def dissolve_network(
     return block_hash
 
 
+def network_registration_block(netuid: int, *, chain_endpoint: str = config.CHAIN_ENDPOINT) -> int:
+    with _connect(chain_endpoint) as client:
+        return int(client.query(_sdk().storage.SubtensorModule.NetworkRegisteredAt, [netuid]))
+
+
+def set_network_registration_block(
+    netuid: int, block_number: int, *, chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Rewrite a live subnet's registration block through Sudo, the way chain
+    migrations have done to extend a subnet's immunity period."""
+    import xxhash
+
+    def twox128(data: bytes) -> bytes:
+        return b"".join(
+            xxhash.xxh64(data, seed=seed).intdigest().to_bytes(8, "little") for seed in (0, 1)
+        )
+
+    # `NetworkRegisteredAt` is keyed by the netuid's own bytes (Identity hasher).
+    key = twox128(b"SubtensorModule") + twox128(b"NetworkRegisteredAt") + netuid.to_bytes(2, "little")
+    value = block_number.to_bytes(8, "little")
+    with _connect(chain_endpoint) as client:
+        block_hash = _submit(client, _sudo(
+            client, _sdk().calls.System.set_storage(items=[(key, value)]),
+        ))
+    written = network_registration_block(netuid, chain_endpoint=chain_endpoint)
+    if written != block_number:
+        raise ExtrinsicError(f"set_network_registration_block wrote {written}, wanted {block_number}")
+    return block_hash
+
+
 def keypair_pubkey(uri: str) -> str:
     """The 32-byte public key of a dev URI, hex-encoded, as the vault and precompiles take it."""
     return "0x" + bytes(_sdk().sp_core.Keypair.create_from_uri(uri).public_key).hex()

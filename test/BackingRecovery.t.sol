@@ -97,7 +97,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
     function test_RevertWhen_SyncingARetiredTokenId() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
-        _setRegBlock(NETUID1, 999);
+        _reregisterSubnet(NETUID1);
 
         vm.expectRevert(BackingUnchanged.selector);
         vault.syncBacking(TOKEN1);
@@ -341,7 +341,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
     function test_RevertWhen_RecoveringOnARetiredTokenId() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
-        _setRegBlock(NETUID1, 999);
+        _reregisterSubnet(NETUID1);
 
         vm.expectRevert(NothingToRecover.selector);
         vault.recoverStray(TOKEN1, _hotkeys(hotkey4));

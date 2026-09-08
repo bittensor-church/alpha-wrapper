@@ -20,8 +20,11 @@ Recovery, chain minimums and subnet state can temporarily prevent exits.
 - `ValidatorRegistry`: 1–64 target hotkeys and basis-point weights per subnet,
   chosen by a quorum of off-chain signers. Its admin manages signer membership.
 
-A token id is `(registrationBlock << 16) | netuid`. Reusing a dissolved netuid
-creates a different token; old shares retain their old clone and refund.
+A token id is `(registrations << 16) | netuid`, where `registrations` is the
+number of times the chain has registered that netuid. Reusing a dissolved netuid
+steps it and creates a different token; old shares retain their old clone and
+refund. A chain migration that rewrites a subnet's registration block leaves its
+token unchanged.
 `currentTokenId(netuid)` identifies the live generation. The first wrap deploys
 its clone, or anyone can deploy it earlier with `createSubnetProxy(netuid)`.
 

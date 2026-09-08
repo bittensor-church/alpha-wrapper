@@ -5,10 +5,15 @@ import { ISubnet } from "src/interfaces/ISubnet.sol";
 
 contract MockSubnetPrecompile is ISubnet {
     mapping(uint16 => uint64) private _registeredAt;
+    mapping(uint16 => uint64) private _registrations;
     mapping(uint16 => bool) private _dissolving;
 
     function setRegisteredAt(uint16 netuid, uint64 blockNumber) external {
         _registeredAt[netuid] = blockNumber;
+    }
+
+    function setRegisteredSubnetCounter(uint16 netuid, uint64 registrations) external {
+        _registrations[netuid] = registrations;
     }
 
     function setDissolving(uint16 netuid, bool value) external {
@@ -17,6 +22,10 @@ contract MockSubnetPrecompile is ISubnet {
 
     function getNetworkRegistrationBlock(uint16 netuid) external view returns (uint64) {
         return _registeredAt[netuid];
+    }
+
+    function getRegisteredSubnetCounter(uint16 netuid) external view returns (uint64) {
+        return _registrations[netuid];
     }
 
     function isSubnetDissolving(uint16 netuid) external view returns (bool) {

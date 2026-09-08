@@ -81,7 +81,7 @@ contract AlphaVaultLens {
         if (clone == address(0)) return (slots, backing);
         uint16 netuid = VaultMath.netuidOf(tokenId);
         bytes32 coldkey = VaultReads.coldkeyOf(clone);
-        if (VaultReads.isIssuedForDissolvedSubnet(tokenId) || VaultReads.isDissolving(netuid)) {
+        if (VaultReads.isDissolvingOrDissolved(tokenId)) {
             bytes32[] memory keys = VaultReads.activesOf(vault.recordedSlots(tokenId));
             backing.total = VaultMath.sumBalances(VaultReads.fetchBalances(keys, coldkey, netuid));
             return (slots, backing);
@@ -123,9 +123,7 @@ contract AlphaVaultLens {
         if (supply == 0) return (0, 0);
 
         uint16 netuid = VaultMath.netuidOf(tokenId);
-        VaultReads.requireNotHeldByDissolution(tokenId);
-
-        if (VaultReads.isIssuedForDissolvedSubnet(tokenId)) {
+        if (VaultReads.isDissolved(tokenId)) {
             uint256 backing = VaultMath.unreservedTao(clone.balance, vault.taoLiability(tokenId));
             if (backing == 0) revert SubnetDissolved();
             return (0, VaultMath.toNativeQuantum(VaultMath.proRata(backing, shares, supply)));
@@ -172,10 +170,8 @@ contract AlphaVaultLens {
         (shortSince,) = vault.recovery(tokenId);
     }
 
-    /// @dev Check the blackout first: a registration block cleared mid-cleanup is not a settled refund.
     function _requireCurrentRegistration(uint256 tokenId) private view {
-        VaultReads.requireNotHeldByDissolution(tokenId);
-        if (VaultReads.isIssuedForDissolvedSubnet(tokenId)) revert SubnetDissolved();
+        if (VaultReads.isDissolved(tokenId)) revert SubnetDissolved();
     }
 
     function _previewSyncTao(uint256 tokenId, uint256 liability) private view returns (uint256, uint256) {
