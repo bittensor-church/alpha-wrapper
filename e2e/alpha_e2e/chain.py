@@ -61,6 +61,13 @@ def cast_call(
     return _first_token(completed.stdout)
 
 
+def cast_call_raw(
+    to: str, signature: str, *args, rpc: str = config.RPC_URL, block: Optional[int] = None,
+) -> str:
+    """cast's full printout for a call, for return shapes such as struct arrays."""
+    return run(_cast_call_command(to, signature, args, rpc, block)).stdout
+
+
 # Frontier reports a call the EVM refused (as opposed to one that reverted) with this message.
 EVM_ERROR = "evm error"
 

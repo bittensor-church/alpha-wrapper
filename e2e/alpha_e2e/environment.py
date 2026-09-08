@@ -5,11 +5,18 @@ bootstrap.build_environment() with typed on-chain getters (stakes, shares,
 prices, quotes) and scenario actions (vault sends, deposits, share transfers,
 validator rotations, revert assertions).
 """
+import re
 import time
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from . import chain, config, extrinsics, substrate, validators
+
+
+def largest_burn_leaving_alpha(total: int, supply: int) -> int:
+    """The most shares whose alpha payout, `shares * (total + 1) // (supply + 1e9)`, stays below
+    `total`, and never the whole supply, so the position outlives the burn."""
+    return min(supply - 1, (total * (supply + 10**9) - 1) // (total + 1))
 
 
 def alpha_to_tao_quote(netuid: int, alpha_rao: int, block: Optional[int] = None) -> int:
@@ -169,6 +176,15 @@ class Environment:
         return int(chain.cast_call(
             self.lens_address, "previewWrap(uint256,uint256)(uint256)", token_id, assets,
         ))
+
+    def recorded_slot_index(self, token_id: int, hotkey_pubkey: str) -> int:
+        """Index of the recorded slot whose active key is `hotkey_pubkey`; bit `index` of a
+        TAO exit's mask names it."""
+        printout = chain.cast_call_raw(
+            self.vault_address, "recordedSlots(uint256)((bytes32,bytes32,uint256)[])", token_id,
+        )
+        actives = re.findall(r"0x[0-9a-fA-F]{64}", printout)[1::2]
+        return [key.lower() for key in actives].index(hotkey_pubkey.lower())
 
     def preview_unwrap(self, token_id: int, shares: int) -> Tuple[int, int]:
         """(alpha RAO, native-TAO wei) legs an unwrap of `shares` would pay out."""
@@ -399,19 +415,38 @@ class Environment:
         a quarter of the pool's alpha so a single sell cannot overshoot the
         target band. Alice's stake under one hotkey can move the price by about
         half, so deeper targets are out of reach."""
-        for _ in range(18):
-            if self.alpha_value_tao(netuid, alpha_rao) < target_tao_rao:
-                return
-            alice_stake = self.stake(hotkey_pubkey, config.ALICE_COLDKEY_PUBKEY, netuid)
-            pool_alpha = self.alpha_in_pool(netuid)
-            chunk = min(alice_stake // 3, max(pool_alpha // 4, 1))
-            if chunk == 0:
-                break
-            try:
-                extrinsics.remove_stake(hotkey_ss58, netuid, chunk)
-            except extrinsics.ExtrinsicError as error:
-                raise AssertionError(f"{context}: alpha sell rejected") from error
+        self._dump_alpha_until(
+            netuid, [(hotkey_pubkey, hotkey_ss58)],
+            lambda: self.alpha_value_tao(netuid, alpha_rao) < target_tao_rao, context,
+        )
         assert self.alpha_value_tao(netuid, alpha_rao) < target_tao_rao, (
             f"{context}: could not crash the price "
             f"({alpha_rao} alpha RAO still worth >= {target_tao_rao} RAO)"
         )
+
+    def crash_price_until_refused(
+        self, netuid: int, sellers: List[Tuple[str, str]], alpha_rao: int, context: str,
+    ) -> None:
+        """Alice sells under each `(hotkey pubkey, hotkey ss58)` in turn until the pool
+        refuses to quote a sale of `alpha_rao`."""
+        self._dump_alpha_until(netuid, sellers, lambda: self.tao_quote(netuid, alpha_rao) is None, context)
+        assert self.tao_quote(netuid, alpha_rao) is None, (
+            f"{context}: the pool still quotes {alpha_rao} alpha RAO after every seller ran dry"
+        )
+
+    def _dump_alpha_until(
+        self, netuid: int, sellers: List[Tuple[str, str]], done: Callable[[], bool], context: str,
+    ) -> None:
+        for hotkey_pubkey, hotkey_ss58 in sellers:
+            for _ in range(18):
+                if done():
+                    return
+                alice_stake = self.stake(hotkey_pubkey, config.ALICE_COLDKEY_PUBKEY, netuid)
+                pool_alpha = self.alpha_in_pool(netuid)
+                chunk = min(alice_stake // 3, max(pool_alpha // 4, 1))
+                if chunk == 0:
+                    break
+                try:
+                    extrinsics.remove_stake(hotkey_ss58, netuid, chunk)
+                except extrinsics.ExtrinsicError as error:
+                    raise AssertionError(f"{context}: alpha sell rejected") from error

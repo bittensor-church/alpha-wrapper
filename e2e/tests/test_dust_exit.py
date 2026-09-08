@@ -1,38 +1,35 @@
 """A slot the pool will not pay for is excluded from a TAO exit instead of blocking it.
 
-A single-validator position is reduced to a leftover the pool refuses to quote. The
-plain TAO exit burns its gas at that slot. A second validator then carries the live
-backing, and the exit that excludes the leftover pays a partial and then a full exit.
+A single-validator position is reduced to a leftover the pool refuses to quote, and
+the plain TAO exit burns its gas at that slot. Live backing then lands on a second
+attested hotkey that no emissions touch, and the exit that excludes the leftover pays
+a partial and then a full exit for exactly what that backing was worth.
 """
 import pytest
 
-from alpha_e2e import checks, config
+from alpha_e2e import checks, config, extrinsics
+from alpha_e2e.environment import largest_burn_leaving_alpha
 
+# An owned hotkey with no subnet membership earns nothing, so the backing it holds is exact.
+LIVE_HOTKEY_URI = "//DustExitLive"
 LIVE_DEPOSIT_RAO = 1_000_000_000
-# Emissions between reads can lift the leftover back above what the pool refuses.
-LEFTOVER_ATTEMPTS = 5
+LIVE_FUNDING_TAO_RAO = 3 * LIVE_DEPOSIT_RAO
+# The exit leaves one RAO plus whatever chain rounding adds; the pool must refuse all of it.
+REFUSED_LEFTOVER_RAO = 1 + config.ROUNDING_DUST_SLOT_RAO
 
 
-def _largest_burn_paying_below(total: int, supply: int) -> int:
-    """The most shares whose alpha payout stays below `total`, from one state snapshot; the
-    vault pays `shares * (total + 1) // (supply + 1e9)`."""
-    return min(supply, (total * (supply + 10**9) - 1) // (total + 1))
-
-
-def _reduce_to_a_refused_leftover(env, netuid: int, token_id: int, hotkey: str, clone_coldkey: str) -> int:
-    for _ in range(LEFTOVER_ATTEMPTS):
-        total = env.vault_total_stake(token_id)
-        shares = _largest_burn_paying_below(total, env.vault_shares(token_id))
-        assert env.preview_unwrap(token_id, shares)[0] < env.vault_total_stake(token_id), "the burn should leave alpha"
-        env.vault_send(
-            2_500_000, "Dust exit: the alpha exit leaving one RAO failed",
-            "unwrap(uint256,uint256,bytes32,uint256)", token_id, shares, env.wrapper_substrate_coldkey, 0,
-        )
-        leftover = env.stake(hotkey, clone_coldkey, netuid)
-        assert leftover > 0, "the exit emptied the slot instead of leaving a leftover"
-        if env.tao_quote(netuid, leftover) is None:
-            return leftover
-    pytest.fail(f"the pool kept quoting the leftover after {LEFTOVER_ATTEMPTS} attempts")
+def _leave_a_refused_leftover(env, netuid: int, token_id: int, hotkey: str, clone_coldkey: str) -> int:
+    total = env.vault_total_stake(token_id)
+    shares = largest_burn_leaving_alpha(total, env.vault_shares(token_id))
+    assert env.preview_unwrap(token_id, shares)[0] < env.vault_total_stake(token_id), "the burn should leave alpha"
+    env.vault_send(
+        2_500_000, "Dust exit: the alpha exit leaving a leftover failed",
+        "unwrap(uint256,uint256,bytes32,uint256)", token_id, shares, env.wrapper_substrate_coldkey, 0,
+    )
+    leftover = env.stake(hotkey, clone_coldkey, netuid)
+    assert 0 < leftover <= REFUSED_LEFTOVER_RAO, f"the exit left {leftover} RAO behind"
+    assert env.tao_quote(netuid, leftover) is None, "the pool should refuse to quote the leftover"
+    return leftover
 
 
 @pytest.mark.scenario
@@ -42,30 +39,43 @@ def test_tao_exit_sells_around_a_slot_the_pool_refuses(env):
     hotkeys = env.subnet_hotkey_pubkeys(0)
     clone_coldkey = env.clone_coldkey(token_id)
 
+    live_pubkey = extrinsics.keypair_pubkey(LIVE_HOTKEY_URI)
+    live_ss58 = extrinsics.keypair_ss58(LIVE_HOTKEY_URI)
+    extrinsics.associate_hotkey(live_ss58)
+    extrinsics.add_stake(live_ss58, netuid, LIVE_FUNDING_TAO_RAO)
+    assert not extrinsics.hotkey_is_registered(live_ss58, netuid), "the live hotkey must stay outside the metagraph"
+    assert env.stake(live_pubkey, config.ALICE_COLDKEY_PUBKEY, netuid) >= LIVE_DEPOSIT_RAO, "Alice's funding is short"
+
     env.set_validators(netuid, [hotkeys[0]], [10000])
     env.deposit_and_wrap(
         netuid, hotkeys[0], env.hotkey_ss58s[0],
         config.PER_HOTKEY_TRANSFER_RAO, 1_500_000, "Dust exit: wrap failed",
     )
-    leftover = _reduce_to_a_refused_leftover(env, netuid, token_id, hotkeys[0], clone_coldkey)
+    env.crash_price_until_refused(
+        netuid, [(hotkeys[1], env.hotkey_ss58s[1]), (hotkeys[2], env.hotkey_ss58s[2])],
+        REFUSED_LEFTOVER_RAO, "Dust exit",
+    )
+    leftover = _leave_a_refused_leftover(env, netuid, token_id, hotkeys[0], clone_coldkey)
 
     stranded_shares = env.vault_shares(token_id)
+    assert stranded_shares > 0, "the shaving burn should leave shares behind"
     burned = env.vault_send_expect_revert(
         2_500_000, "Dust exit: the plain TAO exit should fail at the refused slot",
         "unwrapForTao(uint256,uint256,uint256)", token_id, stranded_shares, 0,
     )
     checks.assert_gas_exceeds(burned, config.REVERT_GAS_BOUND, "the refused sale should have burned its gas")
 
-    env.set_validators(netuid, [hotkeys[1], hotkeys[0]], [9999, 1])
+    env.set_validators(netuid, [live_pubkey, hotkeys[0]], [9999, 1])
     env.deposit_and_wrap(
-        netuid, hotkeys[1], env.hotkey_ss58s[1], LIVE_DEPOSIT_RAO, 1_500_000, "Dust exit: the live deposit failed",
+        netuid, live_pubkey, live_ss58, LIVE_DEPOSIT_RAO, 1_500_000, "Dust exit: the live deposit failed",
     )
-    assert env.stake(hotkeys[0], clone_coldkey, netuid) >= leftover, "the leftover should sit beside live backing"
-    exclude_leftover = 1 << 1
+    assert env.stake(hotkeys[0], clone_coldkey, netuid) == leftover, "the leftover should sit beside live backing"
+    exclude_leftover = 1 << env.recorded_slot_index(token_id, hotkeys[0])
 
     partial_shares = env.vault_shares(token_id) // 2
     quoted_alpha, _ = env.preview_unwrap(token_id, partial_shares)
-    live_before = env.stake(hotkeys[1], clone_coldkey, netuid)
+    assert env.tao_quote(netuid, leftover) is None, "the pool should still refuse the excluded slot"
+    live_before = env.stake(live_pubkey, clone_coldkey, netuid)
     tao_before = env.user_tao_wei()
     receipt = env.vault_send(
         2_500_000, "Dust exit: the masked partial exit failed",
@@ -76,10 +86,12 @@ def test_tao_exit_sells_around_a_slot_the_pool_refuses(env):
     sold = checks.assert_payout_near_quote(
         tao_before, env.user_tao_wei(), receipt, netuid, quoted_alpha, "masked partial payout off the quote",
     )
-    assert live_before - env.stake(hotkeys[1], clone_coldkey, netuid) == sold, "the sale came from the live slot"
-    assert env.stake(hotkeys[0], clone_coldkey, netuid) >= leftover, "the excluded slot should be untouched"
+    live_delta = live_before - env.stake(live_pubkey, clone_coldkey, netuid)
+    assert abs(live_delta - sold) <= config.ROUNDING_DUST_SLOT_RAO, f"the live slot gave {live_delta}, sold {sold}"
+    assert env.stake(hotkeys[0], clone_coldkey, netuid) == leftover, "the excluded slot should be untouched"
 
-    live_before = env.stake(hotkeys[1], clone_coldkey, netuid)
+    assert env.tao_quote(netuid, leftover) is None, "the pool should still refuse the excluded slot"
+    live_before = env.stake(live_pubkey, clone_coldkey, netuid)
     tao_before = env.user_tao_wei()
     receipt = env.vault_send(
         2_500_000, "Dust exit: the masked full exit failed",
@@ -91,5 +103,5 @@ def test_tao_exit_sells_around_a_slot_the_pool_refuses(env):
         tao_before, env.user_tao_wei(), receipt, netuid, live_before, "masked full payout off the live slot",
     )
     assert env.vault_shares(token_id) == 0, "the full exit should burn every share"
-    assert env.stake(hotkeys[1], clone_coldkey, netuid) <= config.ROUNDING_DUST_SLOT_RAO, "and drain the live slot"
-    assert env.stake(hotkeys[0], clone_coldkey, netuid) >= leftover, "while the refused slot stays where it is"
+    assert env.stake(live_pubkey, clone_coldkey, netuid) <= config.ROUNDING_DUST_SLOT_RAO, "and drain the live slot"
+    assert env.stake(hotkeys[0], clone_coldkey, netuid) == leftover, "while the refused slot stays where it is"
