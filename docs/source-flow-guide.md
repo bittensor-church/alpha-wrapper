@@ -1,12 +1,8 @@
 # Alpha Wrapper: following the flow
 
-A short map of `src/` at main commit `ce7dfe3`.
+A short guide to the wrapper's control flow.
 
 ## What lives where
-
-Users deposit staked alpha and receive transferable ERC-1155 shares. Each subnet
-registration has its own shares and vault-controlled `SubnetClone`. Reusing a
-subnet number creates a new position; old shares keep their old clone.
 
 ```text
 User's stake -> personal DepositMailbox -> pooled SubnetClone
@@ -16,9 +12,6 @@ User's stake -> personal DepositMailbox -> pooled SubnetClone
 
 AlphaVault: shares and accounting     ValidatorRegistry: target keys and weights
 ```
-
-A coldkey identifies the account holding stake; a hotkey identifies where it is
-delegated. Alpha backs live shares. Native TAO is accounted for separately.
 
 ## Why there are several kinds of key
 
@@ -44,6 +37,7 @@ Missing backing -> syncBacking declares a shortfall
 
 Parked -> newer registry attestation -> next wrap/rebalance/alpha exit can
                                        apply the set and clear parked state
+Parked -> live alpha or TAO exit leaves no shares -> parked state cleared
 ```
 
 A detected shortfall already blocks ordinary live deposits and exits. Declaring
@@ -69,7 +63,7 @@ cleanup, then old shares redeem the clone's unreserved TAO.
   slots before partials -> measure proceeds and remaining alpha -> pay TAO ->
   refund eligible unsold alpha as shares. This path does not apply registry weights.
 - **Dissolved `unwrap`:** exclude reserved TAO claims -> calculate a proportional
-  refund -> burn shares -> pay native TAO. The caller sets `minAlphaOut` to zero.
+  refund -> burn shares -> pay native TAO. The caller must pass zero for `minAlphaOut`.
 
 ## Three details that explain surprising code
 
@@ -83,10 +77,7 @@ cleanup, then old shares redeem the clone's unreserved TAO.
    A TAO sale pays before refund minting so proceeds do not enter that shared index.
 3. **Reading and recording differ.** `_openBacking` resolves and checks without
    writing. `_settle` replaces the allocation record; `_reanchor` updates locations
-   and balances while keeping slot identities. Later reverts roll back earlier steps.
+   and balances while keeping slot identities.
 
-Start tracing in [AlphaVault.sol](../src/AlphaVault.sol). Key resolution is in
-[VaultReads.sol](../src/libraries/VaultReads.sol); stake movement is in
-[VaultAllocation.sol](../src/libraries/VaultAllocation.sol). For recovery details,
-use the existing [runbook](hotkey-swaps.md). Lens quotes are estimates of amounts,
-not proof that all execution checks will pass.
+Start tracing in `AlphaVault`. `VaultReads` resolves keys; `VaultAllocation`
+moves stake. For recovery details, use the [runbook](hotkey-swaps.md).
