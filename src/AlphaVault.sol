@@ -22,9 +22,7 @@ import {
     BackingUnchanged,
     ChosenHotkeyNotInSet,
     ClaimBelowNativePrecision,
-    ConsolidationBelowFloor,
     DepositTooSmall,
-    GatherBelowFloor,
     InsufficientShares,
     NetuidOutOfRange,
     NothingToRecover,
@@ -49,6 +47,10 @@ import {
 ///      Missing backing parks the position on the vault's own hotkey until the registry publishes a
 ///      newer set. See docs/hotkey-swaps.md for the exit restrictions and recovery policy.
 contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
+    // Keep errors bubbled by VaultAllocation in the vault ABI for callers and decoders.
+    error ConsolidationBelowFloor();
+    error GatherBelowFloor();
+
     /// @dev One shortfall clock per token. A parked position rests on `parkingHotkey` until the
     ///      registry nonce moves past `parkedAtNonce`; zero means the position is not parked.
     struct Recovery {
@@ -81,9 +83,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
     mapping(uint256 => mapping(address => uint256)) public claimableTao;
 
-    uint16 private constant BPS_BASE = 10_000;
-    /// @dev The true price is below the rounded-down read plus this quantum.
-    uint256 private constant ALPHA_PRICE_QUANTUM_E18 = 1e9;
     /// @dev Keeps index-flooring loss below one native quantum and every whole-RAO arrival indexable.
     uint256 private constant SUPPLY_CAP = VaultMath.TAO_NATIVE_QUANTUM * VaultMath.TAO_INDEX_PRECISION;
 
@@ -210,8 +209,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                 IStaking(STAKING_PRECOMPILE).getStake(chosenHotkey, destColdkey, netuid)
             );
         }
-        _consolidateRotatedStake(clone, destColdkey, nid, backing.keys, actives, alphaPriceE18, false);
-        _rebalance(tokenId, clone, actives, weights, destColdkey, alphaPriceE18);
+        VaultAllocation.consolidateRotatedStake(clone, destColdkey, nid, backing.keys, actives, alphaPriceE18, false);
+        VaultAllocation.rebalance(tokenId, clone, actives, weights, destColdkey, alphaPriceE18);
         uint256 totalAlpha = _settle(tokenId, destColdkey, hotkeys, actives);
 
         uint256 preStake = totalAlpha > totalDeposit ? totalAlpha - totalDeposit : 0;
@@ -358,7 +357,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
         // No pool trades on this path, so one price read covers all moves.
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
-        _consolidateRotatedStake(clone, coldkey, netuid, backing.keys, actives, alphaPriceE18, false);
+        VaultAllocation.consolidateRotatedStake(clone, coldkey, netuid, backing.keys, actives, alphaPriceE18, false);
 
         uint256[] memory balances = VaultReads.fetchBalances(actives, coldkey, netuid);
         uint256 totalAlpha = VaultMath.sumBalances(balances);
@@ -383,72 +382,13 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
 
         _burn(msg.sender, tokenId, shares);
-        uint256 alphaOut = _deliverAndAlign(
+        uint256 alphaOut = VaultAllocation.deliverAndAlign(
             tokenId, clone, actives, weights, balances, coldkey, userSubstrateColdkey, assets, alphaPriceE18
         );
         if (alphaOut < minAlphaOut) revert SlippageExceeded(alphaOut);
         _settle(tokenId, coldkey, hotkeys, actives);
 
         emit Unwrapped(msg.sender, tokenId, shares, alphaOut);
-    }
-
-    function _deliverAndAlign(
-        uint256 tokenId,
-        address clone,
-        bytes32[] memory hotkeys,
-        uint16[] memory weights,
-        uint256[] memory balances,
-        bytes32 coldkey,
-        bytes32 userColdkey,
-        uint256 assets,
-        uint256 alphaPriceE18
-    ) private returns (uint256 alphaOut) {
-        uint16 netuid = VaultMath.netuidOf(tokenId);
-        uint256 deliveryIndex;
-        for (uint256 i = 1; i < balances.length;) {
-            if (balances[i] > balances[deliveryIndex]) deliveryIndex = i;
-            unchecked {
-                ++i;
-            }
-        }
-        // Gather hops can round down, so summed balances cannot determine the final deliverable amount.
-        uint256 deliverable = balances[deliveryIndex];
-        if (balances[deliveryIndex] < assets) {
-            // Start with the largest slot; reject an unmovable pile before forwarding gas to the chain.
-            if (_isBelowFloorAtAnyPrice(balances[deliveryIndex], alphaPriceE18)) {
-                revert GatherBelowFloor();
-            }
-            // Re-read every hop: requesting a cached sum can exceed the balance after chain rounding.
-            for (uint256 i; i < balances.length && balances[deliveryIndex] < assets;) {
-                if (i != deliveryIndex && balances[i] != 0) {
-                    uint256 pile = IStaking(STAKING_PRECOMPILE).getStake(hotkeys[deliveryIndex], coldkey, netuid);
-                    _move(clone, hotkeys[deliveryIndex], hotkeys[i], netuid, pile);
-                    balances[i] += balances[deliveryIndex];
-                    balances[deliveryIndex] = 0;
-                    deliveryIndex = i;
-                }
-                unchecked {
-                    ++i;
-                }
-            }
-            deliverable = IStaking(STAKING_PRECOMPILE).getStake(hotkeys[deliveryIndex], coldkey, netuid);
-        }
-        uint256 requested = assets < deliverable ? assets : deliverable;
-        alphaOut = _flushMeasured(clone, hotkeys[deliveryIndex], userColdkey, netuid, requested);
-        // Chain rounding also changes the balances available to rebalance.
-        uint256[] memory postBalances = VaultReads.fetchBalances(hotkeys, coldkey, netuid);
-        _alignToWeights(tokenId, clone, hotkeys, weights, postBalances, alphaPriceE18);
-    }
-
-    /// @dev Bound slippage against actual recipient credit, including chain-side stake-share rounding.
-    function _flushMeasured(address clone, bytes32 hotkey, bytes32 userColdkey, uint16 netuid, uint256 amount)
-        private
-        returns (uint256)
-    {
-        uint256 recipientBefore = IStaking(STAKING_PRECOMPILE).getStake(hotkey, userColdkey, netuid);
-        _flush(clone, hotkey, userColdkey, netuid, amount);
-        uint256 recipientAfter = IStaking(STAKING_PRECOMPILE).getStake(hotkey, userColdkey, netuid);
-        return recipientAfter > recipientBefore ? recipientAfter - recipientBefore : 0;
     }
 
     function _unwrapFromDissolvedSubnet(uint256 tokenId, uint256 shares, address clone) private {
@@ -480,101 +420,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _openBacking(tokenId, coldkey, nid);
         bytes32[] memory actives = _assignFundableActives(slots, backing, hotkeys, owners, nid);
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
-        _consolidateRotatedStake(clone, coldkey, nid, backing.keys, actives, alphaPriceE18, false);
-        _rebalance(tokenId, clone, actives, weights, coldkey, alphaPriceE18);
+        VaultAllocation.consolidateRotatedStake(clone, coldkey, nid, backing.keys, actives, alphaPriceE18, false);
+        VaultAllocation.rebalance(tokenId, clone, actives, weights, coldkey, alphaPriceE18);
         _settle(tokenId, coldkey, hotkeys, actives);
-    }
-
-    function _rebalance(
-        uint256 tokenId,
-        address clone,
-        bytes32[] memory hotkeys,
-        uint16[] memory weights,
-        bytes32 coldkey,
-        uint256 alphaPriceE18
-    ) private {
-        uint256[] memory balances = VaultReads.fetchBalances(hotkeys, coldkey, VaultMath.netuidOf(tokenId));
-        _alignToWeights(tokenId, clone, hotkeys, weights, balances, alphaPriceE18);
-    }
-
-    function _alignToWeights(
-        uint256 tokenId,
-        address clone,
-        bytes32[] memory hotkeys,
-        uint16[] memory weights,
-        uint256[] memory balances,
-        uint256 alphaPriceE18
-    ) private {
-        uint256 total = VaultMath.sumBalances(balances);
-
-        if (weights.length == 1 || total == 0) return;
-
-        uint256 lastIndex = weights.length - 1;
-        uint256[] memory targets = new uint256[](weights.length);
-        {
-            uint256 assigned;
-            for (uint256 i; i < lastIndex;) {
-                targets[i] = (total * weights[i]) / BPS_BASE;
-                assigned += targets[i];
-                unchecked {
-                    ++i;
-                }
-            }
-            targets[lastIndex] = total - assigned;
-        }
-
-        // Each step settles a slot; after N-1 steps the last follows from conservation.
-        uint256 minStakeTao = _minStakeTao();
-        for (uint256 round; round < lastIndex;) {
-            if (!_rebalanceStep(tokenId, clone, hotkeys, balances, targets, alphaPriceE18, minStakeTao)) break;
-            unchecked {
-                ++round;
-            }
-        }
-    }
-
-    function _rebalanceStep(
-        uint256 tokenId,
-        address clone,
-        bytes32[] memory hotkeys,
-        uint256[] memory balances,
-        uint256[] memory targets,
-        uint256 alphaPriceE18,
-        uint256 minStakeTao
-    ) private returns (bool) {
-        uint256 overIndex;
-        uint256 maxOver;
-        uint256 underIndex;
-        uint256 maxUnder;
-        for (uint256 i; i < balances.length;) {
-            if (balances[i] > targets[i]) {
-                uint256 over = balances[i] - targets[i];
-                if (over > maxOver) {
-                    maxOver = over;
-                    overIndex = i;
-                }
-            } else if (balances[i] < targets[i]) {
-                uint256 under = targets[i] - balances[i];
-                if (under > maxUnder) {
-                    maxUnder = under;
-                    underIndex = i;
-                }
-            }
-            unchecked {
-                ++i;
-            }
-        }
-
-        if (maxOver == 0 || maxUnder == 0) return false;
-
-        uint256 moveAmount = maxOver < maxUnder ? maxOver : maxUnder;
-        // A rejected precompile call consumes forwarded gas. Skip unproven moves and tolerate weight drift.
-        if (alphaPriceE18 == 0 || _taoValue(moveAmount, alphaPriceE18) < minStakeTao) return false;
-        _move(clone, hotkeys[overIndex], hotkeys[underIndex], VaultMath.netuidOf(tokenId), moveAmount);
-        emit Rebalanced(tokenId, hotkeys[overIndex], hotkeys[underIndex], moveAmount);
-        balances[overIndex] -= moveAmount;
-        balances[underIndex] += moveAmount;
-        return true;
     }
 
     /// @dev Deploys the mailbox lazily: refunds can arrive at its predicted address before deployment.
@@ -628,16 +476,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         return !VaultMath.contains(currentSet, hotkey);
     }
 
-    function _anyRotatedOut(bytes32[] memory hotkeys, bytes32[] memory currentSet) private pure returns (bool) {
-        for (uint256 i; i < hotkeys.length;) {
-            if (_isRotatedOut(hotkeys[i], currentSet)) return true;
-            unchecked {
-                ++i;
-            }
-        }
-        return false;
-    }
-
     function _taoValue(uint256 alphaAmount, uint256 alphaPriceE18) private pure returns (uint256) {
         return (alphaAmount * alphaPriceE18) / 1e18;
     }
@@ -650,11 +488,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @dev A rounded-down price can reject a valid amount. Zero proves nothing; full unstakes must bypass this.
     function _isBelowFloorAtReadPrice(uint256 alphaAmount, uint256 alphaPriceE18) private view returns (bool) {
         return alphaPriceE18 != 0 && _taoValue(alphaAmount, alphaPriceE18) < _minStakeTao();
-    }
-
-    /// @dev Reject only if the amount is below the floor even at the upper bound hidden by price rounding.
-    function _isBelowFloorAtAnyPrice(uint256 alphaAmount, uint256 alphaPriceE18) private view returns (bool) {
-        return alphaPriceE18 != 0 && _taoValue(alphaAmount, alphaPriceE18 + ALPHA_PRICE_QUANTUM_E18) < _minStakeTao();
     }
 
     function _sellRound(
@@ -720,58 +553,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     function _saturateU64(uint256 value) private pure returns (uint64) {
         // forge-lint: disable-next-line(unsafe-typecast)
         return value > type(uint64).max ? type(uint64).max : uint64(value);
-    }
-
-    /// @dev Move all dropped-key backing onto tracked destinations before rewriting the record.
-    ///      A write-off leaves an unmovable pile where it is; every other caller refuses it.
-    function _consolidateRotatedStake(
-        address clone,
-        bytes32 coldkey,
-        uint16 netuid,
-        bytes32[] memory sourceKeys,
-        bytes32[] memory currentSet,
-        uint256 alphaPriceE18,
-        bool leaveUnmovable
-    ) private {
-        if (!_anyRotatedOut(sourceKeys, currentSet)) return;
-        (bytes32 rollerHotkey, uint256 richestBalance, uint256[] memory sourceBalances, bool hasRotatedOutBalance) =
-            VaultAllocation.chooseRichestSlot(sourceKeys, currentSet, coldkey, netuid);
-        if (!hasRotatedOutBalance) return;
-        // The pile starts at the largest balance, then only grows; its starting size bounds every hop.
-        if (_isBelowFloorAtAnyPrice(richestBalance, alphaPriceE18)) {
-            if (leaveUnmovable) return;
-            revert ConsolidationBelowFloor();
-        }
-        _rollRotatedStake(clone, coldkey, netuid, sourceKeys, currentSet, rollerHotkey, sourceBalances);
-    }
-
-    /// @dev Never revisit the starting key: its cached balance is stale once the pile leaves.
-    function _rollRotatedStake(
-        address clone,
-        bytes32 coldkey,
-        uint16 netuid,
-        bytes32[] memory sourceKeys,
-        bytes32[] memory currentSet,
-        bytes32 rollerHotkey,
-        uint256[] memory sourceBalances
-    ) private {
-        bytes32 richestHotkey = rollerHotkey;
-        for (uint256 i; i < sourceBalances.length;) {
-            bytes32 sourceHotkey = sourceKeys[i];
-            if (sourceHotkey != richestHotkey && _isRotatedOut(sourceHotkey, currentSet) && sourceBalances[i] > 0) {
-                // Read the live pile; summing earlier credits would over-ask after chain rounding.
-                uint256 pile = IStaking(STAKING_PRECOMPILE).getStake(rollerHotkey, coldkey, netuid);
-                _move(clone, rollerHotkey, sourceHotkey, netuid, pile);
-                rollerHotkey = sourceHotkey;
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        if (_isRotatedOut(rollerHotkey, currentSet)) {
-            uint256 pile = IStaking(STAKING_PRECOMPILE).getStake(rollerHotkey, coldkey, netuid);
-            _move(clone, rollerHotkey, currentSet[0], netuid, pile);
-        }
     }
 
     function _holdsRotatedOutStake(VaultReads.Backing memory backing, bytes32[] memory currentSet)
@@ -885,7 +666,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32[] memory destinations = new bytes32[](1);
         destinations[0] = destination;
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
-        _consolidateRotatedStake(clone, coldkey, netuid, sources, destinations, alphaPriceE18, leaveUnmovable);
+        VaultAllocation.consolidateRotatedStake(
+            clone, coldkey, netuid, sources, destinations, alphaPriceE18, leaveUnmovable
+        );
         return IStaking(STAKING_PRECOMPILE).getStake(destination, coldkey, netuid);
     }
 
