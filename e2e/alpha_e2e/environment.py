@@ -202,14 +202,9 @@ class Environment:
             config.ALPHA_PRECOMPILE, "getAlphaInPool(uint16)(uint64)", netuid,
         ))
 
-    def tao_quote_refused(self, netuid: int, alpha_rao: int) -> bool:
-        """Whether the pool refuses to quote a sale of `alpha_rao`; a refused quote is free here."""
-        probe = chain.run(
-            ["cast", "call", config.ALPHA_PRECOMPILE, "simSwapAlphaForTao(uint16,uint64)(uint256)",
-             str(netuid), str(alpha_rao), "--rpc-url", config.RPC_URL],
-            check=False,
-        )
-        return probe.returncode != 0 or probe.stdout.strip().split()[0] == "0"
+    def tao_quote(self, netuid: int, alpha_rao: int) -> Optional[int]:
+        """The pool's quote for selling `alpha_rao`, or None when it refuses; free through eth_call."""
+        return chain.quote_alpha_for_tao(netuid, alpha_rao)
 
     def current_token_id(self, netuid: int) -> int:
         return int(chain.cast_call(self.vault_address, "currentTokenId(uint256)(uint256)", netuid))

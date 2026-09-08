@@ -61,6 +61,25 @@ def cast_call(
     return _first_token(completed.stdout)
 
 
+# Frontier reports a call the EVM refused (as opposed to one that reverted) with this message.
+EVM_ERROR = "evm error"
+
+
+def quote_alpha_for_tao(netuid: int, alpha_rao: int, rpc: str = config.RPC_URL) -> Optional[int]:
+    """The pool's TAO quote for selling `alpha_rao`, or None when the chain refuses to
+    quote it. A transport failure raises instead of passing for a refusal."""
+    probe = run(
+        ["cast", "call", config.ALPHA_PRECOMPILE, "simSwapAlphaForTao(uint16,uint64)(uint256)",
+         str(netuid), str(alpha_rao), "--rpc-url", rpc],
+        check=False,
+    )
+    if probe.returncode == 0:
+        return int(_first_token(probe.stdout))
+    if EVM_ERROR in probe.stderr.lower():
+        return None
+    raise ChainError(f"quote probe failed outside the EVM: {probe.stderr.strip()}")
+
+
 def cast_call_lines(
     to: str, signature: str, *args, rpc: str = config.RPC_URL, block: Optional[int] = None,
 ) -> List[str]:

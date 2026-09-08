@@ -56,6 +56,7 @@ Each module's docstring describes its sequence. These scenarios exercise specifi
 recovery conditions, not an unconditional exit guarantee; see the
 [design](../docs/hotkey-swaps.md).
 
-Chainless harness tests are `test_substrate.py`, `test_chain_unit.py` and
-`test_checks_unit.py`. Bootstrap creates three subnets, nine validators, the
-contracts and funded test accounts once per scenario process.
+Chainless harness tests are `test_substrate.py`, `test_chain_unit.py`,
+`test_checks_unit.py`, `test_quote_unit.py` and `test_plan_tao_exit_unit.py`.
+Bootstrap creates three subnets, nine validators, the contracts and funded test
+accounts once per scenario process.
