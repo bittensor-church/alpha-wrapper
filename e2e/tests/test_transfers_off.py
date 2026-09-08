@@ -96,7 +96,8 @@ def test_disabling_alpha_transfers_preserves_both_tao_exit_rails(env):
     print(f"  Alpha-rail unwrap reverted; shares preserved ({shares_after_revert})")
 
     # --- Phase 10: withdraw the deposit clone as TAO (unwrapForTao) ----------------
-    position_alpha, _ = env.preview_unwrap(position_token_id, position_shares)
+    # The alpha-exit preview refuses while transfers are off; a full exit sells the whole backing.
+    position_alpha = env.vault_total_stake(position_token_id)
 
     user_tao_before = env.user_tao_wei()
     receipt = env.vault_send(
