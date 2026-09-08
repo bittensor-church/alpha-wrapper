@@ -341,6 +341,17 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         MockSubnetPrecompile(SUBNET_PRECOMPILE).setRegisteredAt(uint16(netuid), blockNum);
     }
 
+    function _setRegistrations(uint256 netuid, uint64 registrations) internal {
+        MockSubnetPrecompile(SUBNET_PRECOMPILE).setRegisteredSubnetCounter(uint16(netuid), registrations);
+    }
+
+    /// @dev The chain steps the registration counter and stamps a new block on every registration.
+    function _reregisterSubnet(uint256 netuid) internal {
+        MockSubnetPrecompile subnet = MockSubnetPrecompile(SUBNET_PRECOMPILE);
+        subnet.setRegisteredSubnetCounter(uint16(netuid), subnet.getRegisteredSubnetCounter(uint16(netuid)) + 1);
+        subnet.setRegisteredAt(uint16(netuid), uint64(block.number) + 500);
+    }
+
     function _setDissolving(uint256 netuid, bool value) internal {
         MockSubnetPrecompile(SUBNET_PRECOMPILE).setDissolving(uint16(netuid), value);
     }
@@ -367,9 +378,9 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         _setDissolving(netuid, false);
     }
 
-    function _simulateNewNetworkRegistered(uint256 tokenId, uint64 newRegBlock, uint256 taoInClone) internal {
+    function _simulateNewNetworkRegistered(uint256 tokenId, uint256 taoInClone) internal {
         _simulateTaoAwardedOnDissolution(tokenId, taoInClone);
-        _setRegBlock(tokenId & 0xFFFF, newRegBlock);
+        _reregisterSubnet(tokenId & 0xFFFF);
     }
 
     /// @dev The registration block survives the start of asynchronous dissolution cleanup.

@@ -47,6 +47,8 @@ Scenario files in `tests/` cover:
   parks the position, exits pay from the parking hotkey, a new attestation releases.
 - `test_parking_isolation.py`: two subnets park on the one parking hotkey; each keeps
   its own balance, the other keeps trading, and each releases on its own attestation.
+- `test_subnet_generation.py`: a rewritten registration block leaves the token and its
+  exits untouched; dissolving and re-registering the netuid yields a new token.
 
 Each module's docstring describes its sequence. These scenarios exercise specific
 recovery conditions, not an unconditional exit guarantee; see the

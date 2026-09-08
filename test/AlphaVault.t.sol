@@ -833,11 +833,11 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(lens.totalStake(TOKEN1), 10 ether);
     }
 
-    function test_CurrentTokenIdReflectsRegBlock() public view {
-        uint256 expected1 = uint256(uint16(NETUID1)) | (uint256(100) << 16);
-        uint256 expected2 = uint256(uint16(NETUID2)) | (uint256(200) << 16);
-        assertEq(vault.currentTokenId(NETUID1), expected1);
-        assertEq(vault.currentTokenId(NETUID2), expected2);
+    function test_CurrentTokenIdReflectsRegistrationCounter() public {
+        _setRegistrations(NETUID1, 3);
+        _setRegistrations(NETUID2, 7);
+        assertEq(vault.currentTokenId(NETUID1), uint256(uint16(NETUID1)) | (uint256(3) << 16));
+        assertEq(vault.currentTokenId(NETUID2), uint256(uint16(NETUID2)) | (uint256(7) << 16));
     }
 
     function test_RevertWhen_CurrentTokenIdForUnregisteredNetuid() public {
@@ -845,16 +845,24 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.currentTokenId(42);
     }
 
-    function testFuzz_CurrentTokenId_RoundTripsAndRejectsAChangedRegistration(uint16 netuid, uint64 regBlock) public {
+    function testFuzz_CurrentTokenId_FollowsTheRegistrationCounterNotTheBlock(
+        uint16 netuid,
+        uint64 registrations,
+        uint64 regBlock
+    ) public {
         netuid = uint16(bound(netuid, 1, type(uint16).max));
         regBlock = uint64(bound(regBlock, 1, type(uint64).max));
         _setRegBlock(netuid, regBlock);
+        _setRegistrations(netuid, registrations);
 
         uint256 tokenId = vault.currentTokenId(netuid);
-        assertEq(tokenId, uint256(netuid) | (uint256(regBlock) << 16));
+        assertEq(tokenId, uint256(netuid) | (uint256(registrations) << 16));
         assertEq(lens.previewWrap(tokenId, 1e9), 1e18);
 
         _setRegBlock(netuid, regBlock == type(uint64).max ? 1 : type(uint64).max);
+        assertEq(vault.currentTokenId(netuid), tokenId, "a rewritten block changes nothing");
+
+        _setRegistrations(netuid, registrations == type(uint64).max ? 0 : registrations + 1);
         vm.expectRevert(SubnetDissolved.selector);
         lens.previewWrap(tokenId, 1e9);
     }
@@ -881,10 +889,24 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     function test_CurrentTokenIdChangesAfterRecycle() public {
         uint256 before = vault.currentTokenId(NETUID1);
-        _setRegBlock(NETUID1, 500);
+        _reregisterSubnet(NETUID1);
         uint256 afterRecycle = vault.currentTokenId(NETUID1);
         assertTrue(before != afterRecycle);
-        assertEq(afterRecycle, uint256(uint16(NETUID1)) | (uint256(500) << 16));
+        assertEq(afterRecycle, uint256(uint16(NETUID1)) | (uint256(1) << 16));
+    }
+
+    /// @dev Chain migrations have rewritten live subnets' registration blocks; the token must not notice.
+    function test_CurrentTokenId_SurvivesARegistrationBlockRewrite() public {
+        uint256 shares = _depositAndWrap(alice, NETUID1, 10 ether);
+        _setRegBlock(NETUID1, 100 + 13 * 7200);
+
+        assertEq(vault.currentTokenId(NETUID1), TOKEN1, "the token follows the registration counter");
+        assertTrue(lens.isBackingIntact(TOKEN1), "and its record is untouched");
+        vm.prank(alice);
+        vault.unwrap(TOKEN1, shares / 2, _toSubstrate(alice), 0);
+        assertEq(_userStakeAcrossHotkeys(alice, NETUID1), 5 ether, "exits still pay in alpha");
+        _depositAndWrap(bob, NETUID1, 4 ether);
+        assertEq(lens.totalStake(TOKEN1), 9 ether, "and deposits still land on the same position");
     }
 
     function test_RevertWhen_CreateSubnetProxySubnetNotRegistered() public {
@@ -914,7 +936,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.createSubnetProxy(NETUID1);
         uint256 oldTokenId = vault.currentTokenId(NETUID1);
 
-        _setRegBlock(NETUID1, 500);
+        _reregisterSubnet(NETUID1);
         uint256 newTokenId = vault.currentTokenId(NETUID1);
         vault.createSubnetProxy(NETUID1);
 
@@ -960,7 +982,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
         uint256 oldTokenId = vault.currentTokenId(NETUID1);
 
-        _setRegBlock(NETUID1, 500);
+        _reregisterSubnet(NETUID1);
 
         _simulateAlphaDeposit(bob, NETUID1, 5 ether);
         _wrap(bob, NETUID1);
@@ -1101,7 +1123,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 tokenId = vault.currentTokenId(NETUID1);
         uint256 shares = vault.balanceOf(alice, tokenId);
 
-        _simulateNewNetworkRegistered(tokenId, 500, 5 ether);
+        _simulateNewNetworkRegistered(tokenId, 5 ether);
 
         uint256 aliceBefore = alice.balance;
         vm.prank(alice);
@@ -1120,7 +1142,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateTaoAwardedOnDissolution(gen1, 50 ether);
         _simulateDissolutionCompleted(NETUID1);
 
-        _setRegBlock(NETUID1, 500);
+        _reregisterSubnet(NETUID1);
         _simulateAlphaDeposit(alice, NETUID1, 4 ether);
         _wrap(alice, NETUID1);
         uint256 gen2 = vault.currentTokenId(NETUID1);
@@ -1145,7 +1167,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     function test_Unwrap_ReplacedGenerationPaysDuringSuccessorBlackout() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 10 ether);
-        _simulateNewNetworkRegistered(TOKEN1, 500, 5 ether);
+        _simulateNewNetworkRegistered(TOKEN1, 5 ether);
         _simulateDissolutionStarted(NETUID1);
 
         uint256 aliceBefore = alice.balance;
@@ -1155,20 +1177,21 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     /// @dev A cleared registration block makes successor cleanup indistinguishable from this token's own.
-    function test_RevertWhen_UnwrapDuringSuccessorLateBlackout() public {
+    function test_Unwrap_RefundsThroughASuccessorsLateCleanup() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 10 ether);
-        _simulateNewNetworkRegistered(TOKEN1, 500, 5 ether);
+        _simulateNewNetworkRegistered(TOKEN1, 5 ether);
         _simulateDissolutionStarted(NETUID1);
         _setRegBlock(NETUID1, 0);
 
+        uint256 before = alice.balance;
         vm.prank(alice);
-        vm.expectRevert(SubnetInDissolutionBlackoutPeriod.selector);
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
+        assertEq(alice.balance - before, 5 ether, "the successor's cleanup does not hold the old refund");
     }
 
     function test_RevertWhen_UnwrapForTaoOnReplacedGenerationDuringSuccessorBlackout() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 10 ether);
-        _simulateNewNetworkRegistered(TOKEN1, 500, 5 ether);
+        _simulateNewNetworkRegistered(TOKEN1, 5 ether);
         _simulateDissolutionStarted(NETUID1);
 
         vm.prank(alice);
@@ -1178,7 +1201,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     function test_RevertWhen_SharePriceOnReplacedGenerationDuringSuccessorBlackout() public {
         _depositAndWrap(alice, NETUID1, 10 ether);
-        _simulateNewNetworkRegistered(TOKEN1, 500, 5 ether);
+        _simulateNewNetworkRegistered(TOKEN1, 5 ether);
         _simulateDissolutionStarted(NETUID1);
 
         vm.expectRevert(SubnetDissolved.selector);
@@ -1191,7 +1214,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         uint256 tokenId = vault.currentTokenId(NETUID1);
         uint256 shares = vault.balanceOf(alice, tokenId);
 
-        _setRegBlock(NETUID1, 500);
+        _reregisterSubnet(NETUID1);
         _simulateDissolutionStarted(NETUID1);
         vm.deal(vault.subnetClone(tokenId), 1);
 
@@ -1320,7 +1343,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     function test_PreviewUnwrap_QuotesReplacedGenerationDuringSuccessorBlackout() public {
         uint256 shares = _depositAndWrap(alice, NETUID1, 10 ether);
-        _simulateNewNetworkRegistered(TOKEN1, 500, 40 ether);
+        _simulateNewNetworkRegistered(TOKEN1, 40 ether);
         _simulateDissolutionStarted(NETUID1);
 
         (uint256 alpha, uint256 tao) = lens.previewUnwrap(TOKEN1, shares);
@@ -1453,7 +1476,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
         uint256 oldTokenId = vault.currentTokenId(NETUID1);
 
-        _simulateNewNetworkRegistered(oldTokenId, 500, 40 ether);
+        _simulateNewNetworkRegistered(oldTokenId, 40 ether);
 
         vm.expectRevert(SubnetDissolved.selector);
         lens.sharePrice(oldTokenId);
@@ -1495,7 +1518,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
         uint256 oldTokenId = vault.currentTokenId(NETUID1);
 
-        _simulateNewNetworkRegistered(oldTokenId, 500, 40 ether);
+        _simulateNewNetworkRegistered(oldTokenId, 40 ether);
 
         vm.expectRevert(SubnetDissolved.selector);
         lens.previewWrap(oldTokenId, 10 ether);
@@ -1625,7 +1648,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         address oldClone = vault.subnetClone(oldTokenId);
         uint256 oldStakeBefore = _userStakeAcrossHotkeys(oldClone, NETUID1);
 
-        _setRegBlock(NETUID1, 500);
+        _reregisterSubnet(NETUID1);
         uint256 newTokenId = vault.currentTokenId(NETUID1);
         assertTrue(newTokenId != oldTokenId);
 
@@ -1676,7 +1699,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
         uint256 oldTokenId = vault.currentTokenId(NETUID1);
 
-        _simulateNewNetworkRegistered(oldTokenId, 500, 3 ether);
+        _simulateNewNetworkRegistered(oldTokenId, 3 ether);
 
         _simulateAlphaDeposit(bob, NETUID1, 20 ether);
         _wrap(bob, NETUID1);

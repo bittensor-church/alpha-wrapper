@@ -202,6 +202,15 @@ class Environment:
             config.ALPHA_PRECOMPILE, "getAlphaInPool(uint16)(uint64)", netuid,
         ))
 
+    def current_token_id(self, netuid: int) -> int:
+        return int(chain.cast_call(self.vault_address, "currentTokenId(uint256)(uint256)", netuid))
+
+    def registration_counter(self, netuid: int) -> int:
+        """How many times the chain has registered the netuid."""
+        return int(chain.cast_call(
+            config.SUBNET_PRECOMPILE, "getRegisteredSubnetCounter(uint16)(uint64)", netuid,
+        ))
+
     def is_subnet_dissolving(self, netuid: int) -> Optional[bool]:
         """Whether the chain still reports the netuid mid-dissolution; None when
         the probe fails (the RPC can flap while the chain tears a subnet down)."""

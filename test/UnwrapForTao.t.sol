@@ -206,7 +206,7 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
 
     function test_DissolvedSubnetTaoRefund_NotDrainableViaTaoRail() public {
         uint256 shares = _depositForAlice(100 ether);
-        _simulateNewNetworkRegistered(TOKEN1, 999, 5 ether);
+        _simulateNewNetworkRegistered(TOKEN1, 5 ether);
 
         vm.prank(alice);
         vm.expectRevert(NothingToUnwrap.selector);

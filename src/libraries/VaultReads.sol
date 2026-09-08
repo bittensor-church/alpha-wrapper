@@ -48,10 +48,27 @@ library VaultReads {
         }
     }
 
-    function isIssuedForDissolvedSubnet(uint256 tokenId) internal view returns (bool) {
-        uint64 currentRegistrationBlock =
-            ISubnet(SUBNET_PRECOMPILE).getNetworkRegistrationBlock(VaultMath.netuidOf(tokenId));
-        return currentRegistrationBlock == 0 || currentRegistrationBlock != VaultMath.registrationBlockOf(tokenId);
+    /// @dev Generations are told apart by the registration counter; the registration block only says
+    ///      whether the netuid is registered at all, since chain migrations have rewritten it on live subnets.
+    function _subnetState(uint256 tokenId) private view returns (bool ownGeneration, bool registered, bool dissolving) {
+        uint16 netuid = VaultMath.netuidOf(tokenId);
+        ISubnet subnet = ISubnet(SUBNET_PRECOMPILE);
+        ownGeneration = subnet.getRegisteredSubnetCounter(netuid) == VaultMath.generationOf(tokenId);
+        registered = subnet.getNetworkRegistrationBlock(netuid) != 0;
+        dissolving = subnet.isSubnetDissolving(netuid);
+    }
+
+    /// @dev Whether the token's generation is gone; reverts while it is still being cleaned up.
+    function isDissolved(uint256 tokenId) internal view returns (bool) {
+        (bool ownGeneration, bool registered, bool dissolving) = _subnetState(tokenId);
+        if (ownGeneration && dissolving) revert SubnetInDissolutionBlackoutPeriod();
+        return !ownGeneration || !registered;
+    }
+
+    /// @dev Alpha balances are in flux from the start of dissolution on.
+    function isDissolvingOrDissolved(uint256 tokenId) internal view returns (bool) {
+        (bool ownGeneration, bool registered, bool dissolving) = _subnetState(tokenId);
+        return dissolving || !ownGeneration || !registered;
     }
 
     function isDissolving(uint16 netuid) internal view returns (bool) {
@@ -62,25 +79,11 @@ library VaultReads {
         if (isDissolving(netuid)) revert SubnetInDissolutionBlackoutPeriod();
     }
 
-    /// @dev A successor subnet's cleanup does not affect this token's refund, except when its
-    ///      registration block is zero: that state is indistinguishable from this token's own late cleanup.
-    function isHeldByDissolution(uint256 tokenId) internal view returns (bool) {
-        uint16 netuid = VaultMath.netuidOf(tokenId);
-        if (!isDissolving(netuid)) return false;
-        uint64 currentRegistrationBlock = ISubnet(SUBNET_PRECOMPILE).getNetworkRegistrationBlock(netuid);
-        return currentRegistrationBlock == 0 || currentRegistrationBlock == VaultMath.registrationBlockOf(tokenId);
-    }
-
-    function requireNotHeldByDissolution(uint256 tokenId) internal view {
-        if (isHeldByDissolution(tokenId)) revert SubnetInDissolutionBlackoutPeriod();
-    }
-
     /// @dev TAO arriving during/after dissolution backs redemptions, not the claim index.
     function indexableTao(uint256 tokenId, uint256 balance, uint256 reserved) internal view returns (uint256) {
         uint256 newTao = VaultMath.unreservedTao(balance, reserved);
         if (newTao == 0) return 0;
-        if (isDissolving(VaultMath.netuidOf(tokenId))) return 0;
-        if (isIssuedForDissolvedSubnet(tokenId)) return 0;
+        if (isDissolvingOrDissolved(tokenId)) return 0;
         return newTao;
     }
 

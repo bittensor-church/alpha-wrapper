@@ -69,7 +69,7 @@ library VaultMath {
         return uint16(tokenId & 0xFFFF);
     }
 
-    function registrationBlockOf(uint256 tokenId) internal pure returns (uint64) {
+    function generationOf(uint256 tokenId) internal pure returns (uint64) {
         // forge-lint: disable-next-line(unsafe-typecast)
         return uint64(tokenId >> 16);
     }
