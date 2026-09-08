@@ -65,8 +65,9 @@ to carry it. A later deposit can supply that balance because it lands before
 consolidation. A full-supply TAO exit avoids consolidation, subject to its own
 checks; neither route bypasses independent recovery restrictions.
 
-A TAO exit skips a slot whose whole balance would sell for no TAO and refunds it
-as shares, since the pool refuses such a sale.
+A slot the pool would not pay for makes the plain TAO exit fail and burn its gas.
+The exit that takes an exclusion mask sells the other slots and refunds the
+rest as shares; the user guide describes the pre-flight that finds such slots.
 
 The chain's root can raise the minimum a nominator may hold and sweep every
 smaller position into TAO. A vault slot swept that way arrives as TAO on the
