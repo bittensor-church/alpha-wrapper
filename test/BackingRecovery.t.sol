@@ -615,7 +615,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         if (at < deadline) {
             vm.expectRevert(BackingUnchanged.selector);
             vault.syncBacking(TOKEN1);
-            vm.expectPartialRevert(BackingShortfall.selector);
+            vm.expectRevert(ShortfallOnFile.selector);
             lens.totalStake(TOKEN1);
         } else {
             vault.syncBacking(TOKEN1);
