@@ -362,6 +362,25 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey4, NETUID1), 0, "and nothing stays behind");
     }
 
+    /// @dev A slot the resolver follows through a swap is re-anchored to the key that holds its stake.
+    function test_RecoverStray_AnnexReanchorsASlotFollowedThroughASwap() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulateFollowedSwap(NETUID1, hotkey1, hotkey4);
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey5, _subnetColdkey(NETUID1), NETUID1, 3 ether);
+        _simulateHotkeyOwnerPresent(hotkey5);
+        assertEq(vault.recordedSlots(TOKEN1)[0].active, hotkey1, "the record still names the swapped key");
+
+        vm.expectEmit(true, true, false, true, address(vault));
+        emit BackingRecovered(TOKEN1, hotkey4, 3 ether);
+        vault.recoverStray(TOKEN1, _sources(hotkey5));
+
+        VaultReads.Slot memory slot = vault.recordedSlots(TOKEN1)[0];
+        assertEq(slot.active, hotkey4, "the slot now points at the successor holding its stake");
+        assertEq(slot.tracked, _getVaultStake(hotkey4, NETUID1), "and expects exactly what sits there");
+        assertEq(_getVaultStake(hotkey5, NETUID1), 0, "the stray came home");
+        assertEq(lens.totalStake(TOKEN1), 33 ether, "as new backing");
+    }
+
     function test_RevertWhen_NeitherTheStrayNorTheSlotCanMoveTheirPile() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _plantVaultStakes(NETUID1, 1, 1, 1);

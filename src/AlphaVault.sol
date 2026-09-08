@@ -796,7 +796,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32[] memory strays = _novel(backing.keys, sources);
 
         if (VaultReads.firstShortOf(backing.short) == type(uint256).max) {
-            _annex(tokenId, clone, coldkey, netuid, backing.keys[0], strays);
+            _annex(tokenId, clone, coldkey, netuid, backing.keys, strays);
             return;
         }
         uint256 parked = _park(tokenId, clone, coldkey, netuid, VaultMath.concat(backing.keys, strays), false);
@@ -839,19 +839,21 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     }
 
     /// @dev With nothing short, strays join the first slot the way a dropped validator's stake does:
-    ///      carried by the slot's own pile, so even dust comes home.
+    ///      carried by the slot's own pile, so even dust comes home. The record then follows the keys
+    ///      the stake actually sits on.
     function _annex(
         uint256 tokenId,
         address clone,
         bytes32 coldkey,
         uint16 netuid,
-        bytes32 home,
+        bytes32[] memory keys,
         bytes32[] memory strays
     ) private {
+        bytes32 home = keys[0];
         uint256 before = IStaking(STAKING_PRECOMPILE).getStake(home, coldkey, netuid);
         uint256 balance = _gather(clone, coldkey, netuid, strays, home, false);
         if (balance <= before) revert NothingToRecover();
-        _slots[tokenId][0].tracked = balance;
+        _reanchor(tokenId, keys, VaultReads.fetchBalances(keys, coldkey, netuid));
         emit BackingRecovered(tokenId, home, balance - before);
     }
 
