@@ -90,5 +90,7 @@ def test_holder_exits_after_attesters_replace_the_ownerless_name(env):
     assert not extrinsics.hotkey_is_registered(hotkey_ss58, netuid), (
         "claiming the key must not register it on the subnet"
     )
-    assert env.stake(hotkey_pubkey, clone_coldkey, netuid) == 0, "the stake should have left the abandoned key"
+    assert env.stake(hotkey_pubkey, clone_coldkey, netuid) <= config.ROUNDING_DUST_SLOT_RAO, (
+        "the stake should have left the abandoned key"
+    )
     assert env.stake(successor_pubkey, clone_coldkey, netuid) > 0, "the successor should carry the position"

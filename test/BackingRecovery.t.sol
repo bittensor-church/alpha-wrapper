@@ -465,6 +465,21 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertGe(lens.totalStake(TOKEN1), 5 ether, "and the next depositor starts a fresh position");
     }
 
+    /// @dev Stake is keyed by hotkey, coldkey and netuid, so one parking hotkey serves every subnet.
+    function test_ParkedPosition_LeavesOtherSubnetsUntouched() public {
+        _parkedPosition();
+
+        uint256 shares = _depositAndWrap(bob, NETUID2, 10 ether);
+        vault.rebalance(NETUID2);
+        vm.prank(bob);
+        vault.unwrap(TOKEN2, shares / 2, _toSubstrate(bob), 0);
+
+        assertFalse(lens.awaitingAttestation(TOKEN2), "the other subnet is not parked");
+        assertEq(_parkedStake(NETUID2), 0, "and holds nothing on the parking hotkey");
+        assertEq(_parkedStake(NETUID1), 30 ether, "while the parked subnet's balance did not move");
+        assertTrue(lens.awaitingAttestation(TOKEN1), "and still waits for its own attesters");
+    }
+
     function test_ParkedPosition_KeepsTransfersAndClaimsLive() public {
         uint256 shares = _parkedPosition();
         _donateToClone(vault.subnetClone(TOKEN1), 4 ether);
