@@ -135,10 +135,14 @@ def receipt_block_number(receipt: dict, message: str) -> int:
 
 def forge_create(
     contract: str, *, private_key: str,
-    constructor_args: Optional[List[str]] = None, rpc: str = config.RPC_URL,
+    constructor_args: Optional[List[str]] = None, libraries: Optional[List[str]] = None,
+    rpc: str = config.RPC_URL,
 ) -> str:
+    """Deploy `contract`; `libraries` entries are `path:Name:address` links for its bytecode."""
     cmd = ["forge", "create", contract, "--private-key", private_key, "--rpc-url", rpc,
            *config.FORGE_CREATE_FLAGS, "--json"]
+    for library in libraries or []:
+        cmd += ["--libraries", library]
     if constructor_args:
         cmd += ["--constructor-args", *[str(a) for a in constructor_args]]
     completed = run(cmd)

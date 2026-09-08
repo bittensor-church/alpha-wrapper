@@ -10,12 +10,19 @@ contract MockValidatorRegistry is IValidatorRegistry {
     }
 
     mapping(uint256 => Slot) private _slots;
+    mapping(uint256 => uint256) public override nonces;
+    mapping(bytes32 => bytes32) public override attestedOwner;
 
     /// @dev Allows malformed sets that the real registry rejects.
     function setRaw(uint256 netuid, bytes32[] memory hotkeys, uint16[] memory weights) external {
         Slot storage slot = _slots[netuid];
         slot.hotkeys = hotkeys;
         slot.weights = weights;
+        nonces[netuid] += 1;
+    }
+
+    function setAttestedOwner(bytes32 hotkey, bytes32 coldkey) external {
+        attestedOwner[hotkey] = coldkey;
     }
 
     function getValidators(uint256 netuid)

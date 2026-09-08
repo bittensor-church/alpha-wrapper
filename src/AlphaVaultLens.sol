@@ -8,6 +8,7 @@ import { VaultReads } from "./libraries/VaultReads.sol";
 import {
     NetuidOutOfRange,
     NoSharesOutstanding,
+    Parked,
     SharePriceBelowPrecision,
     SubnetDissolved,
     ZeroAddress
@@ -44,29 +45,24 @@ contract AlphaVaultLens {
         return VaultReads.activesOf(vault.recordedSlots(tokenId));
     }
 
-    /// @dev Checks backing coverage, not hotkey ownership or withdrawal eligibility.
-    ///      Dissolving/dissolved positions bypass this check.
+    /// @dev Checks backing coverage and the shortfall clock, not hotkey ownership or withdrawal
+    ///      eligibility. Dissolving/dissolved positions bypass the coverage check.
     function isBackingIntact(uint256 tokenId) external view returns (bool) {
+        if (vault.recovery(tokenId).shortSince != 0) return false;
         (, VaultReads.Backing memory backing) = _readBacking(tokenId);
         return VaultReads.firstShortOf(backing.short) == type(uint256).max;
     }
 
-    /// @return deadline Latest shortfall deadline; zero if intact, max uint256 if any clock is unstarted.
-    /// @dev Expiry only permits `syncBacking` to write off losses; it does not clear them.
+    /// @return deadline When `syncBacking` may write the declared shortfall down; zero with none on file.
+    /// @dev Expiry only permits the write-off; only `syncBacking` clears or finalizes a shortfall.
     function frozenUntil(uint256 tokenId) external view returns (uint256 deadline) {
-        (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _readBacking(tokenId);
-        uint256 window = vault.recoveryWindow();
-        for (uint256 i; i < backing.short.length;) {
-            if (backing.short[i]) {
-                uint64 shortSince = slots[i].shortSince;
-                if (shortSince == 0) return type(uint256).max;
-                uint256 slotDeadline = shortSince + window;
-                if (slotDeadline > deadline) deadline = slotDeadline;
-            }
-            unchecked {
-                ++i;
-            }
-        }
+        uint64 shortSince = vault.recovery(tokenId).shortSince;
+        if (shortSince != 0) deadline = shortSince + vault.recoveryWindow();
+    }
+
+    /// @notice Whether the position rests on the vault's parking hotkey with deposits and alignment shut.
+    function awaitingAttestation(uint256 tokenId) external view returns (bool) {
+        return vault.awaitingAttestation(tokenId);
     }
 
     /// @dev Dissolution converts alpha to TAO; do not treat that drain as missing backing.
@@ -105,6 +101,7 @@ contract AlphaVaultLens {
 
     function previewWrap(uint256 tokenId, uint256 assets) external view returns (uint256) {
         _requireCurrentRegistration(tokenId);
+        if (vault.awaitingAttestation(tokenId)) revert Parked();
         return VaultMath.sharesFor(totalStake(tokenId), vault.totalSupply(tokenId), assets);
     }
 

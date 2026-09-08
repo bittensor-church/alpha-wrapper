@@ -101,19 +101,13 @@ contract BackingHandler is Test {
 
     function recoverStray(uint256 sourceSeed) external {
         if (vault.recordedSlots(tokenId).length == 0) return;
-        bytes32 source = touchedHotkeys[bound(sourceSeed, 0, touchedHotkeys.length - 1)];
-        bool[] memory coveredBefore = harness.coveredSlots();
-        bool hadShort = !harness.backingIntact();
-        try vault.recoverStray(tokenId, source) {
-            bool[] memory coveredAfter = harness.coveredSlots();
-            bool healedOne;
-            for (uint256 i; i < coveredBefore.length; ++i) {
-                assertTrue(!coveredBefore[i] || coveredAfter[i], "recovery left a covered slot short");
-                if (!coveredBefore[i]) {
-                    if (coveredAfter[i]) healedOne = true;
-                }
+        bytes32[] memory sources = new bytes32[](1);
+        sources[0] = touchedHotkeys[bound(sourceSeed, 0, touchedHotkeys.length - 1)];
+        try vault.recoverStray(tokenId, sources) {
+            bool[] memory covered = harness.coveredSlots();
+            for (uint256 i; i < covered.length; ++i) {
+                assertTrue(covered[i], "recovery left a slot short");
             }
-            assertTrue(!hadShort || healedOne, "a successful recovery healed no slot");
         } catch { }
     }
 
@@ -237,12 +231,7 @@ contract BackingInvariantTest is AlphaVaultTestBase {
     }
 
     function invariant_ReportedBackingNeverExceedsWhatTheChainHolds() public view {
-        uint256 held;
-        bytes32[] memory keys = handler.knownHotkeys();
-        for (uint256 i; i < keys.length; ++i) {
-            held += _getVaultStake(keys[i], NETUID1);
-        }
-        assertLe(lens.locatedStake(TOKEN1), held, "the position reports backing the chain does not hold");
+        assertLe(lens.locatedStake(TOKEN1), _chainHoldings(), "the position reports backing the chain does not hold");
     }
 
     function invariant_TotalTrackedBackingIsBoundedByCurrentChainHoldings() public view {
@@ -251,11 +240,15 @@ contract BackingInvariantTest is AlphaVaultTestBase {
         for (uint256 i; i < slots.length; ++i) {
             owed += slots[i].tracked;
         }
-        uint256 held;
+        assertLe(owed, _chainHoldings() + BACKING_SLACK_RAO * slots.length, "the record expects more than exists");
+    }
+
+    /// @dev Every key the campaign touched plus the parking hotkey, where recoveries and write-offs land.
+    function _chainHoldings() private view returns (uint256 held) {
         bytes32[] memory keys = handler.knownHotkeys();
         for (uint256 i; i < keys.length; ++i) {
             held += _getVaultStake(keys[i], NETUID1);
         }
-        assertLe(owed, held + BACKING_SLACK_RAO * slots.length, "the record expects more than exists");
+        held += _parkedStake(NETUID1);
     }
 }

@@ -36,7 +36,8 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     uint8 public threshold;
 
     mapping(uint256 => ValidatorSet) private _validators;
-    mapping(uint256 => uint256) public nonces;
+    mapping(uint256 => uint256) public override nonces;
+    mapping(bytes32 => bytes32) public override attestedOwner;
 
     event SignersUpdated(address[] newSigners, uint8 newThreshold);
     event ValidatorsUpdated(uint256 indexed netuid, uint256 nonce, bytes32[] hotkeys, uint256[] weights);
@@ -69,11 +70,10 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
 
     /// @param signatures Sorted by recovered signer address, ascending.
     function updateValidators(WeightAttestation calldata attestation, bytes[] calldata signatures) external {
-        uint256 validatorCount = attestation.hotkeys.length;
-        _validatePayload(attestation, validatorCount);
+        bytes32[] memory owners = _validatePayload(attestation);
         _validateNonce(attestation);
         _verifySignatures(attestation, signatures);
-        _commit(attestation, validatorCount);
+        _commit(attestation, owners);
     }
 
     /// @param signatures Each attestation's signatures sorted by recovered signer address, ascending.
@@ -81,11 +81,10 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         uint256 attestationCount = attestations.length;
         if (attestationCount != signatures.length) revert LengthMismatch();
         for (uint256 i; i < attestationCount;) {
-            uint256 validatorCount = attestations[i].hotkeys.length;
-            _validatePayload(attestations[i], validatorCount);
+            bytes32[] memory owners = _validatePayload(attestations[i]);
             _validateNonce(attestations[i]);
             _verifySignatures(attestations[i], signatures[i]);
-            _commit(attestations[i], validatorCount);
+            _commit(attestations[i], owners);
             unchecked {
                 ++i;
             }
@@ -140,12 +139,15 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         emit SignersUpdated(newSigners, newThreshold);
     }
 
-    /// @dev Reject ownerless targets before installing a set; ownership can still change afterwards.
-    function _validatePayload(WeightAttestation calldata attestation, uint256 validatorCount) private view {
+    /// @dev Reject ownerless targets before installing a set; the owners are recorded so the vault can
+    ///      tell the attested validator from whoever claims a vacated name later.
+    function _validatePayload(WeightAttestation calldata attestation) private view returns (bytes32[] memory owners) {
+        uint256 validatorCount = attestation.hotkeys.length;
         if (attestation.netuid > type(uint16).max) revert NetuidOutOfRange();
         if (validatorCount == 0 || validatorCount > MAX_VALIDATORS) revert InvalidValidatorCount();
         if (validatorCount != attestation.weights.length) revert LengthMismatch();
 
+        owners = new bytes32[](validatorCount);
         uint256 sum;
         for (uint256 i; i < validatorCount;) {
             bytes32 hotkey = attestation.hotkeys[i];
@@ -157,8 +159,9 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
                     ++j;
                 }
             }
-            (bool exists,) = IStaking(STAKING_PRECOMPILE).getHotkeyOwner(hotkey);
+            (bool exists, bytes32 owner) = IStaking(STAKING_PRECOMPILE).getHotkeyOwner(hotkey);
             if (!exists) revert OwnerlessHotkey(hotkey);
+            owners[i] = owner;
             sum += attestation.weights[i];
             unchecked {
                 ++i;
@@ -189,15 +192,16 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         }
     }
 
-    function _commit(WeightAttestation calldata attestation, uint256 validatorCount) private {
+    function _commit(WeightAttestation calldata attestation, bytes32[] memory owners) private {
         nonces[attestation.netuid] = attestation.nonce;
         ValidatorSet storage validatorSet = _validators[attestation.netuid];
         delete validatorSet.hotkeys;
         delete validatorSet.weights;
-        for (uint256 i; i < validatorCount;) {
+        for (uint256 i; i < owners.length;) {
             validatorSet.hotkeys.push(attestation.hotkeys[i]);
             // The weight sum bounds this cast to 10000.
             validatorSet.weights.push(uint16(attestation.weights[i]));
+            attestedOwner[attestation.hotkeys[i]] = owners[i];
             unchecked {
                 ++i;
             }

@@ -283,12 +283,17 @@ def _deploy_contracts(netuids: List[int], hotkey_pubkeys: List[str]):
     print(f"  ValidatorRegistry: {validator_registry_address} "
           f"(admin={config.DEPLOYER_ADDRESS}, signers=[DEPLOYER,WRAPPER_USER], threshold=2)")
 
+    allocation_library = "src/libraries/VaultAllocation.sol:VaultAllocation"
+    allocation_address = chain.forge_create(allocation_library, private_key=config.DEPLOYER_PRIVATE_KEY)
+    print(f"  VaultAllocation: {allocation_address}")
+
     vault_address = chain.forge_create(
         "src/AlphaVault.sol:AlphaVault", private_key=config.DEPLOYER_PRIVATE_KEY,
+        libraries=[f"{allocation_library}:{allocation_address}"],
         constructor_args=[
             "https://api.tao20.io/{id}.json", mailbox_implementation_address,
             subnet_clone_implementation_address, validator_registry_address,
-            str(3 * 60 * 60),
+            str(3 * 60 * 60), config.PARKING_HOTKEY,
         ],
     )
     print(f"  AlphaVault: {vault_address}")

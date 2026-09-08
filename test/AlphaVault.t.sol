@@ -14,6 +14,7 @@ import {
     NoSharesOutstanding,
     NothingToUnwrap,
     NoValidatorFound,
+    ParkingHotkeyUnavailable,
     SubnetDissolved,
     SlippageExceeded,
     SubnetInDissolutionBlackoutPeriod,
@@ -40,22 +41,47 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     function test_RevertWhen_ConstructorZeroMailboxLogic() public {
         vm.expectRevert(ZeroAddress.selector);
-        new AlphaVault(VAULT_URI, address(0), address(subnetLogic), address(registry), RECOVERY_WINDOW);
+        new AlphaVault(VAULT_URI, address(0), address(subnetLogic), address(registry), RECOVERY_WINDOW, PARKING_HOTKEY);
     }
 
     function test_RevertWhen_ConstructorZeroSubnetLogic() public {
         vm.expectRevert(ZeroAddress.selector);
-        new AlphaVault(VAULT_URI, address(mailboxLogic), address(0), address(registry), RECOVERY_WINDOW);
+        new AlphaVault(VAULT_URI, address(mailboxLogic), address(0), address(registry), RECOVERY_WINDOW, PARKING_HOTKEY);
     }
 
     function test_RevertWhen_ConstructorZeroValidatorRegistry() public {
         vm.expectRevert(ZeroAddress.selector);
-        new AlphaVault(VAULT_URI, address(mailboxLogic), address(subnetLogic), address(0), RECOVERY_WINDOW);
+        new AlphaVault(
+            VAULT_URI, address(mailboxLogic), address(subnetLogic), address(0), RECOVERY_WINDOW, PARKING_HOTKEY
+        );
     }
 
     function test_RevertWhen_ConstructorZeroRecoveryWindow() public {
         vm.expectRevert(ZeroAmount.selector);
-        new AlphaVault(VAULT_URI, address(mailboxLogic), address(subnetLogic), address(registry), 0);
+        new AlphaVault(VAULT_URI, address(mailboxLogic), address(subnetLogic), address(registry), 0, PARKING_HOTKEY);
+    }
+
+    function test_RevertWhen_ConstructorZeroParkingHotkey() public {
+        vm.expectRevert(ZeroHotkey.selector);
+        new AlphaVault(
+            VAULT_URI, address(mailboxLogic), address(subnetLogic), address(registry), RECOVERY_WINDOW, bytes32(0)
+        );
+    }
+
+    function test_RevertWhen_ConstructorParkingHotkeyIsOwnedByAnotherColdkey() public {
+        bytes32 taken = keccak256("taken-parking-hotkey");
+        _simulateSquatter(taken);
+
+        vm.expectRevert(ParkingHotkeyUnavailable.selector);
+        new AlphaVault(
+            VAULT_URI, address(mailboxLogic), address(subnetLogic), address(registry), RECOVERY_WINDOW, taken
+        );
+    }
+
+    function test_Constructor_ClaimsTheParkingHotkeyForTheVault() public view {
+        (bool exists, bytes32 owner) = MockStaking(STAKING_PRECOMPILE).getHotkeyOwner(vault.parkingHotkey());
+        assertTrue(exists, "the parking hotkey has an owner record");
+        assertEq(owner, _toSubstrate(address(vault)), "held by the vault's own coldkey");
     }
 
     function test_Uri_ReturnsConstructorValue() public view {
@@ -436,7 +462,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, NETUID1, 100 ether, hotkey1);
         _wrap(alice, NETUID1);
 
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 100 ether, 0, 0);
+        _plantVaultStakes(NETUID1, 100 ether, 0, 0);
 
         vault.rebalance(NETUID1);
 
@@ -453,7 +479,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, NETUID1, 100 ether, hotkey1);
         _wrap(alice, NETUID1);
 
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 100 ether, 0, 0);
+        _plantVaultStakes(NETUID1, 100 ether, 0, 0);
 
         vault.rebalance(NETUID1);
 
@@ -494,7 +520,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, NETUID1, 100 ether, hotkey1);
         _wrap(alice, NETUID1);
 
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 100 ether, 0, 0);
+        _plantVaultStakes(NETUID1, 100 ether, 0, 0);
 
         uint256 tokenId = vault.currentTokenId(NETUID1);
         vm.expectEmit(true, true, true, true);
@@ -507,7 +533,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         _simulateAlphaDepositHotkey(alice, NETUID1, 4e6, hotkey1);
         _wrapHotkey(alice, NETUID1, hotkey1);
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 500_001, 500_000, 0);
+        _plantVaultStakes(NETUID1, 500_001, 500_000, 0);
 
         vm.recordLogs();
         vault.rebalance(NETUID1);
@@ -522,7 +548,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         _simulateAlphaDepositHotkey(alice, NETUID1, 4e6, hotkey1);
         _wrapHotkey(alice, NETUID1, hotkey1);
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 8e6, 0, 0);
+        _plantVaultStakes(NETUID1, 8e6, 0, 0);
 
         uint256 tokenId = vault.currentTokenId(NETUID1);
         vm.expectEmit(true, true, true, true);
@@ -648,7 +674,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         vault.createSubnetProxy(NETUID1);
         uint256 tokenId = vault.currentTokenId(NETUID1);
         address clone = vault.subnetClone(tokenId);
-        _setVaultStakeAndWriteOffShortfalls(hotkey1, NETUID1, 100 ether);
+        _plantVaultStake(hotkey1, NETUID1, 100 ether);
 
         vm.prank(address(vault));
         SubnetClone(payable(clone)).moveStake(hotkey1, hotkey2, NETUID1, 100 ether);
@@ -1318,7 +1344,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
 
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 0, 0, 30 ether);
+        _plantVaultStakes(NETUID1, 0, 0, 30 ether);
 
         _setNetuid1Set(hotkey1, hotkey2, hotkey4);
 
@@ -1339,7 +1365,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
 
-        _setVaultStakeAndWriteOffShortfalls(hotkey3, NETUID1, CHAIN_MIN_STAKE - 1);
+        _plantVaultStake(hotkey3, NETUID1, CHAIN_MIN_STAKE - 1);
 
         _setNetuid1Set(hotkey1, hotkey2, hotkey4);
 
@@ -1400,7 +1426,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
 
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, 0, 0, 0);
+        _plantVaultStakes(NETUID1, 0, 0, 0);
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         (uint256 alpha, uint256 tao) = lens.previewUnwrap(TOKEN1, shares);
@@ -2073,7 +2099,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
 
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, b1, b2, b3);
+        _plantVaultStakes(NETUID1, b1, b2, b3);
 
         vault.rebalance(NETUID1);
         uint256 b1After = _getVaultStake(hotkey1, NETUID1);
@@ -2102,7 +2128,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, NETUID1, d, hotkey1);
         _wrapHotkey(alice, NETUID1, hotkey1);
 
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, b1, b2, b3);
+        _plantVaultStakes(NETUID1, b1, b2, b3);
 
         uint256 supply = vault.totalSupply(TOKEN1);
         uint256 burnShares = vault.balanceOf(alice, TOKEN1) * burnPct / 100;
@@ -2158,7 +2184,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _wrap(alice, NETUID1);
 
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, _subnetColdkey(NETUID1), NETUID1, 0);
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, b1, b2, b3);
+        _plantVaultStakes(NETUID1, b1, b2, b3);
 
         _setNetuid1Set(hotkey1, hotkey2, hotkey4);
 
@@ -2186,7 +2212,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
 
-        _setVaultStakesAndWriteOffShortfalls(NETUID1, b1, b2, b3);
+        _plantVaultStakes(NETUID1, b1, b2, b3);
 
         uint256 preTotal = b1 + b2 + b3;
         uint256 minAmt = CHAIN_MIN_STAKE;

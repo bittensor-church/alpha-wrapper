@@ -7,7 +7,9 @@ Recovery, chain minimums and subnet state can temporarily prevent exits.
 ## Contracts and addresses
 
 - `AlphaVault`: deposits, shares, exits and permissionless maintenance. No vault
-  admin; code, registry address and recovery window are fixed at deployment.
+  admin; code, registry address, recovery window and parking hotkey are fixed
+  at deployment. Its receiving-key rules live in `VaultAllocation`, a library
+  deployed once and linked into the vault's bytecode.
 - `AlphaVaultLens`: read-only backing and payout quotes. Use a trusted build paired
   with the vault; a quote does not guarantee transaction success.
 - `SubnetClone`: one vault-controlled coldkey per subnet registration, isolating
@@ -39,13 +41,14 @@ sits and do not rebalance.
 ## Swaps and recovery
 
 The vault records where stake actually sits, separately from registry names.
-It follows one successor hop from that recorded location and retains a usable
-receiving key after a slot empties.
+It follows one successor hop from that recorded location and keeps allocation
+under the coldkey that owned each attested name.
 
-Unresolved swaps need a watcher. Missing owner records require association;
-missing backing requires recovery or an explicit, delayed write-off. Neither the
-timer nor a write-off restores ownership. The example, watcher steps and exit
-restrictions are in [Hotkey swaps and recovery](hotkey-swaps.md).
+Unresolved swaps need a watcher. Missing backing is parked on a hotkey the
+vault's own coldkey controls, by recovery or by a delayed write-off, and stays
+parked until the attesters publish a new set. A name claimed by a stranger is
+retired by attestation. The example, watcher steps and exit restrictions are in
+[Hotkey swaps and recovery](hotkey-swaps.md).
 
 Start with the [user guide](user-guide.md) for transactions,
 [attester guide](attester-guide.md) for registry updates, and

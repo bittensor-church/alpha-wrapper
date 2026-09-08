@@ -109,6 +109,22 @@ contract ValidatorRegistryTest is AttestationHelper {
         pks[2] = c;
     }
 
+    function test_UpdateValidators_RecordsTheOwnerOfEachAttestedHotkey() public {
+        bytes32[] memory hks = new bytes32[](2);
+        hks[0] = hk1;
+        hks[1] = hk2;
+        uint16[] memory wts = new uint16[](2);
+        wts[0] = 6000;
+        wts[1] = 4000;
+        MockStaking mock = MockStaking(STAKING_PRECOMPILE);
+
+        _submitAttestation(registry, SN1, hks, wts, _pks2(PK2, PK1));
+
+        assertEq(registry.attestedOwner(hk1), mock.ownerOf(hk1), "the first name is bound to its owner");
+        assertEq(registry.attestedOwner(hk2), mock.ownerOf(hk2), "and so is the second");
+        assertEq(registry.attestedOwner(hk3), bytes32(0), "a name never attested has no owner on record");
+    }
+
     function test_RevertWhen_AdminIsZeroAddress() public {
         address[] memory init = new address[](2);
         init[0] = s1;

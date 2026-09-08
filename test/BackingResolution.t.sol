@@ -3,7 +3,12 @@ pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { VaultReads } from "src/libraries/VaultReads.sol";
-import { AttestedHotkeyRetired, BackingShortfall, SwappedHotkeyStillAttested } from "src/VaultErrors.sol";
+import {
+    AttestedHotkeyRetired,
+    BackingShortfall,
+    ShortfallOnFile,
+    SwappedHotkeyStillAttested
+} from "src/VaultErrors.sol";
 import { CHAIN_MIN_TRANSFER, MockStaking } from "./mocks/MockStaking.sol";
 import { IStaking, STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
@@ -100,19 +105,27 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
     }
 
-    function test_ConvergentSwaps_FailClosed() public {
+    function test_ConvergentSwaps_FailClosedUntilParked() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);
         uint256 merged = _getVaultStake(hotkey1, NETUID1) + _getVaultStake(hotkey2, NETUID1);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 0);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, coldkey, NETUID1, 0);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, coldkey, NETUID1, merged);
+        _simulateSameOwner(hotkey1, hotkey4);
         MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey4);
         MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey2, NETUID1, hotkey4);
 
         assertFalse(lens.isBackingIntact(TOKEN1), "the quote sees the collision");
         vm.expectPartialRevert(BackingShortfall.selector);
         vault.rebalance(NETUID1);
+
+        // Everything is on recorded keys, so the collision parks without a watcher-supplied source.
+        vault.recoverStray(TOKEN1, new bytes32[](0));
+
+        assertTrue(lens.isBackingIntact(TOKEN1), "the merged balance is counted once on the parking hotkey");
+        assertEq(lens.totalStake(TOKEN1), 30 ether, "and nothing was lost in the collision");
+        assertEq(_parkedStake(NETUID1), 30 ether, "all of it rests on the parking hotkey");
     }
 
     /// @dev Synthetic partial migration exercises the coverage guard; ordinary swaps move whole entries.
@@ -137,6 +150,7 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, CHAIN_MIN_TRANSFER);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, coldkey, NETUID1, owed);
         MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey4);
+        _simulateSameOwner(hotkey1, hotkey4);
 
         assertTrue(lens.isBackingIntact(TOKEN1), "stray stake cannot block the recorded successor");
         assertEq(lens.totalStake(TOKEN1), accounted, "the residual is not counted twice");
@@ -284,8 +298,9 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
         assertEq(vault.totalSupply(TOKEN1), 0, "the shares retire against what is left");
 
+        _reattestCurrentSet(NETUID1);
         _depositAndWrap(bob, NETUID1, 30 ether);
-        assertGt(vault.balanceOf(bob, TOKEN1), 0, "the token recapitalizes after the window");
+        assertGt(vault.balanceOf(bob, TOKEN1), 0, "the token recapitalizes once the attesters publish again");
     }
 
     function test_RegistryUpdate_NeitherClearsALossNorAddsBacking() public {
@@ -302,7 +317,7 @@ contract BackingResolutionTest is AlphaVaultTestBase {
 
         assertFalse(lens.isBackingIntact(TOKEN1), "the rotation settled nothing");
         assertEq(lens.locatedStake(TOKEN1), located - lost, "and added no backing of its own");
-        vm.expectPartialRevert(BackingShortfall.selector);
+        vm.expectRevert(ShortfallOnFile.selector);
         vault.rebalance(NETUID1);
     }
 }

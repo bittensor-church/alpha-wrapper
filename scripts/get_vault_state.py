@@ -88,6 +88,7 @@ def main() -> None:
         "total_stake": total_stake,
         "total_stake_error": total_stake_error,
         "frozen_until": lens.functions.frozenUntil(token_id).call(),
+        "awaiting_attestation": lens.functions.awaitingAttestation(token_id).call(),
         "share_price": share_price,
         "share_price_error": share_price_error,
         "subnet_clone": vault.functions.subnetClone(token_id).call(),

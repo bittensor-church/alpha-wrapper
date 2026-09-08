@@ -77,20 +77,32 @@ burning for TAO. See [dissolution](edge-cases.md#subnet-dissolution).
 ## Recovery status
 
 On a live subnet, `BackingShortfall` blocks wraps, rebalances, both exits and value
-quotes until recovery or explicit write-off. It means expected alpha is unlocated,
-not proof it was destroyed. Shares still transfer and accrued TAO stays claimable.
+quotes until the position parks or the loss is written off. It means expected
+alpha is unlocated, not proof it was destroyed. While a loss is on file the
+token stays shut (`ShortfallOnFile`) until a `syncBacking` observes full
+coverage. Shares still transfer and accrued TAO stays claimable.
 
 The lens exposes:
 
 - `locatedStake(tokenId)`: alpha currently found.
-- `isBackingIntact(tokenId)`: whether all recorded expectations are covered.
-- `frozenUntil(tokenId)`: zero if intact, max uint256 if a clock has not started,
-  otherwise the latest deadline at which `syncBacking` can finalize losses.
+- `isBackingIntact(tokenId)`: whether all recorded expectations are covered and
+  no loss is on file.
+- `frozenUntil(tokenId)`: zero with nothing on file, otherwise the deadline at
+  which `syncBacking` can write the loss off.
+- `awaitingAttestation(tokenId)`: whether the position rests on the vault's
+  parking hotkey.
+
+A parked position pays alpha exits from the parking hotkey: the alpha arrives
+delegated to that hotkey and earns nothing until you move it to a validator
+with your own `moveStake`. TAO exits, transfers and claims work as usual.
+Deposits (`Parked`) and weight alignment wait for the attesters to publish a
+new validator set; the first wrap or rebalance after that lands the parked alpha
+on the new set.
 
 Passing the deadline does not reopen anything by itself. A further `syncBacking`
-writes off expired shortfalls, reducing current holders' backing. It does not
-restore owner records or fix registry collisions. An intact backing report does
-not guarantee an exit either. See the [watcher runbook](hotkey-swaps.md).
+parks what is located and writes off the rest, reducing current holders' backing.
+An intact backing report does not guarantee an exit either. See the
+[watcher runbook](hotkey-swaps.md).
 
 ## Claim TAO and reclaim deposits
 

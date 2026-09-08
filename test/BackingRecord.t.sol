@@ -16,7 +16,7 @@ contract BackingRecordTest is AlphaVaultTestBase {
         assertEq(slots[0].logical, hotkey1, "the slot names the attested validator");
         assertEq(slots[0].active, hotkey1, "with nothing swapped the two agree");
         assertEq(slots[0].tracked, _getVaultStake(hotkey1, NETUID1), "the expectation mirrors the staked alpha");
-        assertEq(slots[0].shortSince, 0, "and no clock is running");
+        assertEq(lens.frozenUntil(TOKEN1), 0, "and no clock is running");
     }
 
     function test_IntactSlot_NeverReadsASuccessor() public {

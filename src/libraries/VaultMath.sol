@@ -38,6 +38,22 @@ library VaultMath {
         return false;
     }
 
+    function concat(bytes32[] memory head, bytes32[] memory tail) internal pure returns (bytes32[] memory joined) {
+        joined = new bytes32[](head.length + tail.length);
+        for (uint256 i; i < head.length;) {
+            joined[i] = head[i];
+            unchecked {
+                ++i;
+            }
+        }
+        for (uint256 i; i < tail.length;) {
+            joined[head.length + i] = tail[i];
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
     function indexOf(bytes32[] memory set, bytes32 hotkey) internal pure returns (uint256) {
         for (uint256 i; i < set.length;) {
             if (set[i] == hotkey) return i;

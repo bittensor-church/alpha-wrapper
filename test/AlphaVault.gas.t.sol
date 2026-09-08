@@ -59,7 +59,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         _simulateAlphaDeposit(alice, NETUID1, 100 ether);
         _wrap(alice, NETUID1);
 
-        uint256 total = _setVaultStakesAndWriteOffShortfalls(NETUID1, 60 ether, 0, 40 ether);
+        uint256 total = _plantVaultStakes(NETUID1, 60 ether, 0, 40 ether);
         // The 1e6 remainder is a sub-floor partial, refunded as shares.
         uint256 shares = _sharesForExactAssets(TOKEN1, 60 ether + 1e6, total);
 
@@ -221,8 +221,11 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         bytes32 tip = _buildSwapTrail(NETUID1, lost, 2);
         vault.syncBacking(TOKEN1);
 
-        vault.recoverStray(TOKEN1, tip);
-        vm.snapshotGasLastCall("AlphaVault", "recoverStray: whole slot (64 validators)");
+        vault.recoverStray(TOKEN1, _sources(tip));
+        vm.snapshotGasLastCall("AlphaVault", "recoverStray: park one lost slot (64 validators)");
+
+        assertEq(lens.totalStake(TOKEN1), 10 ether);
+        assertEq(_parkedStake(NETUID1), 10 ether);
     }
 
     function test_gas_recoverStray_merged_64Validators() public {
@@ -234,12 +237,27 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         }
         vault.syncBacking(TOKEN1);
 
-        vault.recoverStray(TOKEN1, source);
-        vm.snapshotGasLastCall("AlphaVault", "recoverStray: merged slots (64 validators)");
+        vault.recoverStray(TOKEN1, _sources(source));
+        vm.snapshotGasLastCall("AlphaVault", "recoverStray: park merged slots (64 validators)");
 
         assertEq(lens.totalStake(TOKEN1), 10 ether);
         assertEq(lens.frozenUntil(TOKEN1), 0);
         assertEq(_getVaultStake(source, NETUID1), 0);
+    }
+
+    function test_gas_rebalance_releaseParked_64Validators() public {
+        _setValidatorCount(NETUID1, MAX_VALIDATORS);
+        _simulateAlphaDeposit(alice, NETUID1, 10 ether);
+        _wrap(alice, NETUID1);
+        bytes32 tip = _buildSwapTrail(NETUID1, lens.getCurrentValidators(NETUID1)[0], 2);
+        vault.recoverStray(TOKEN1, _sources(tip));
+        _reattestCurrentSet(NETUID1);
+
+        vault.rebalance(NETUID1);
+        vm.snapshotGasLastCall("AlphaVault", "rebalance: release parked position (64 validators)");
+
+        assertFalse(lens.awaitingAttestation(TOKEN1));
+        assertEq(_parkedStake(NETUID1), 0);
     }
 
     function test_gas_previewUnwrap_64Validators() public {
