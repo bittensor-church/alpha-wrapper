@@ -1,10 +1,8 @@
 """One parking hotkey serves every subnet without coupling their positions.
 
-The chain keys stake by hotkey, coldkey and subnet, and each subnet's position lives
-under its own clone coldkey, so the vault claims a single parking hotkey for all of
-them. This scenario checks what that sharing must never do: parking subnet A leaves
-subnet B depositing, aligning and exiting as before; both positions park on the same
-hotkey at once with separate balances; releasing one moves nothing of the other's.
+Stake is keyed by hotkey, coldkey and subnet, and each subnet's position has its own
+clone coldkey, so parking one subnet must leave the others trading, two must park side
+by side, and each must release on its own attestation.
 """
 import pytest
 
@@ -31,7 +29,6 @@ def test_parked_subnets_share_the_hotkey_without_sharing_state(env):
     )
     stakes_b_before = [env.stake(hotkey, clone_b, netuid_b) for hotkey in hotkeys_b]
 
-    # An incident on A parks A alone.
     stranding_a = incidents.cut_trail(env, 0, 0, "//IsolationSuccessorA", "//IsolationJunkA", "Isolation: A")
     parked_a = incidents.park(env, token_a, [stranding_a.successor_pubkey], "Isolation: A")
 
@@ -41,7 +38,6 @@ def test_parked_subnets_share_the_hotkey_without_sharing_state(env):
     for hotkey, before in zip(hotkeys_b, stakes_b_before):
         assert env.stake(hotkey, clone_b, netuid_b) >= before, "B's stake should stay on B's validators"
 
-    # B keeps taking deposits, aligning and paying exits while A is parked.
     env.deposit_and_wrap(
         netuid_b, hotkeys_b[1], env.hotkey_ss58s[VALIDATORS + 1],
         config.PER_HOTKEY_TRANSFER_RAO // 10, 1_500_000, "Isolation: B should accept a deposit while A is parked",
@@ -65,7 +61,6 @@ def test_parked_subnets_share_the_hotkey_without_sharing_state(env):
     assert env.stake(parking_hotkey, clone_a, netuid_a) == parked_a, "A's parked balance moved while B traded"
     assert env.awaiting_attestation(token_a), "A should still be waiting for its attesters"
 
-    # A second incident parks B on the same hotkey, next to A.
     stranding_b = incidents.cut_trail(env, 1, 0, "//IsolationSuccessorB", "//IsolationJunkB", "Isolation: B")
     parked_b = incidents.park(env, token_b, [stranding_b.successor_pubkey], "Isolation: B")
 
@@ -73,7 +68,6 @@ def test_parked_subnets_share_the_hotkey_without_sharing_state(env):
     assert env.stake(parking_hotkey, clone_b, netuid_b) == parked_b, "B's entry should hold B's alpha"
     assert env.awaiting_attestation(token_a) and env.awaiting_attestation(token_b), "both positions should wait"
 
-    # A's attesters release A; B keeps waiting for its own.
     env.set_validators(netuid_a, [stranding_a.successor_pubkey, hotkeys_a[1], hotkeys_a[2]], [5000, 3000, 2000])
     assert env.awaiting_attestation(token_b), "an attestation for A should not release B"
     env.vault_send(
@@ -88,7 +82,6 @@ def test_parked_subnets_share_the_hotkey_without_sharing_state(env):
     assert env.stake(parking_hotkey, clone_b, netuid_b) == parked_b, "releasing A should move nothing of B's"
     assert env.awaiting_attestation(token_b), "B should still be parked"
 
-    # B's attesters release B.
     env.set_validators(netuid_b, [stranding_b.successor_pubkey, hotkeys_b[1], hotkeys_b[2]], [5000, 3000, 2000])
     env.vault_send(
         4_000_000, "Isolation: the release rebalance on B failed", "rebalance(uint256)", netuid_b,

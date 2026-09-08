@@ -1,10 +1,4 @@
-"""Chain-side incidents the recovery scenarios stage against a vault position.
-
-`cut_trail` makes a validator's rename unfollowable: the validator renames across every
-subnet, then a stranger renames a junk key onto the vacated name, which erases the edge
-the vault follows. `park` is the watcher's answer: declare the loss and recover every
-located balance onto the parking hotkey.
-"""
+"""Chain-side incidents the recovery scenarios stage against a vault position."""
 from dataclasses import dataclass
 from typing import List
 
@@ -30,12 +24,7 @@ def cut_trail(
     env: Environment, subnet_index: int, validator_index: int,
     successor_uri: str, junk_uri: str, context: str,
 ) -> Stranding:
-    """Strand the vault's alpha behind a rename whose trail a stranger cuts.
-
-    The validator at `validator_index` on the subnet at `subnet_index` renames its hotkey
-    to `successor_uri` across every subnet; the alpha follows the name. The stranger then
-    associates `junk_uri` and renames it onto the vacated name on that subnet only.
-    """
+    """Strand the vault's alpha behind a rename whose trail a stranger cuts."""
     netuid = env.netuids[subnet_index]
     token_id = env.token_ids[subnet_index]
     position = subnet_index * config.VALIDATORS_PER_SUBNET + validator_index
@@ -65,7 +54,7 @@ def cut_trail(
 
 
 def park(env: Environment, token_id: int, sources: List[str], context: str) -> int:
-    """Declare the loss, recover `sources` onto the parking hotkey and return the parked balance."""
+    """The watcher's answer to a shortfall."""
     netuid = env.netuids[env.token_ids.index(token_id)]
     clone_coldkey = env.clone_coldkey(token_id)
     backing_before = env.vault_total_stake(token_id)
