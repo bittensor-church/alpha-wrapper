@@ -2,27 +2,29 @@
 pragma solidity ^0.8.20;
 
 import { IValidatorRegistry } from "src/interfaces/IValidatorRegistry.sol";
+import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
+import { MockStaking } from "./MockStaking.sol";
 
 contract MockValidatorRegistry is IValidatorRegistry {
     struct Slot {
         bytes32[] hotkeys;
         uint16[] weights;
+        bytes32[] owners;
     }
 
     mapping(uint256 => Slot) private _slots;
     mapping(uint256 => uint256) public override nonces;
-    mapping(bytes32 => bytes32) public override attestedOwner;
 
-    /// @dev Allows malformed sets that the real registry rejects.
+    /// @dev Allows malformed sets that the real registry rejects; owners are whoever holds the names now.
     function setRaw(uint256 netuid, bytes32[] memory hotkeys, uint16[] memory weights) external {
         Slot storage slot = _slots[netuid];
         slot.hotkeys = hotkeys;
         slot.weights = weights;
+        delete slot.owners;
+        for (uint256 i; i < hotkeys.length; ++i) {
+            slot.owners.push(MockStaking(STAKING_PRECOMPILE).ownerOf(hotkeys[i]));
+        }
         nonces[netuid] += 1;
-    }
-
-    function setAttestedOwner(bytes32 hotkey, bytes32 coldkey) external {
-        attestedOwner[hotkey] = coldkey;
     }
 
     function getValidators(uint256 netuid)
@@ -33,5 +35,9 @@ contract MockValidatorRegistry is IValidatorRegistry {
     {
         Slot storage slot = _slots[netuid];
         return (slot.hotkeys, slot.weights);
+    }
+
+    function attestedOwners(uint256 netuid) external view override returns (bytes32[] memory) {
+        return _slots[netuid].owners;
     }
 }

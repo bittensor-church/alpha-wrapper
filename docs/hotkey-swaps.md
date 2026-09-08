@@ -37,8 +37,9 @@ and expected alpha (`tracked`). One shortfall clock covers the whole token.
 The resolver follows at most one hop from each recorded active key, only when
 the successor covers that slot's expectation within 1000 RAO of accounting slack.
 It never counts one key for two slots. Separately observed swaps can advance the
-record repeatedly; two unobserved swaps, an erased edge or a collision need a
-watcher. Subnet re-registration can erase lineage; owner association is a
+record repeatedly: any priced operation, and a `syncBacking` call on a position
+that accounts for itself, writes a followed swap into the record. Two
+unobserved swaps, an erased edge or a collision need a watcher. Subnet re-registration can erase lineage; owner association is a
 different operation and does not re-register the key.
 
 ## Who a name answers to
@@ -52,8 +53,10 @@ nothing; the attesters retire it by publishing a set without it.
 
 The chain refuses to move stake through a hotkey with no owner record. When the
 vault has to move stake off such a key, it claims the key for its own coldkey
-first, then moves. That claim serves the move; it does not make the key an
-attested destination.
+first, then moves. That claim serves the move and is permanent; it does not
+make the key an attested destination. A validator's coldkey swap changes the
+owner of its hotkeys, and the attesters confirm the new owner by publishing
+again.
 
 ## The parking hotkey
 

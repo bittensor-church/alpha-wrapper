@@ -19,6 +19,7 @@ go through chain.run(["btcli", ...]) directly because they touch only local key
 files and must not carry the --network flag.
 """
 import os
+import secrets
 import shutil
 import time
 from typing import List, NamedTuple, Tuple
@@ -287,13 +288,16 @@ def _deploy_contracts(netuids: List[int], hotkey_pubkeys: List[str]):
     allocation_address = chain.forge_create(allocation_library, private_key=config.DEPLOYER_PRIVATE_KEY)
     print(f"  VaultAllocation: {allocation_address}")
 
+    # The vault claims this account id for its own coldkey; a fresh one keeps repeated
+    # bootstraps against the same chain from colliding.
+    parking_hotkey = "0x" + secrets.token_hex(32)
     vault_address = chain.forge_create(
         "src/AlphaVault.sol:AlphaVault", private_key=config.DEPLOYER_PRIVATE_KEY,
         libraries=[f"{allocation_library}:{allocation_address}"],
         constructor_args=[
             "https://api.tao20.io/{id}.json", mailbox_implementation_address,
             subnet_clone_implementation_address, validator_registry_address,
-            str(3 * 60 * 60), config.PARKING_HOTKEY,
+            str(3 * 60 * 60), parking_hotkey,
         ],
     )
     print(f"  AlphaVault: {vault_address}")

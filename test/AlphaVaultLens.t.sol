@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { AlphaVaultLens } from "src/AlphaVaultLens.sol";
-import { Parked, SharePriceBelowPrecision, ZeroAddress } from "src/VaultErrors.sol";
+import { Parked, SharePriceBelowPrecision, ShortfallOnFile, ZeroAddress } from "src/VaultErrors.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
@@ -143,7 +143,7 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
     function test_ParkedToken_ReportsItsStateAndRefusesTheMintQuote() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
-        vault.recoverStray(TOKEN1, _sources(hotkey4));
+        vault.recoverStray(TOKEN1, _hotkeys(hotkey4));
 
         assertTrue(lens.awaitingAttestation(TOKEN1), "the lens reports the parked position");
         assertTrue(lens.isBackingIntact(TOKEN1), "parked backing is whole");
@@ -161,11 +161,16 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
     function test_DeclaredShortfall_ReadsAsNotIntactUntilSynced() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
+        assertEq(lens.frozenUntil(TOKEN1), type(uint256).max, "short and not yet declared");
         vault.syncBacking(TOKEN1);
         _simulateOffVaultSwap(NETUID1, hotkey4, hotkey1);
 
         assertFalse(lens.isBackingIntact(TOKEN1), "the alpha is back but the shortfall is still on file");
         assertEq(lens.frozenUntil(TOKEN1), block.timestamp + RECOVERY_WINDOW, "with its clock still running");
+        vm.expectRevert(ShortfallOnFile.selector);
+        lens.sharePrice(TOKEN1);
+        vm.expectRevert(ShortfallOnFile.selector);
+        lens.previewUnwrap(TOKEN1, 1 ether);
 
         vault.syncBacking(TOKEN1);
         assertTrue(lens.isBackingIntact(TOKEN1), "syncing takes it off file");

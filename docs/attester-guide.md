@@ -72,10 +72,16 @@ See [Hotkey swaps and recovery](hotkey-swaps.md) for the exact restrictions.
 A recovery or write-off parks the whole position on the vault's parking hotkey
 and reports `awaitingAttestation`. Deposits and weight alignment stay shut, and
 nothing earns emissions, until an attestation newer than the one in force at
-parking lands for that netuid. Publish a set without the lost or captured name,
-naming the intended successor; re-publishing the same set under a new nonce
-also releases the position. The next wrap or `rebalance(netuid)` moves the
-parked alpha onto the set.
+parking lands for that netuid. Publish a set that names the intended successor
+and leaves out the lost or captured name. The registry records whoever owns
+each name at that moment as its attested owner, so re-publishing a captured
+name hands its allocation to the stranger holding it. Re-publishing an
+unchanged set under a new nonce releases a position parked for any other
+reason. The next wrap or `rebalance(netuid)` moves the parked alpha onto the set.
+
+A validator that swaps its coldkey needs a re-attestation as well: its names
+answer to the new coldkey only once a set records it, and until then they
+report `AttestedHotkeyRetired`.
 
 Do not use a new attestation as a substitute for parking missing backing.
 Coordinate `recoverStray` before write-off where possible. Adding a funded

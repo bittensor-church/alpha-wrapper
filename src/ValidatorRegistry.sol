@@ -29,6 +29,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     struct ValidatorSet {
         bytes32[] hotkeys;
         uint16[] weights;
+        bytes32[] owners;
     }
 
     mapping(address => bool) public isSigner;
@@ -37,7 +38,6 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
 
     mapping(uint256 => ValidatorSet) private _validators;
     mapping(uint256 => uint256) public override nonces;
-    mapping(bytes32 => bytes32) public override attestedOwner;
 
     event SignersUpdated(address[] newSigners, uint8 newThreshold);
     event ValidatorsUpdated(uint256 indexed netuid, uint256 nonce, bytes32[] hotkeys, uint256[] weights);
@@ -100,6 +100,11 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     {
         ValidatorSet storage validatorSet = _validators[netuid];
         return (validatorSet.hotkeys, validatorSet.weights);
+    }
+
+    /// @inheritdoc IValidatorRegistry
+    function attestedOwners(uint256 netuid) external view override returns (bytes32[] memory) {
+        return _validators[netuid].owners;
     }
 
     function setSigners(address[] calldata newSigners, uint8 newThreshold) external onlyRole(DEFAULT_ADMIN_ROLE) {
@@ -197,11 +202,12 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         ValidatorSet storage validatorSet = _validators[attestation.netuid];
         delete validatorSet.hotkeys;
         delete validatorSet.weights;
+        delete validatorSet.owners;
         for (uint256 i; i < owners.length;) {
             validatorSet.hotkeys.push(attestation.hotkeys[i]);
             // The weight sum bounds this cast to 10000.
             validatorSet.weights.push(uint16(attestation.weights[i]));
-            attestedOwner[attestation.hotkeys[i]] = owners[i];
+            validatorSet.owners.push(owners[i]);
             unchecked {
                 ++i;
             }

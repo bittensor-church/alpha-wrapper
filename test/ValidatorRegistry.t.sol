@@ -120,9 +120,27 @@ contract ValidatorRegistryTest is AttestationHelper {
 
         _submitAttestation(registry, SN1, hks, wts, _pks2(PK2, PK1));
 
-        assertEq(registry.attestedOwner(hk1), mock.ownerOf(hk1), "the first name is bound to its owner");
-        assertEq(registry.attestedOwner(hk2), mock.ownerOf(hk2), "and so is the second");
-        assertEq(registry.attestedOwner(hk3), bytes32(0), "a name never attested has no owner on record");
+        bytes32[] memory owners = registry.attestedOwners(SN1);
+        assertEq(owners.length, 2, "one owner per attested name");
+        assertEq(owners[0], mock.ownerOf(hk1), "the first name is bound to its owner");
+        assertEq(owners[1], mock.ownerOf(hk2), "and so is the second");
+        assertEq(registry.attestedOwners(SN2).length, 0, "a subnet never attested has no owners on record");
+    }
+
+    function test_UpdateValidators_RecordsWhoeverHoldsARepublishedName() public {
+        bytes32[] memory hks = new bytes32[](2);
+        hks[0] = hk1;
+        hks[1] = hk2;
+        uint16[] memory wts = new uint16[](2);
+        wts[0] = 6000;
+        wts[1] = 4000;
+        _submitAttestation(registry, SN1, hks, wts, _pks2(PK2, PK1));
+        bytes32 squatter = keccak256("squatter");
+        MockStaking(STAKING_PRECOMPILE).setHotkeyOwner(hk1, squatter);
+
+        _submitAttestation(registry, SN1, hks, wts, _pks2(PK2, PK1));
+
+        assertEq(registry.attestedOwners(SN1)[0], squatter, "the registry binds the name to its current holder");
     }
 
     function test_RevertWhen_AdminIsZeroAddress() public {

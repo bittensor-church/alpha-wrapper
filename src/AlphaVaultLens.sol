@@ -10,6 +10,7 @@ import {
     NoSharesOutstanding,
     Parked,
     SharePriceBelowPrecision,
+    ShortfallOnFile,
     SubnetDissolved,
     ZeroAddress
 } from "./VaultErrors.sol";
@@ -27,8 +28,10 @@ contract AlphaVaultLens {
         validatorRegistry = _vault.validatorRegistry();
     }
 
-    /// @dev Rejects missing backing, except during/after dissolution when alpha balances are in flux.
+    /// @dev Rejects missing backing and a loss on file, as the vault's priced operations do, except
+    ///      during/after dissolution when alpha balances are in flux.
     function totalStake(uint256 tokenId) public view returns (uint256) {
+        if (_shortSince(tokenId) != 0) revert ShortfallOnFile();
         (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _readBacking(tokenId);
         VaultReads.requireIntact(slots, backing, VaultMath.netuidOf(tokenId));
         return backing.total;
@@ -48,16 +51,19 @@ contract AlphaVaultLens {
     /// @dev Checks backing coverage and the shortfall clock, not hotkey ownership or withdrawal
     ///      eligibility. Dissolving/dissolved positions bypass the coverage check.
     function isBackingIntact(uint256 tokenId) external view returns (bool) {
-        if (vault.recovery(tokenId).shortSince != 0) return false;
+        if (_shortSince(tokenId) != 0) return false;
         (, VaultReads.Backing memory backing) = _readBacking(tokenId);
         return VaultReads.firstShortOf(backing.short) == type(uint256).max;
     }
 
-    /// @return deadline When `syncBacking` may write the declared shortfall down; zero with none on file.
+    /// @return deadline When `syncBacking` may write the declared shortfall down; zero while the position
+    ///         accounts for itself, max uint256 while a shortfall is still undeclared.
     /// @dev Expiry only permits the write-off; only `syncBacking` clears or finalizes a shortfall.
     function frozenUntil(uint256 tokenId) external view returns (uint256 deadline) {
-        uint64 shortSince = vault.recovery(tokenId).shortSince;
-        if (shortSince != 0) deadline = shortSince + vault.recoveryWindow();
+        uint64 shortSince = _shortSince(tokenId);
+        if (shortSince != 0) return shortSince + vault.recoveryWindow();
+        (, VaultReads.Backing memory backing) = _readBacking(tokenId);
+        if (VaultReads.firstShortOf(backing.short) != type(uint256).max) deadline = type(uint256).max;
     }
 
     /// @notice Whether the position rests on the vault's parking hotkey with deposits and alignment shut.
@@ -158,8 +164,12 @@ contract AlphaVaultLens {
     function getCurrentValidators(uint256 netuid) external view returns (bytes32[] memory) {
         if (netuid > type(uint16).max) revert NetuidOutOfRange();
         // forge-lint: disable-next-line(unsafe-typecast)
-        (bytes32[] memory hotkeys,) = VaultReads.resolveValidators(validatorRegistry, uint16(netuid));
+        (bytes32[] memory hotkeys,,) = VaultReads.resolveValidators(validatorRegistry, uint16(netuid));
         return hotkeys;
+    }
+
+    function _shortSince(uint256 tokenId) private view returns (uint64 shortSince) {
+        (shortSince,) = vault.recovery(tokenId);
     }
 
     /// @dev Check the blackout first: a registration block cleared mid-cleanup is not a settled refund.

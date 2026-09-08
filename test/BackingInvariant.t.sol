@@ -116,7 +116,7 @@ contract BackingHandler is Test {
         for (uint256 i; i < set.length; ++i) {
             set[i] = touchedHotkeys[bound(uint256(keccak256(abi.encode(seed, i))), 0, touchedHotkeys.length - 1)];
             for (uint256 j; j < i; ++j) {
-                if (set[j] == set[i]) set[i] = keccak256(abi.encode("rotated", seed, i));
+                if (set[j] == set[i]) set[i] = keccak256(abi.encode("rotated", seed, i, touchedHotkeys.length));
             }
             _remember(set[i]);
         }

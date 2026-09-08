@@ -532,15 +532,4 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     function _parkedStake(uint256 netuid) internal view returns (uint256) {
         return _getVaultStake(vault.parkingHotkey(), netuid);
     }
-
-    function _sources(bytes32 a) internal pure returns (bytes32[] memory arr) {
-        arr = new bytes32[](1);
-        arr[0] = a;
-    }
-
-    function _sources(bytes32 a, bytes32 b) internal pure returns (bytes32[] memory arr) {
-        arr = new bytes32[](2);
-        arr[0] = a;
-        arr[1] = b;
-    }
 }

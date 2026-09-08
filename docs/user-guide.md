@@ -87,8 +87,9 @@ The lens exposes:
 - `locatedStake(tokenId)`: alpha currently found.
 - `isBackingIntact(tokenId)`: whether all recorded expectations are covered and
   no loss is on file.
-- `frozenUntil(tokenId)`: zero with nothing on file, otherwise the deadline at
-  which `syncBacking` can write the loss off.
+- `frozenUntil(tokenId)`: zero while the position accounts for itself, the
+  maximum value while a shortfall is still undeclared, otherwise the deadline
+  at which `syncBacking` can write the loss off.
 - `awaitingAttestation(tokenId)`: whether the position rests on the vault's
   parking hotkey.
 

@@ -26,11 +26,12 @@ library VaultReads {
     function resolveValidators(IValidatorRegistry registry, uint16 netuid)
         internal
         view
-        returns (bytes32[] memory hotkeys, uint16[] memory weights)
+        returns (bytes32[] memory hotkeys, uint16[] memory weights, bytes32[] memory owners)
     {
         (hotkeys, weights) = registry.getValidators(netuid);
+        owners = registry.attestedOwners(netuid);
         if (hotkeys.length == 0) revert NoValidatorFound();
-        if (hotkeys.length != weights.length) revert ValidatorSetMalformed();
+        if (hotkeys.length != weights.length || hotkeys.length != owners.length) revert ValidatorSetMalformed();
     }
 
     function fetchBalances(bytes32[] memory hotkeys, bytes32 coldkey, uint16 netuid)

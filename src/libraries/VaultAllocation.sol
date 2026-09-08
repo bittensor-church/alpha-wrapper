@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import { IValidatorRegistry } from "../interfaces/IValidatorRegistry.sol";
 import { VaultMath } from "./VaultMath.sol";
 import { VaultReads } from "./VaultReads.sol";
 import { IStaking, STAKING_PRECOMPILE } from "../interfaces/IStaking.sol";
@@ -13,17 +12,17 @@ library VaultAllocation {
     ///      only under the coldkey that owned the attested name, so a vacated name claimed by anyone
     ///      else reports as retired. Keys remain exclusive even for empty slots.
     function assignActives(
-        IValidatorRegistry registry,
         bytes32[] memory logicals,
         bytes32[] memory keys,
         uint256[] memory balances,
         bytes32[] memory currentSet,
+        bytes32[] memory owners,
         uint16 netuid
     ) external view returns (bytes32[] memory actives, bytes32 retired) {
         actives = new bytes32[](currentSet.length);
         for (uint256 i; i < currentSet.length;) {
             bytes32 name = currentSet[i];
-            bytes32 owner = registry.attestedOwner(name);
+            bytes32 owner = owners[i];
             uint256 at = VaultMath.indexOf(logicals, name);
             bytes32 key;
             bool live;
@@ -91,6 +90,28 @@ library VaultAllocation {
         if (richestRotatedOutBalance > richestBalance) {
             richestHotkey = richestRotatedOut;
             richestBalance = richestRotatedOutBalance;
+        }
+    }
+
+    /// @dev Sources the record already lists, and repeats, leave an empty entry that holds nothing;
+    ///      `found` is what the rest hold under `coldkey`.
+    function novelSources(bytes32[] memory keys, bytes32[] memory sources, bytes32 coldkey, uint16 netuid)
+        external
+        view
+        returns (bytes32[] memory strays, uint256 found)
+    {
+        strays = new bytes32[](sources.length);
+        for (uint256 i; i < sources.length;) {
+            bytes32 source = sources[i];
+            bool novel =
+                source != bytes32(0) && !VaultMath.contains(keys, source) && !VaultMath.contains(strays, source);
+            if (novel) {
+                strays[i] = source;
+                found += IStaking(STAKING_PRECOMPILE).getStake(source, coldkey, netuid);
+            }
+            unchecked {
+                ++i;
+            }
         }
     }
 

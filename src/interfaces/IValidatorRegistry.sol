@@ -6,8 +6,8 @@ interface IValidatorRegistry {
     ///      BPS weights summing to 10000. Ownership was checked at submission, not guaranteed now.
     function getValidators(uint256 netuid) external view returns (bytes32[] memory hotkeys, uint16[] memory weights);
 
-    /// @notice The coldkey that owned `hotkey` when it was last attested; zero if never attested.
-    function attestedOwner(bytes32 hotkey) external view returns (bytes32);
+    /// @notice The coldkey that owned each hotkey when the current set landed, aligned with `getValidators`.
+    function attestedOwners(uint256 netuid) external view returns (bytes32[] memory owners);
 
     /// @notice Attestations landed for `netuid`; each landing increments it by one.
     function nonces(uint256 netuid) external view returns (uint256);

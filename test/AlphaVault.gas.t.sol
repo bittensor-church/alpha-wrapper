@@ -221,7 +221,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         bytes32 tip = _buildSwapTrail(NETUID1, lost, 2);
         vault.syncBacking(TOKEN1);
 
-        vault.recoverStray(TOKEN1, _sources(tip));
+        vault.recoverStray(TOKEN1, _hotkeys(tip));
         vm.snapshotGasLastCall("AlphaVault", "recoverStray: park one lost slot (64 validators)");
 
         assertEq(lens.totalStake(TOKEN1), 10 ether);
@@ -237,7 +237,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         }
         vault.syncBacking(TOKEN1);
 
-        vault.recoverStray(TOKEN1, _sources(source));
+        vault.recoverStray(TOKEN1, _hotkeys(source));
         vm.snapshotGasLastCall("AlphaVault", "recoverStray: park merged slots (64 validators)");
 
         assertEq(lens.totalStake(TOKEN1), 10 ether);
@@ -250,7 +250,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         _simulateAlphaDeposit(alice, NETUID1, 10 ether);
         _wrap(alice, NETUID1);
         bytes32 tip = _buildSwapTrail(NETUID1, lens.getCurrentValidators(NETUID1)[0], 2);
-        vault.recoverStray(TOKEN1, _sources(tip));
+        vault.recoverStray(TOKEN1, _hotkeys(tip));
         _reattestCurrentSet(NETUID1);
 
         vault.rebalance(NETUID1);

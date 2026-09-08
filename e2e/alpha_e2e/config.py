@@ -31,9 +31,6 @@ WRAPPER_USER_SS58 = "5H9xN1Y6KqdhcK9wPqFSPHC7yeaRC5y4CL3nNF2GX6hJrmpT"
 SECOND_HOLDER_ADDRESS = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
 SECOND_HOLDER_PRIVATE_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
 
-# The vault claims this unused account id at deployment; recoveries and write-offs park there.
-PARKING_HOTKEY = "0x" + "70617263" * 8
-
 # --- Precompiles -------------------------------------------------------------
 STAKING_PRECOMPILE = "0x0000000000000000000000000000000000000805"
 # Exposes the chain's own alpha price and alpha->TAO swap simulation.
