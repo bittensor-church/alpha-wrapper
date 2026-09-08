@@ -1,7 +1,5 @@
 """Chain-side incidents the recovery scenarios stage against a vault position."""
 from dataclasses import dataclass
-from typing import List
-
 from . import config, extrinsics
 from .environment import Environment
 
@@ -18,6 +16,7 @@ class Stranding:
     successor_pubkey: str
     successor_ss58: str
     stranger_ss58: str
+    backing_before: int
 
 
 def cut_trail(
@@ -31,6 +30,7 @@ def cut_trail(
     lost_pubkey = env.hotkey_pubkeys[position]
     lost_ss58 = env.hotkey_ss58s[position]
     clone_coldkey = env.clone_coldkey(token_id)
+    backing_before = env.vault_total_stake(token_id)
     assert env.stake(lost_pubkey, clone_coldkey, netuid) > 0, (
         f"{context}: nothing sits under the hotkey about to move"
     )
@@ -50,18 +50,18 @@ def cut_trail(
     assert extrinsics.hotkey_owner(lost_ss58) == stranger_ss58, f"{context}: the stranger did not take the name"
     assert not env.backing_intact(token_id), f"{context}: with the edge gone the vault should not find its alpha"
 
-    return Stranding(lost_pubkey, lost_ss58, successor_pubkey, successor_ss58, stranger_ss58)
+    return Stranding(lost_pubkey, lost_ss58, successor_pubkey, successor_ss58, stranger_ss58, backing_before)
 
 
-def park(env: Environment, token_id: int, sources: List[str], context: str) -> int:
+def park(env: Environment, token_id: int, stranding: Stranding, context: str) -> int:
     """The watcher's answer to a shortfall."""
     netuid = env.netuids[env.token_ids.index(token_id)]
     clone_coldkey = env.clone_coldkey(token_id)
-    backing_before = env.vault_total_stake(token_id)
+    backing_before = stranding.backing_before
 
     env.sync_backing(token_id, label="syncBacking [declare]")
     assert env.frozen_until(token_id) > 0, f"{context}: the shortfall should be on file with a deadline"
-    env.recover_stray(token_id, sources, f"{context}: recoverStray failed")
+    env.recover_stray(token_id, [stranding.successor_pubkey], f"{context}: recoverStray failed")
 
     parked = env.stake(env.parking_hotkey(), clone_coldkey, netuid)
     assert parked >= backing_before - config.CONSOLIDATION_ROUNDING_TOLERANCE_RAO, (

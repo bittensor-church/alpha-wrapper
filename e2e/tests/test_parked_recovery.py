@@ -40,7 +40,7 @@ def test_watcher_parks_a_position_whose_trail_a_stranger_cut(env):
     )
 
     # The watcher names the successor; the vault parks everything it can locate.
-    parked = incidents.park(env, token_id, [successor_pubkey], "Parked recovery")
+    parked = incidents.park(env, token_id, stranding, "Parked recovery")
     assert env.total_stake_across(clone_coldkey, netuid, hotkeys + [successor_pubkey]) <= (
         config.ROUNDING_DUST_TOTAL_RAO
     ), "alpha stayed behind on validator keys after parking"

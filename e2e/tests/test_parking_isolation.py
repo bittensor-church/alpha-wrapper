@@ -30,7 +30,7 @@ def test_parked_subnets_share_the_hotkey_without_sharing_state(env):
     stakes_b_before = [env.stake(hotkey, clone_b, netuid_b) for hotkey in hotkeys_b]
 
     stranding_a = incidents.cut_trail(env, 0, 0, "//IsolationSuccessorA", "//IsolationJunkA", "Isolation: A")
-    parked_a = incidents.park(env, token_a, [stranding_a.successor_pubkey], "Isolation: A")
+    parked_a = incidents.park(env, token_a, stranding_a, "Isolation: A")
 
     assert not env.awaiting_attestation(token_b), "B should not be parked by A's incident"
     assert env.backing_intact(token_b), "B's backing should be untouched"
@@ -62,7 +62,7 @@ def test_parked_subnets_share_the_hotkey_without_sharing_state(env):
     assert env.awaiting_attestation(token_a), "A should still be waiting for its attesters"
 
     stranding_b = incidents.cut_trail(env, 1, 0, "//IsolationSuccessorB", "//IsolationJunkB", "Isolation: B")
-    parked_b = incidents.park(env, token_b, [stranding_b.successor_pubkey], "Isolation: B")
+    parked_b = incidents.park(env, token_b, stranding_b, "Isolation: B")
 
     assert env.stake(parking_hotkey, clone_a, netuid_a) == parked_a, "parking B should leave A's entry alone"
     assert env.stake(parking_hotkey, clone_b, netuid_b) == parked_b, "B's entry should hold B's alpha"
