@@ -7,6 +7,7 @@ error (e.g. its name), which negative tests assert on.
 The bittensor SDK is imported lazily so the pure-Python helpers in this
 package stay usable without it installed.
 """
+import hashlib
 import time
 from contextlib import contextmanager
 
@@ -63,7 +64,7 @@ def _sudo(client, call):
 
 def transfer_stake(
     dest_ss58: str, hotkey_ss58: str, netuid: int, alpha_amount: int,
-    *, chain_endpoint: str = config.CHAIN_ENDPOINT,
+    *, signer_uri: str = "//Alice", chain_endpoint: str = config.CHAIN_ENDPOINT,
 ) -> str:
     with _connect(chain_endpoint) as client:
         return _submit(client, _sdk().calls.SubtensorModule.transfer_stake(
@@ -72,39 +73,110 @@ def transfer_stake(
             origin_netuid=netuid,
             destination_netuid=netuid,
             alpha_amount=alpha_amount,
-        ))
+        ), signer_uri=signer_uri)
 
 
 def add_stake(
     hotkey_ss58: str, netuid: int, amount_rao: int,
-    *, chain_endpoint: str = config.CHAIN_ENDPOINT,
+    *, signer_uri: str = "//Alice", chain_endpoint: str = config.CHAIN_ENDPOINT,
 ) -> str:
     with _connect(chain_endpoint) as client:
         return _submit(client, _sdk().calls.SubtensorModule.add_stake(
             hotkey=hotkey_ss58, netuid=netuid, amount_staked=amount_rao,
-        ))
+        ), signer_uri=signer_uri)
 
 
 def remove_stake(
     hotkey_ss58: str, netuid: int, amount_rao: int,
-    *, chain_endpoint: str = config.CHAIN_ENDPOINT,
+    *, signer_uri: str = "//Alice", chain_endpoint: str = config.CHAIN_ENDPOINT,
 ) -> str:
     """Sell `amount_rao` alpha back to the pool for TAO."""
     with _connect(chain_endpoint) as client:
         return _submit(client, _sdk().calls.SubtensorModule.remove_stake(
             hotkey=hotkey_ss58, netuid=netuid, amount_unstaked=amount_rao,
-        ))
+        ), signer_uri=signer_uri)
 
 
 def lock_stake(
     hotkey_ss58: str, netuid: int, amount_rao: int,
-    *, chain_endpoint: str = config.CHAIN_ENDPOINT,
+    *, signer_uri: str = "//Alice", chain_endpoint: str = config.CHAIN_ENDPOINT,
 ) -> str:
     """Lock `amount_rao` alpha to the given conviction hotkey."""
     with _connect(chain_endpoint) as client:
         return _submit(client, _sdk().calls.SubtensorModule.lock_stake(
             hotkey=hotkey_ss58, netuid=netuid, amount=amount_rao,
+        ), signer_uri=signer_uri)
+
+
+def set_reject_locked_alpha(
+    enabled: bool, *, signer_uri: str = "//Alice", chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Flip whether the signer's coldkey refuses incoming locked alpha; the chain
+    default refuses, and only the account itself or a coldkey swap into it can change that."""
+    with _connect(chain_endpoint) as client:
+        return _submit(client, _sdk().calls.SubtensorModule.set_reject_locked_alpha(
+            enabled=enabled,
+        ), signer_uri=signer_uri)
+
+
+def set_perpetual_lock(
+    netuid: int, enabled: bool, *, signer_uri: str = "//Alice",
+    chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Keep the signer's lock on `netuid` from decaying. Allowed before any lock exists,
+    so a coldkey swap can carry the preference onto its destination."""
+    with _connect(chain_endpoint) as client:
+        return _submit(client, _sdk().calls.SubtensorModule.set_perpetual_lock(
+            netuid=netuid, enabled=enabled,
+        ), signer_uri=signer_uri)
+
+
+def account_flags(coldkey_ss58: str, *, chain_endpoint: str = config.CHAIN_ENDPOINT) -> int:
+    """The chain's per-coldkey flag word; bit 0 set means the account accepts locked alpha."""
+    with _connect(chain_endpoint) as client:
+        value = client.query(_sdk().storage.SubtensorModule.AccountFlags, [coldkey_ss58])
+    return int(value) if value is not None else 0
+
+
+def set_coldkey_swap_announcement_delay(
+    blocks: int, *, chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Shorten the wait between announcing a coldkey swap and executing it, via Sudo."""
+    with _connect(chain_endpoint) as client:
+        block_hash = _submit(client, _sudo(
+            client,
+            _sdk().calls.AdminUtils.sudo_set_coldkey_swap_announcement_delay(duration=blocks),
         ))
+        current = client.query(_sdk().storage.SubtensorModule.ColdkeySwapAnnouncementDelay)
+    if int(current) != blocks:
+        raise ExtrinsicError(
+            f"set_coldkey_swap_announcement_delay did not reach {blocks} (now {current})"
+        )
+    return block_hash
+
+
+def announce_coldkey_swap(
+    new_coldkey_account: bytes, *, signer_uri: str, chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Announce that the signer's coldkey will become `new_coldkey_account`. The chain takes
+    the destination's BlakeTwo256 hash and asks nothing of the destination itself; it only
+    has to stake nothing and not be a hotkey when the swap executes."""
+    new_coldkey_hash = hashlib.blake2b(new_coldkey_account, digest_size=32).hexdigest()
+    with _connect(chain_endpoint) as client:
+        return _submit(client, _sdk().calls.SubtensorModule.announce_coldkey_swap(
+            new_coldkey_hash="0x" + new_coldkey_hash,
+        ), signer_uri=signer_uri)
+
+
+def swap_coldkey_announced(
+    new_coldkey_ss58: str, *, signer_uri: str, chain_endpoint: str = config.CHAIN_ENDPOINT,
+) -> str:
+    """Execute an announced coldkey swap once its delay has passed: every stake, lock,
+    flag and TAO balance of the signer's coldkey moves onto `new_coldkey_ss58`."""
+    with _connect(chain_endpoint) as client:
+        return _submit(client, _sdk().calls.SubtensorModule.swap_coldkey_announced(
+            new_coldkey=new_coldkey_ss58,
+        ), signer_uri=signer_uri)
 
 
 def burned_register(
