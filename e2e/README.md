@@ -36,6 +36,10 @@ Scenario files in `tests/` cover:
 
 - `test_full_flow.py`: deposits, exits, emissions, rotation and observability.
 - `test_transfers_off.py`, `test_convicted_alpha.py`: disabled transfers and locks.
+- `test_clone_contamination.py`: a stranger's coldkey swap lands a conviction lock in
+  a published deposit address and in the shared subnet clone. The first strands its
+  user's deposit; the second lets the stranger mint shares against locked alpha and
+  leave with an honest holder's unlocked alpha.
 - `test_subnet_dissolved.py`: refunds and mailbox recovery.
 - `test_min_stake_floor.py`, `test_dust_dos.py`, `test_min_stake_liveness.py`:
   minimums, top-ups, dust and repeated position changes.
