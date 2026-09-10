@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { BackingUnchanged } from "src/VaultErrors.sol";
+import { VaultReads } from "src/libraries/VaultReads.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 import { MockStaking, CHAIN_MIN_STAKE } from "./mocks/MockStaking.sol";
 
@@ -151,7 +152,7 @@ contract RecoveryDustTest is AlphaVaultTestBase {
         assertEq(vault.recordedSlots(TOKEN1)[0].tracked, EXPECTED);
     }
 
-    function _smallSet(uint256 count, uint256 dust, bool movable) private {
+    function _smallSet(uint256 count, uint256 dust, bool movable) private returns (uint256 located) {
         uint16 netuid = 9;
         _setRegBlock(netuid, 400);
         bytes32[] memory keys = _setValidatorCount(netuid, count);
@@ -159,13 +160,11 @@ contract RecoveryDustTest is AlphaVaultTestBase {
         _wrapHotkey(alice, netuid, keys[0]);
         uint256 tokenId = vault.currentTokenId(netuid);
         bytes32 coldkey = _subnetColdkey(netuid);
-        uint256 located;
         for (uint256 i; i < count; ++i) {
             uint256 balance = movable && i == count - 1 ? CHAIN_MIN_STAKE : dust;
             MockStaking(STAKING_PRECOMPILE).setStake(keys[i], coldkey, netuid, balance);
             located += balance;
         }
-        assertLt(located, count * CHAIN_MIN_STAKE + 1);
         vault.syncBacking(tokenId);
         assertEq(vault.recordedSlots(tokenId)[0].tracked, 100e6);
         assertEq(_parkedStake(netuid), movable ? located : 0);
@@ -181,7 +180,8 @@ contract RecoveryDustTest is AlphaVaultTestBase {
     }
 
     function test_TenDustBalances_DoNotBlockWriteOffEvenWhenTheirSumExceedsTheFloor() public {
-        _smallSet(10, CHAIN_MIN_STAKE - 1, false);
+        uint256 located = _smallSet(10, CHAIN_MIN_STAKE - 1, false);
+        assertGt(located, CHAIN_MIN_STAKE, "the combined dust exceeds the floor even though each balance does not");
     }
 
     function test_OneBalanceAtTheFloor_CollectsAllNineDustBalances() public {
@@ -191,6 +191,8 @@ contract RecoveryDustTest is AlphaVaultTestBase {
     function testFuzz_SmallSets_OnlySkipIndividuallySubFloorBalances(uint256 rawCount, uint256 rawDust, bool movable)
         public
     {
-        _smallSet(bound(rawCount, 2, 10), bound(rawDust, 1001, CHAIN_MIN_STAKE - 1), movable);
+        _smallSet(
+            bound(rawCount, 2, 10), bound(rawDust, VaultReads.TRACKED_SLACK_RAO + 1, CHAIN_MIN_STAKE - 1), movable
+        );
     }
 }

@@ -108,16 +108,16 @@ any shortfall or recovery clock.
 3. Locate more alpha under the clone's coldkey and call
    `recoverStray(tokenId, sources)`. Partial finds park immediately and reduce
    the pooled deficit; no validator association is needed. Recovery can also
-   start before an explicit sync. `missingStake(tokenId)` reports unlocated alpha; it excludes located dust
-   that may also be written off if it cannot be parked.
+   start before an explicit sync. `missingStake(tokenId)` reports unlocated alpha;
+   it excludes located dust that may also be written off if it cannot be parked.
 4. While recovery is open, priced operations refuse. Further syncs collect
    returns at recorded locations. Partial recovery never extends the deadline.
    At expiry, sync collects returns before writing off the remaining deficit.
    Full recovery or write-off leaves the position parked. Alpha recovered later
    belongs to the holders at that time.
 5. After completion, attesters publish a newer set even if all backing returned.
-   Remove any lost or captured name, naming the intended successor. The next wrap or `rebalance(netuid)` releases the
-   parked position onto it.
+   Remove any lost or captured name, naming the intended successor. The next wrap
+   or `rebalance(netuid)` releases the parked position onto it.
 
 `recoverStray` never edits the registry and cannot pay the caller from vault
 funds. Partial collection emits `BackingRecovered`; completion emits
