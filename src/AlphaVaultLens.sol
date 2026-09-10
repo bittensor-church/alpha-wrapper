@@ -44,6 +44,7 @@ contract AlphaVaultLens {
     }
 
     /// @notice Aggregate alpha still unlocated; recovered funds need no validator attribution.
+    /// @dev Located sub-floor dust is excluded here but may still be written off if it cannot be parked.
     function missingStake(uint256 tokenId) external view returns (uint256) {
         (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _readBacking(tokenId);
         uint256 expected;
@@ -68,7 +69,8 @@ contract AlphaVaultLens {
 
     /// @return deadline When `syncBacking` may write the declared shortfall down; zero while the position
     ///         accounts for itself, max uint256 while a shortfall is still undeclared.
-    /// @dev The fixed window starts after located backing parks; partial recoveries never extend it.
+    /// @dev The fixed window starts after collection, allowing below-floor piles to stay behind.
+    ///      Partial recoveries never extend it.
     ///      Expiry only permits the write-off; only `syncBacking` clears or finalizes a shortfall.
     function frozenUntil(uint256 tokenId) external view returns (uint256 deadline) {
         uint64 shortSince = _shortSince(tokenId);

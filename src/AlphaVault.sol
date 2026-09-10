@@ -636,12 +636,15 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         return VaultMath.concat(resolved, extra);
     }
 
-    /// @dev A failed move rolls back the collection and leaves the clock and obligations untouched.
+    /// @dev Below-floor piles may stay exposed until write-off. Other collection failures revert.
+    ///      A movable parking balance carries even sub-floor sources through consolidation.
     function _secureBacking(address clone, bytes32 coldkey, uint16 netuid, bytes32[] memory keys)
         private
         returns (uint256 parked)
     {
-        parked = _gather(clone, coldkey, netuid, keys, parkingHotkey);
+        bool leftBelowFloor;
+        (parked, leftBelowFloor) = _gather(clone, coldkey, netuid, keys, parkingHotkey);
+        if (leftBelowFloor) return parked;
         uint256 exposed;
         for (uint256 i; i < keys.length;) {
             if (keys[i] != bytes32(0) && keys[i] != parkingHotkey) {
@@ -699,7 +702,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ) private {
         bytes32 home = keys[0];
         uint256 before = IStaking(STAKING_PRECOMPILE).getStake(home, coldkey, netuid);
-        uint256 balance = _gather(clone, coldkey, netuid, strays, home);
+        (uint256 balance, bool leftBelowFloor) = _gather(clone, coldkey, netuid, strays, home);
+        if (leftBelowFloor) revert ConsolidationBelowFloor();
         if (balance <= before) revert NothingToRecover();
         _reanchor(tokenId, keys, VaultReads.fetchBalances(keys, coldkey, netuid));
         emit BackingRecovered(tokenId, home, balance - before);
@@ -708,16 +712,18 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @dev Roll the sources onto one destination and report what it holds afterwards.
     function _gather(address clone, bytes32 coldkey, uint16 netuid, bytes32[] memory sources, bytes32 destination)
         private
-        returns (uint256)
+        returns (uint256 balance, bool leftBelowFloor)
     {
         bytes32[] memory destinations = new bytes32[](1);
         destinations[0] = destination;
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
-        VaultAllocation.consolidateRotatedStake(clone, coldkey, netuid, sources, destinations, alphaPriceE18, false);
-        return IStaking(STAKING_PRECOMPILE).getStake(destination, coldkey, netuid);
+        leftBelowFloor = VaultAllocation.consolidateRotatedStake(
+            clone, coldkey, netuid, sources, destinations, alphaPriceE18, true
+        );
+        balance = IStaking(STAKING_PRECOMPILE).getStake(destination, coldkey, netuid);
     }
 
-    /// @notice Secure located backing, then start or finalize one fixed recovery window.
+    /// @notice Secure located backing above the floor, then start or finalize one fixed recovery window.
     /// @dev Partial returns are collected into parking without restarting the clock. Full coverage
     ///      ends recovery; after expiry, only the remaining pooled deficit is written off.
     function syncBacking(uint256 tokenId) external nonReentrant {

@@ -118,7 +118,10 @@ on the new set.
 `syncBacking` parks located backing before starting one fixed window. Partial
 `recoverStray` calls secure additional funds without extending it. At expiry,
 a further sync collects returns before writing off the remaining deficit.
-A failed collection preserves the obligation and does not start a new clock.
+Below-floor piles may remain outside parking and be written off without delaying
+the window. A larger return can collect that dust; after write-off its location
+must be supplied explicitly to `recoverStray`. Other collection failures revert
+without changing the obligation or clock.
 An intact backing report does not guarantee an exit either. See the
 [watcher runbook](hotkey-swaps.md).
 

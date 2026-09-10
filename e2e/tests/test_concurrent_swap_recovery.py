@@ -114,12 +114,24 @@ def test_concurrent_unequal_swaps_cannot_poison_stray_recovery(env):
     located_before = parked_before + env.total_stake_across(clone_coldkey, netuid, hotkeys + successors)
 
     # Supply the larger source twice. It is credited once, with no attempt to assign it to A or C.
-    env.vault_send(
+    receipt = env.vault_send(
         4_000_000, "Concurrent swaps: partial recovery of D failed",
         "recoverStray(uint256,bytes32[])", token_id, f"[{successors[1]},{successors[1]}]",
         private_key=config.DEPLOYER_PRIVATE_KEY, label="recoverStray [larger source, repeated]",
     )
-    partial = env.stake(parking_hotkey, clone_coldkey, netuid)
+    block = chain.receipt_block_number(receipt, "Concurrent partial recovery")
+    partial = int(chain.cast_call(
+        config.STAKING_PRECOMPILE, "getStake(bytes32,bytes32,uint256)(uint256)",
+        parking_hotkey, clone_coldkey, netuid, block=block,
+    ))
+    topic = chain.run(["cast", "keccak", "BackingRecovered(uint256,bytes32,uint256)"]).stdout.strip().lower()
+    events = [log for log in receipt["logs"] if (
+        log["address"].lower() == env.vault_address.lower() and log["topics"][0].lower() == topic
+    )]
+    assert len(events) == 1
+    assert int(events[0]["topics"][1], 16) == token_id
+    assert events[0]["topics"][2].lower() == parking_hotkey.lower()
+    assert int(events[0]["data"], 16) == partial - parked_before, "reported credit must equal actual parking credit"
     # Registered successors can earn emissions between reads. Credit actual funds,
     # including those emissions, without assigning them to an original validator.
     assert partial >= parked_before + source_balances[1] - tolerance

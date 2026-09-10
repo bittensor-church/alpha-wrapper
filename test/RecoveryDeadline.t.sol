@@ -170,12 +170,16 @@ contract RecoveryDeadlineTest is AlphaVaultTestBase {
         assertEq(lens.frozenUntil(TOKEN1), deadline);
     }
 
-    function testFuzz_PartialRecovery_IsIndependentOfSourceOrder(bool largerFirst) public {
+    function testFuzz_PartialRecovery_IsIndependentOfSourceOrder(uint256 rawSplit, bool largerFirst) public {
         (bytes32 firstTip, bytes32 secondTip, uint256 deadline) = _twoLosses();
+        uint256 split = bound(rawSplit, 1001, 32 ether - 1001);
+        MockStaking staking = MockStaking(STAKING_PRECOMPILE);
+        staking.setStake(firstTip, _subnetColdkey(NETUID1), NETUID1, split);
+        staking.setStake(secondTip, _subnetColdkey(NETUID1), NETUID1, 32 ether - split);
         bytes32 first = largerFirst ? secondTip : firstTip;
         bytes32 second = largerFirst ? firstTip : secondTip;
         vault.recoverStray(TOKEN1, _hotkeys(first));
-        assertEq(lens.missingStake(TOKEN1), largerFirst ? 8 ether : 24 ether);
+        assertEq(lens.missingStake(TOKEN1), largerFirst ? split : 32 ether - split);
         assertEq(lens.frozenUntil(TOKEN1), deadline);
         vault.recoverStray(TOKEN1, _hotkeys(second));
         assertEq(lens.totalStake(TOKEN1), 40 ether);

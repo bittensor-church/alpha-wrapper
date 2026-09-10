@@ -251,7 +251,8 @@ library VaultAllocation {
     }
 
     /// @dev Move all dropped-key backing onto tracked destinations before rewriting the record.
-    ///      A write-off leaves an unmovable pile where it is; every other caller refuses it.
+    ///      Recovery may leave a below-floor pile in place; other callers refuse it.
+    /// @return leftBelowFloor True only when the richest source/destination is below the conservative floor.
     function consolidateRotatedStake(
         address clone,
         bytes32 coldkey,
@@ -260,17 +261,18 @@ library VaultAllocation {
         bytes32[] memory currentSet,
         uint256 alphaPriceE18,
         bool leaveUnmovable
-    ) external {
-        if (!_anyRotatedOut(sourceKeys, currentSet)) return;
+    ) external returns (bool leftBelowFloor) {
+        if (!_anyRotatedOut(sourceKeys, currentSet)) return false;
         (bytes32 rollerHotkey, uint256 richestBalance, uint256[] memory sourceBalances, bool hasRotatedOutBalance) =
             chooseRichestSlot(sourceKeys, currentSet, coldkey, netuid);
-        if (!hasRotatedOutBalance) return;
+        if (!hasRotatedOutBalance) return false;
         // The pile starts at the largest balance, then only grows; its starting size bounds every hop.
         if (_isBelowFloorAtAnyPrice(richestBalance, alphaPriceE18)) {
-            if (leaveUnmovable) return;
+            if (leaveUnmovable) return true;
             revert ConsolidationBelowFloor();
         }
         _rollRotatedStake(clone, coldkey, netuid, sourceKeys, currentSet, rollerHotkey, sourceBalances);
+        return false;
     }
 
     /// @dev Never revisit the starting key: its cached balance is stale once the pile leaves.

@@ -491,18 +491,27 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertGe(lens.totalStake(TOKEN1), 5 ether, "and the next depositor starts a fresh position");
     }
 
-    function test_UnmovableBacking_PreventsTheRecoveryClockFromStarting() public {
+    function test_SubFloorBacking_DeclaresWritesOffAndRemainsRecoverable() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 1e6);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, coldkey, NETUID1, 0);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, coldkey, NETUID1, 0);
-        vm.expectRevert(ConsolidationBelowFloor.selector);
         vault.syncBacking(TOKEN1);
-        (uint64 since,) = vault.recovery(TOKEN1);
-        assertEq(since, 0, "an unsecured balance cannot acquire a write-off deadline");
+        assertEq(lens.frozenUntil(TOKEN1), block.timestamp + vault.recoveryWindow());
+        assertEq(vault.recordedSlots(TOKEN1)[0].tracked, 30 ether);
         assertEq(_getVaultStake(hotkey1, NETUID1), 1e6);
-        assertEq(vault.recordedSlots(TOKEN1)[0].tracked, 30 ether * uint256(NETUID1_BPS_HK1) / 10000);
+        vm.warp(lens.frozenUntil(TOKEN1));
+        vault.syncBacking(TOKEN1);
+        assertEq(lens.totalStake(TOKEN1), 0);
+        assertEq(_getVaultStake(hotkey1, NETUID1), 1e6);
+        assertTrue(lens.awaitingAttestation(TOKEN1));
+        // A later larger find can carry the abandoned dust home for the existing holders.
+        MockStaking(STAKING_PRECOMPILE).setStake(hotkey5, coldkey, NETUID1, 1 ether);
+        _simulateHotkeyOwnerPresent(hotkey5);
+        vault.recoverStray(TOKEN1, _hotkeys(hotkey1, hotkey5));
+        assertEq(lens.totalStake(TOKEN1), 1 ether + 1e6);
+        assertEq(_getVaultStake(hotkey1, NETUID1), 0);
     }
 
     /// @dev The vault's stake on the parking hotkey is a nominator position the chain can sweep.

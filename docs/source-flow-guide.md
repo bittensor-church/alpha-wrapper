@@ -41,7 +41,9 @@ Parked -> live alpha or TAO exit leaves no shares -> parked state cleared
 ```
 
 A detected shortfall blocks ordinary live deposits and exits. Collection must
-succeed before the clock starts. One pooled obligation replaces validator-specific
+succeed before the clock starts, except when every available pile is below the
+conservative floor. Such dust can remain outside parking and be written off;
+other move failures still revert. One pooled obligation replaces validator-specific
 expectations during recovery; partial finds never extend the deadline. Time alone
 never finalizes a write-off. Attestations do not move stake.
 

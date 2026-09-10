@@ -41,6 +41,7 @@ jobs:
           - tests/test_parked_recovery.py
           - tests/test_concurrent_swap_recovery.py
           - tests/test_shared_recovery_deadline.py
+          - tests/test_recovery_dust.py
           - tests/test_parking_isolation.py
           - tests/test_subnet_generation.py
           - tests/test_dust_exit.py
