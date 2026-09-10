@@ -42,6 +42,18 @@ def _wait_until(timestamp):
         time.sleep(2)
 
 
+def _sync_unchanged_before_deadline(env, token_id, deadline, message):
+    assert _timestamp() < deadline, f"localnet reached the recovery deadline before {message}"
+    try:
+        env.assert_vault_reverts_with(
+            "BackingUnchanged()", 1_500_000, message, "syncBacking(uint256)", token_id,
+        )
+    except AssertionError:
+        # The probe and mined transaction can straddle expiry on a slow run.
+        assert _timestamp() < deadline, f"localnet reached the recovery deadline during {message}"
+        raise
+
+
 @pytest.mark.scenario
 def test_new_loss_gets_a_full_window_when_original_deadline_expires(env, recovery_window):
     netuid = env.netuids[0]
@@ -132,21 +144,20 @@ def test_new_loss_gets_a_full_window_when_original_deadline_expires(env, recover
     # A already used its allowance, even though it was restored when C was first
     # observed missing. Cycling A cannot extend C's still-unresolved shortfall.
     for cycle in range(2):
+        assert _timestamp() < renewed_deadline, f"localnet reached the recovery deadline before cycle {cycle}"
         extrinsics.swap_hotkey(ss58s[0], b_ss58)
         assert env.stake(b, clone, netuid) >= first_stake - tolerance
         assert env.stake(hotkeys[0], clone, netuid) <= config.ROUNDING_DUST_SLOT_RAO
-        env.assert_vault_reverts_with(
-            "BackingUnchanged()", 1_500_000, f"Shared deadline: repeated loss {cycle} must not restart the window",
-            "syncBacking(uint256)", token_id,
+        _sync_unchanged_before_deadline(
+            env, token_id, renewed_deadline, f"Shared deadline: repeated loss {cycle} must not restart the window",
         )
         assert env.frozen_until(token_id) == renewed_deadline
 
         extrinsics.swap_hotkey(b_ss58, ss58s[0])
         assert env.stake(b, clone, netuid) <= config.ROUNDING_DUST_SLOT_RAO
         assert env.stake(hotkeys[0], clone, netuid) >= first_stake - tolerance
-        env.assert_vault_reverts_with(
-            "BackingUnchanged()", 1_500_000, f"Shared deadline: partial repair {cycle} must not reset allowances",
-            "syncBacking(uint256)", token_id,
+        _sync_unchanged_before_deadline(
+            env, token_id, renewed_deadline, f"Shared deadline: partial repair {cycle} must not reset allowances",
         )
         assert env.frozen_until(token_id) == renewed_deadline
         assert env.stake(parking, clone, netuid) == 0, "reverse swaps restore A without parking"

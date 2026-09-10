@@ -49,22 +49,13 @@ contract RecoveryDeadlineTest is AlphaVaultTestBase {
         deadline = lens.frozenUntil(TOKEN1);
     }
 
-    function test_ObservedRepair_DoesNotExtendTheWindow() public {
-        (bytes32 firstTip, uint256 deadline) = _twoLosses();
-        vm.warp(block.timestamp + 1 hours);
-        _simulateOffVaultSwap(NETUID1, firstTip, hotkey1);
-        vm.expectRevert(BackingUnchanged.selector);
-        vault.syncBacking(TOKEN1);
-        assertEq(lens.frozenUntil(TOKEN1), deadline, "observing a repaired slot does not restart the window");
-        vm.expectRevert(BackingUnchanged.selector);
-        vault.syncBacking(TOKEN1);
-    }
-
     function test_RelostSlot_DoesNotExtendTheWindow() public {
         (bytes32 firstTip, uint256 deadline) = _twoLosses();
+        uint256 remainingStake = _getVaultStake(hotkey3, NETUID1);
         _simulateOffVaultSwap(NETUID1, firstTip, hotkey1);
         vm.expectRevert(BackingUnchanged.selector);
         vault.syncBacking(TOKEN1);
+        assertEq(lens.frozenUntil(TOKEN1), deadline, "partial repair does not extend the window");
         vm.warp(block.timestamp + 1 hours);
         _simulateOffVaultSwap(NETUID1, hotkey1, firstTip);
         vm.expectRevert(BackingUnchanged.selector);
@@ -72,16 +63,16 @@ contract RecoveryDeadlineTest is AlphaVaultTestBase {
         assertEq(lens.frozenUntil(TOKEN1), deadline);
 
         vm.warp(deadline);
-        uint256 located = lens.locatedStake(TOKEN1);
         vm.expectEmit(true, false, false, true, address(vault));
-        emit BackingWrittenOff(TOKEN1, 30 ether, located);
+        emit BackingWrittenOff(TOKEN1, 30 ether, remainingStake);
         vault.syncBacking(TOKEN1);
-        assertEq(_parkedStake(NETUID1), located, "repeated loss cannot prevent write-off at the deadline");
+        assertEq(_parkedStake(NETUID1), remainingStake, "repeated loss cannot prevent write-off at the deadline");
         assertEq(lens.frozenUntil(TOKEN1), 0);
     }
 
     function test_NewLossWithARepair_DoesNotResetEarlierSlots() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
+        uint256 remainingStake = _getVaultStake(hotkey3, NETUID1);
         bytes32 firstTip = _buildSwapTrail(NETUID1, hotkey1, 2);
         vault.syncBacking(TOKEN1);
 
@@ -94,11 +85,10 @@ contract RecoveryDeadlineTest is AlphaVaultTestBase {
         // A is absent from the current short mask but has already used its extension.
         _simulateOffVaultSwap(NETUID1, hotkey1, firstTip);
         vm.warp(deadline);
-        uint256 located = lens.locatedStake(TOKEN1);
         vm.expectEmit(true, false, false, true, address(vault));
-        emit BackingWrittenOff(TOKEN1, 30 ether, located);
+        emit BackingWrittenOff(TOKEN1, 30 ether, remainingStake);
         vault.syncBacking(TOKEN1);
-        assertEq(_parkedStake(NETUID1), located);
+        assertEq(_parkedStake(NETUID1), remainingStake);
         assertEq(lens.frozenUntil(TOKEN1), 0, "A must not be treated as unseen when C extends the window");
     }
 
@@ -135,7 +125,7 @@ contract RecoveryDeadlineTest is AlphaVaultTestBase {
         assertEq(lens.frozenUntil(TOKEN1), deadline, "a located swap is not a new loss");
     }
 
-    function testFuzz_NewSlot_ExtendsTheDeadlineFromAnySlotIndex(uint256 rawIndex) public {
+    function testFuzz_Slot_ExtendsTheDeadlineOnlyOnceAtAnyIndex(uint256 rawIndex) public {
         uint256 netuid = 9;
         _setRegBlock(netuid, 400);
         bytes32[] memory hotkeys = _setValidatorCount(netuid, 64);
@@ -147,9 +137,20 @@ contract RecoveryDeadlineTest is AlphaVaultTestBase {
         vault.syncBacking(tokenId);
 
         vm.warp(lens.frozenUntil(tokenId));
-        _buildSwapTrail(netuid, hotkeys[index], 2);
+        bytes32 tip = _buildSwapTrail(netuid, hotkeys[index], 2);
         vault.syncBacking(tokenId);
         assertEq(lens.frozenUntil(tokenId), block.timestamp + vault.recoveryWindow());
         assertEq(_parkedStake(netuid), 0);
+        uint256 renewedDeadline = lens.frozenUntil(tokenId);
+
+        // Slot zero stays missing while the fuzzed slot returns and is lost again.
+        _simulateOffVaultSwap(netuid, tip, hotkeys[index]);
+        vm.expectRevert(BackingUnchanged.selector);
+        vault.syncBacking(tokenId);
+        vm.warp(block.timestamp + 1);
+        _simulateOffVaultSwap(netuid, hotkeys[index], tip);
+        vm.expectRevert(BackingUnchanged.selector);
+        vault.syncBacking(tokenId);
+        assertEq(lens.frozenUntil(tokenId), renewedDeadline, "each slot extends the window only once");
     }
 }
