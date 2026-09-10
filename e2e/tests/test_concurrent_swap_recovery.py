@@ -22,6 +22,17 @@ def test_concurrent_unequal_swaps_cannot_poison_stray_recovery(env):
     parking_hotkey = env.parking_hotkey()
     tolerance = config.CONSOLIDATION_ROUNDING_TOLERANCE_RAO
 
+    # The swap cooldown is per (subnet, coldkey), so use independent validator
+    # owners rather than the bootstrap's shared Alice coldkey for both swaps.
+    owner_c_uri = "//ConcurrentValidatorC"
+    hotkey_c_uri = "//ConcurrentHotkeyC"
+    hotkey_c_ss58 = extrinsics.keypair_ss58(hotkey_c_uri)
+    extrinsics.fund_account(extrinsics.keypair_ss58(owner_c_uri), 10_000_000_000)
+    extrinsics.burned_register(hotkey_c_ss58, netuid, signer_uri=owner_c_uri)
+    assert extrinsics.hotkey_owner(hotkey_c_ss58) == extrinsics.keypair_ss58(owner_c_uri)
+    hotkeys[1] = extrinsics.keypair_pubkey(hotkey_c_uri)
+    old_ss58s = [env.hotkey_ss58s[0], hotkey_c_ss58]
+
     # Put the smaller slot first, so a first-compatible-slot recovery would
     # incorrectly assign C's larger balance to A.
     env.set_validators(netuid, hotkeys, [2000, 6000, 2000])
@@ -46,8 +57,8 @@ def test_concurrent_unequal_swaps_cannot_poison_stray_recovery(env):
     successor_uris = ["//ConcurrentSuccessorB", "//ConcurrentSuccessorD"]
     successors = [extrinsics.keypair_pubkey(uri) for uri in successor_uris]
     successor_ss58s = [extrinsics.keypair_ss58(uri) for uri in successor_uris]
-    for old_ss58, new_ss58 in zip(env.hotkey_ss58s[:2], successor_ss58s):
-        extrinsics.swap_hotkey(old_ss58, new_ss58)
+    for old_ss58, new_ss58, owner_uri in zip(old_ss58s, successor_ss58s, ["//Alice", owner_c_uri]):
+        extrinsics.swap_hotkey(old_ss58, new_ss58, signer_uri=owner_uri)
         assert extrinsics.hotkey_owner(old_ss58) == "", "the swap must vacate the old name"
 
     # No successful vault mutation has observed either swap yet.
@@ -68,12 +79,16 @@ def test_concurrent_unequal_swaps_cannot_poison_stray_recovery(env):
     assert env.backing_intact(token_id)
 
     # Cut both outgoing edges using real extrinsics, leaving B and D funded.
-    stranger_ss58 = extrinsics.keypair_ss58(incidents.STRANGER_URI)
-    extrinsics.fund_account(stranger_ss58, 2 * incidents.STRANGER_FUNDING_RAO)
-    for old_ss58, junk_uri in zip(env.hotkey_ss58s[:2], ["//ConcurrentJunkA", "//ConcurrentJunkC"]):
+    # Independent claimants also avoid sharing the per-coldkey swap cooldown.
+    for old_ss58, junk_uri, stranger_uri in zip(
+        old_ss58s, ["//ConcurrentJunkA", "//ConcurrentJunkC"],
+        ["//ConcurrentStrangerA", "//ConcurrentStrangerC"],
+    ):
+        stranger_ss58 = extrinsics.keypair_ss58(stranger_uri)
+        extrinsics.fund_account(stranger_ss58, incidents.STRANGER_FUNDING_RAO)
         junk_ss58 = extrinsics.keypair_ss58(junk_uri)
-        extrinsics.associate_hotkey(junk_ss58, signer_uri=incidents.STRANGER_URI)
-        extrinsics.swap_hotkey_on_subnet(junk_ss58, old_ss58, netuid, signer_uri=incidents.STRANGER_URI)
+        extrinsics.associate_hotkey(junk_ss58, signer_uri=stranger_uri)
+        extrinsics.swap_hotkey_on_subnet(junk_ss58, old_ss58, netuid, signer_uri=stranger_uri)
         assert extrinsics.hotkey_owner(old_ss58) == stranger_ss58, "the stranger must claim the vacated name"
 
     for old_pubkey in hotkeys[:2]:
