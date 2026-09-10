@@ -153,7 +153,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.syncBacking(TOKEN1);
     }
 
-    function test_SecondLoss_JoinsTheOpenClock() public {
+    function test_SecondLoss_RestartsTheOpenClock() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _buildSwapTrail(NETUID1, hotkey1, 2);
         vault.syncBacking(TOKEN1);
@@ -161,11 +161,14 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
         vm.warp(block.timestamp + 1 hours);
         _buildSwapTrail(NETUID1, hotkey2, 2);
-        vm.expectRevert(BackingUnchanged.selector);
         vault.syncBacking(TOKEN1);
-        assertEq(lens.frozenUntil(TOKEN1), deadline, "the later loss shares the clock");
+        uint256 renewedDeadline = block.timestamp + vault.recoveryWindow();
+        assertEq(lens.frozenUntil(TOKEN1), renewedDeadline, "the later loss gets a full window");
 
         vm.warp(deadline);
+        vm.expectRevert(BackingUnchanged.selector);
+        vault.syncBacking(TOKEN1);
+        vm.warp(renewedDeadline);
         vault.syncBacking(TOKEN1);
         assertEq(lens.totalStake(TOKEN1), _getVaultStake(vault.parkingHotkey(), NETUID1), "both losses are written off");
     }

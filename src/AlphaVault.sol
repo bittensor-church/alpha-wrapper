@@ -72,6 +72,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
     mapping(uint256 => VaultReads.Slot[]) private _slots;
     mapping(uint256 => Recovery) public recovery;
+    /// @dev Missing slots at the last successful sync. Slot indices stay fixed while a shortfall is on file.
+    mapping(uint256 => uint256) private _shortSlots;
 
     /// @dev Scaled by `TAO_INDEX_PRECISION`; native TAO is accounted separately from alpha backing.
     mapping(uint256 => uint256) public cumulativeTaoPerShare;
@@ -105,6 +107,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     );
     /// @dev `amount` is native TAO in EVM wei.
     event TaoClaimed(address indexed user, uint256 indexed tokenId, address recipient, uint256 amount);
+    /// @dev Also emitted when a newly missing slot restarts the recovery window.
     event BackingShortfallDeclared(uint256 indexed tokenId, uint256 expected, uint256 located);
     event BackingShortfallCleared(uint256 indexed tokenId);
     /// @dev Loss falls on holders at write-off; later recovery belongs to holders at recovery time.
@@ -649,6 +652,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
         uint256 nonce = validatorRegistry.nonces(netuid);
         recovery[tokenId] = Recovery({ shortSince: 0, parkedAtNonce: nonce });
+        delete _shortSlots[tokenId];
         emit BackingParked(tokenId, backing, nonce);
     }
 
@@ -692,8 +696,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @notice Declare, clear or write off a shortfall, without moving stake before the window is out.
     /// @dev A declared shortfall holds priced operations shut until this call observes full coverage.
     ///      A sync that observes full coverage also brings the record up to date with any swap it
-    ///      followed. After `recoveryWindow`, the located remainder parks and the difference is
-    ///      written off.
+    ///      followed. A newly missing slot restarts the window before any write-off, even after expiry.
+    ///      Observing only repairs preserves the deadline. After `recoveryWindow` without a new missing
+    ///      slot, the located remainder parks and the difference is written off.
     function syncBacking(uint256 tokenId) external nonReentrant {
         address clone = subnetClone[tokenId];
         if (clone == address(0)) revert NothingToUnwrap();
@@ -704,27 +709,35 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         VaultReads.Slot[] memory slots = _slots[tokenId];
         bytes32 coldkey = VaultReads.coldkeyOf(clone);
         VaultReads.Backing memory backing = VaultReads.resolveBacking(slots, coldkey, netuid);
-        bool short = VaultReads.firstShortOf(backing.short) != type(uint256).max;
+        uint256 shortSlots;
+        for (uint256 i; i < backing.short.length; ++i) {
+            if (backing.short[i]) shortSlots |= uint256(1) << i;
+        }
         uint256 expected = _totalTracked(slots);
 
         // forge-lint: disable-next-line(block-timestamp)
         uint64 timestamp = uint64(block.timestamp);
-        if (state.shortSince == 0) {
-            if (short) {
-                state.shortSince = timestamp;
-                emit BackingShortfallDeclared(tokenId, expected, backing.total);
-            } else if (_followedSwap(slots, backing.keys)) {
+        if (shortSlots != 0 && (state.shortSince == 0 || (shortSlots & ~_shortSlots[tokenId]) != 0)) {
+            state.shortSince = timestamp;
+            _shortSlots[tokenId] = shortSlots;
+            emit BackingShortfallDeclared(tokenId, expected, backing.total);
+        } else if (state.shortSince == 0) {
+            if (_followedSwap(slots, backing.keys)) {
                 _reanchor(tokenId, backing.keys, backing.balances);
             } else {
                 revert BackingUnchanged();
             }
-        } else if (!short) {
+        } else if (shortSlots == 0) {
             state.shortSince = 0;
+            delete _shortSlots[tokenId];
             _reanchor(tokenId, backing.keys, backing.balances);
             emit BackingShortfallCleared(tokenId);
         } else if (timestamp >= state.shortSince + recoveryWindow) {
             emit BackingWrittenOff(tokenId, expected, backing.total);
             _park(tokenId, clone, coldkey, netuid, backing.keys, true);
+        } else if (shortSlots != _shortSlots[tokenId]) {
+            // Remember repairs so a later loss of the same slot gets a fresh window.
+            _shortSlots[tokenId] = shortSlots;
         } else {
             revert BackingUnchanged();
         }

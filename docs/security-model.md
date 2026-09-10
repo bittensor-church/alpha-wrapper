@@ -49,6 +49,11 @@ recovery window parks what is located and writes off the rest. Parking moves
 the alpha onto a hotkey only the vault's coldkey controls, so a repaired
 position cannot be captured again by whoever claims a vacated name.
 
+A newly missing slot restarts the shared window when `syncBacking` observes it,
+before any write-off. Observing repairs alone does not extend it. Repeated fresh
+losses can therefore delay write-off and keep priced operations blocked. Changes
+that happen entirely between syncs cannot be distinguished.
+
 Write-off chooses repricing over indefinite waiting for missing alpha. It is a
 real loss of accounted backing for holders at finalization, not proof the alpha
 was destroyed. Any later recovery belongs to whoever holds shares then.
