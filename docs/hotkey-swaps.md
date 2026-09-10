@@ -109,9 +109,10 @@ any shortfall or recovery clock.
    comes back on its own. A further `syncBacking` that observes full coverage
    takes the loss off file and reopens the token.
 4. If backing remains missing, a further `syncBacking` after `recoveryWindow`
-   parks what is located and writes the rest off. A newly missing slot restarts
-   the whole window when observed, even at an expired deadline; repeated syncs
-   of the same missing slots do not extend it. Time passing alone does nothing.
+   parks what is located and writes the rest off. Each slot can restart the whole
+   window once per unresolved recovery period, even at an expired deadline.
+   Returning and losing that slot again does not earn another window. Full
+   recovery resets this allowance. Time passing alone does nothing.
    Alpha found later joins the position through `recoverStray` and belongs to
    the holders at that time.
 5. Attesters publish a set without the lost or captured name, naming the

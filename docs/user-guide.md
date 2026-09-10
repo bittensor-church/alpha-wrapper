@@ -115,8 +115,10 @@ new validator set; the first wrap or rebalance after that lands the parked alpha
 on the new set.
 
 Passing the deadline does not reopen anything by itself. A further `syncBacking`
-restarts the window if it discovers a newly missing slot; otherwise it parks what
-is located and writes off the rest, reducing current holders' backing.
+restarts the window if a slot is observed missing for the first time in this
+unresolved recovery period; otherwise, if backing is still short, it parks what
+is located and writes off the rest, reducing current holders' backing. A slot
+returning and disappearing again does not earn another extension.
 An intact backing report does not guarantee an exit either. See the
 [watcher runbook](hotkey-swaps.md).
 

@@ -3,8 +3,9 @@
 Attested hotkeys outside the metagraph can hold stake. Their global swaps move that
 stake without a subnet successor edge, so the vault loses sight of it. They also
 allow the first owner to swap back without a subnet membership cooldown. This
-stages both losses and the first return through real extrinsics, with no storage
-edits or time warps. An intentionally short constructor window keeps CI bounded.
+stages both losses and repeated reverse swaps through real extrinsics, with no
+storage edits or time warps. An intentionally short constructor window keeps CI
+bounded. Each slot can extend an unresolved recovery period only once.
 """
 import json
 import time
@@ -127,6 +128,29 @@ def test_new_loss_gets_a_full_window_when_original_deadline_expires(env, recover
         "syncBacking(uint256)", token_id,
     )
     assert env.frozen_until(token_id) == renewed_deadline
+
+    # A already used its allowance, even though it was restored when C was first
+    # observed missing. Cycling A cannot extend C's still-unresolved shortfall.
+    for cycle in range(2):
+        extrinsics.swap_hotkey(ss58s[0], b_ss58)
+        assert env.stake(b, clone, netuid) >= first_stake - tolerance
+        assert env.stake(hotkeys[0], clone, netuid) <= config.ROUNDING_DUST_SLOT_RAO
+        env.assert_vault_reverts_with(
+            "BackingUnchanged()", 1_500_000, f"Shared deadline: repeated loss {cycle} must not restart the window",
+            "syncBacking(uint256)", token_id,
+        )
+        assert env.frozen_until(token_id) == renewed_deadline
+
+        extrinsics.swap_hotkey(b_ss58, ss58s[0])
+        assert env.stake(b, clone, netuid) <= config.ROUNDING_DUST_SLOT_RAO
+        assert env.stake(hotkeys[0], clone, netuid) >= first_stake - tolerance
+        env.assert_vault_reverts_with(
+            "BackingUnchanged()", 1_500_000, f"Shared deadline: partial repair {cycle} must not reset allowances",
+            "syncBacking(uint256)", token_id,
+        )
+        assert env.frozen_until(token_id) == renewed_deadline
+        assert env.stake(parking, clone, netuid) == 0, "reverse swaps restore A without parking"
+    assert _timestamp() < renewed_deadline, "swap cycles must finish before the renewed deadline"
 
     _wait_until(renewed_deadline)
     receipt = env.vault_send(

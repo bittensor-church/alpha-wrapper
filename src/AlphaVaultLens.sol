@@ -58,7 +58,7 @@ contract AlphaVaultLens {
 
     /// @return deadline When `syncBacking` may write the declared shortfall down; zero while the position
     ///         accounts for itself, max uint256 while a shortfall is still undeclared.
-    /// @dev A sync discovering a newly missing slot extends this deadline instead of writing off.
+    /// @dev Each slot can extend this deadline once per unresolved recovery period, before write-off.
     ///      Expiry only permits the write-off; only `syncBacking` clears or finalizes a shortfall.
     function frozenUntil(uint256 tokenId) external view returns (uint256 deadline) {
         uint64 shortSince = _shortSince(tokenId);
