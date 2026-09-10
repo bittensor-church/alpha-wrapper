@@ -29,7 +29,7 @@ import {
     NothingToUnwrap,
     Parked,
     ParkingHotkeyUnavailable,
-    RecoveryIncomplete,
+    BackingNotSecured,
     ShortfallOnFile,
     SlippageExceeded,
     SlotMaskOutOfRange,
@@ -72,9 +72,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
     mapping(uint256 => VaultReads.Slot[]) private _slots;
     mapping(uint256 => Recovery) public recovery;
-    /// @dev Slots observed missing during this recovery period; at most MAX_VALIDATORS (64) plus one parking slot.
-    ///      Indices stay fixed during a shortfall. A successful annex records full coverage.
-    mapping(uint256 => uint256) private _seenShortSlots;
 
     /// @dev Scaled by `TAO_INDEX_PRECISION`; native TAO is accounted separately from alpha backing.
     mapping(uint256 => uint256) public cumulativeTaoPerShare;
@@ -108,7 +105,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     );
     /// @dev `amount` is native TAO in EVM wei.
     event TaoClaimed(address indexed user, uint256 indexed tokenId, address recipient, uint256 amount);
-    /// @dev Also emitted when a slot first goes missing during this recovery period.
+    /// @dev The fixed window starts only after located backing has been secured on parking.
     event BackingShortfallDeclared(uint256 indexed tokenId, uint256 expected, uint256 located);
     event BackingShortfallCleared(uint256 indexed tokenId);
     /// @dev Loss falls on holders at write-off; later recovery belongs to holders at recovery time.
@@ -591,71 +588,102 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         return false;
     }
 
-    /// @notice Bring the vault's own alpha home from keys the record does not list.
-    /// @dev Permissionless and never pays the caller. With a shortfall, every located balance parks on
-    ///      the vault's own hotkey and stays there until the registry publishes a newer set. Without one,
-    ///      the strays join the live backing; a late recovery belongs to the holders at that time.
+    /// @notice Bring the vault's own alpha home from caller-supplied locations.
+    /// @dev Recovery pools alpha without assigning it to validators. Partial finds park immediately;
+    ///      the expected total and fixed deadline remain until coverage is complete or sync writes off.
+    ///      With no shortfall, strays join live backing. Recovery never pays the caller.
     function recoverStray(uint256 tokenId, bytes32[] calldata sources) external nonReentrant {
         address clone = subnetClone[tokenId];
         if (clone == address(0)) revert NothingToUnwrap();
         uint16 netuid = VaultMath.netuidOf(tokenId);
         if (VaultReads.isDissolved(tokenId)) revert NothingToRecover();
-
         VaultReads.Slot[] memory slots = _slots[tokenId];
         if (slots.length == 0) revert NothingToRecover();
         bytes32 coldkey = VaultReads.coldkeyOf(clone);
-        VaultReads.Backing memory backing = VaultReads.resolveBacking(slots, coldkey, netuid);
-        (bytes32[] memory strays, uint256 found) = VaultAllocation.novelSources(backing.keys, sources, coldkey, netuid);
-
-        if (VaultReads.firstShortOf(backing.short) == type(uint256).max) {
-            delete _seenShortSlots[tokenId];
-            _annex(tokenId, clone, coldkey, netuid, backing.keys, strays);
-            return;
+        bool recovering = recovery[tokenId].shortSince != 0;
+        bytes32[] memory keys = VaultReads.activesOf(slots);
+        if (!recovering) {
+            VaultReads.Backing memory backing = VaultReads.resolveBacking(slots, coldkey, netuid);
+            if (VaultReads.firstShortOf(backing.short) == type(uint256).max) {
+                (bytes32[] memory annexSources,) = VaultAllocation.novelSources(backing.keys, sources, coldkey, netuid);
+                _annex(tokenId, clone, coldkey, netuid, backing.keys, annexSources);
+                return;
+            }
+            keys = _collectionKeys(keys, backing.keys, coldkey, netuid);
         }
-        uint256 slack = VaultReads.TRACKED_SLACK_RAO * slots.length;
-        if (backing.total + found + slack < _totalTracked(slots)) revert RecoveryIncomplete();
-        _park(tokenId, clone, coldkey, netuid, VaultMath.concat(backing.keys, strays), false);
+        (bytes32[] memory strays,) = VaultAllocation.novelSources(keys, sources, coldkey, netuid);
+        uint256 before = IStaking(STAKING_PRECOMPILE).getStake(parkingHotkey, coldkey, netuid);
+        uint256 parked = _secureBacking(clone, coldkey, netuid, VaultMath.concat(keys, strays));
+        uint256 expected = _totalTracked(slots);
+        if (VaultReads.coversTracked(parked, expected)) {
+            _finishRecovery(tokenId, parked);
+        } else if (!recovering) {
+            _startRecovery(tokenId, keys, expected, parked);
+        } else {
+            if (parked <= before) revert NothingToRecover();
+            emit BackingRecovered(tokenId, parkingHotkey, parked - before);
+        }
     }
 
-    /// @dev Roll every located balance onto the parking hotkey and collapse the record to that slot. A
-    ///      write-off that leaves a remainder the chain would not move keeps a slot for each key holding
-    ///      one, so nothing located drops off the books.
-    function _park(
-        uint256 tokenId,
-        address clone,
-        bytes32 coldkey,
-        uint16 netuid,
-        bytes32[] memory located,
-        bool writeOff
-    ) private {
-        uint256 backing = _gather(clone, coldkey, netuid, located, parkingHotkey, writeOff);
-        VaultReads.Slot[] storage tokenSlots = _slots[tokenId];
-        _writeSlot(tokenSlots, 0, parkingHotkey, parkingHotkey, backing);
-        uint256 count = 1;
-        if (writeOff) {
-            for (uint256 i; i < located.length;) {
-                bytes32 key = located[i];
-                uint256 remainder =
-                    key == parkingHotkey ? 0 : IStaking(STAKING_PRECOMPILE).getStake(key, coldkey, netuid);
-                if (remainder != 0) {
-                    _writeSlot(tokenSlots, count, key, key, remainder);
-                    backing += remainder;
-                    unchecked {
-                        ++count;
-                    }
-                }
-                unchecked {
-                    ++i;
-                }
+    /// @dev Preserve raw locations as well as resolved ones, including residue left at an old name.
+    ///      These are collection addresses, never assignments of recovered alpha to missing validators.
+    function _collectionKeys(bytes32[] memory raw, bytes32[] memory resolved, bytes32 coldkey, uint16 netuid)
+        private
+        view
+        returns (bytes32[] memory)
+    {
+        (bytes32[] memory extra,) = VaultAllocation.novelSources(resolved, raw, coldkey, netuid);
+        return VaultMath.concat(resolved, extra);
+    }
+
+    /// @dev A failed move rolls back the collection and leaves the clock and obligations untouched.
+    function _secureBacking(address clone, bytes32 coldkey, uint16 netuid, bytes32[] memory keys)
+        private
+        returns (uint256 parked)
+    {
+        parked = _gather(clone, coldkey, netuid, keys, parkingHotkey);
+        uint256 exposed;
+        for (uint256 i; i < keys.length;) {
+            if (keys[i] != bytes32(0) && keys[i] != parkingHotkey) {
+                exposed += IStaking(STAKING_PRECOMPILE).getStake(keys[i], coldkey, netuid);
+            }
+            unchecked {
+                ++i;
             }
         }
-        while (tokenSlots.length > count) {
-            tokenSlots.pop();
+        if (exposed > VaultReads.TRACKED_SLACK_RAO) revert BackingNotSecured();
+    }
+
+    /// @dev Only the parking entry carries an obligation. Other entries are zero-weight collection
+    ///      locations, so every actual balance is counted once without guessing its origin.
+    function _startRecovery(uint256 tokenId, bytes32[] memory keys, uint256 expected, uint256 parked) private {
+        VaultReads.Slot[] storage slots = _slots[tokenId];
+        _writeSlot(slots, 0, parkingHotkey, parkingHotkey, expected);
+        uint256 count = 1;
+        for (uint256 i; i < keys.length;) {
+            if (keys[i] != bytes32(0) && keys[i] != parkingHotkey) {
+                _writeSlot(slots, count, keys[i], keys[i], 0);
+                unchecked {
+                    ++count;
+                }
+            }
+            unchecked {
+                ++i;
+            }
         }
-        uint256 nonce = validatorRegistry.nonces(netuid);
+        while (slots.length > count) slots.pop();
+        // forge-lint: disable-next-line(block-timestamp)
+        recovery[tokenId] = Recovery({ shortSince: uint64(block.timestamp), parkedAtNonce: 0 });
+        emit BackingShortfallDeclared(tokenId, expected, parked);
+    }
+
+    function _finishRecovery(uint256 tokenId, uint256 parked) private {
+        VaultReads.Slot[] storage slots = _slots[tokenId];
+        _writeSlot(slots, 0, parkingHotkey, parkingHotkey, parked);
+        while (slots.length > 1) slots.pop();
+        uint256 nonce = validatorRegistry.nonces(VaultMath.netuidOf(tokenId));
         recovery[tokenId] = Recovery({ shortSince: 0, parkedAtNonce: nonce });
-        delete _seenShortSlots[tokenId];
-        emit BackingParked(tokenId, backing, nonce);
+        emit BackingParked(tokenId, parked, nonce);
     }
 
     /// @dev With nothing short, strays join the first slot the way a dropped validator's stake does:
@@ -671,77 +699,66 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ) private {
         bytes32 home = keys[0];
         uint256 before = IStaking(STAKING_PRECOMPILE).getStake(home, coldkey, netuid);
-        uint256 balance = _gather(clone, coldkey, netuid, strays, home, false);
+        uint256 balance = _gather(clone, coldkey, netuid, strays, home);
         if (balance <= before) revert NothingToRecover();
         _reanchor(tokenId, keys, VaultReads.fetchBalances(keys, coldkey, netuid));
         emit BackingRecovered(tokenId, home, balance - before);
     }
 
     /// @dev Roll the sources onto one destination and report what it holds afterwards.
-    function _gather(
-        address clone,
-        bytes32 coldkey,
-        uint16 netuid,
-        bytes32[] memory sources,
-        bytes32 destination,
-        bool leaveUnmovable
-    ) private returns (uint256) {
+    function _gather(address clone, bytes32 coldkey, uint16 netuid, bytes32[] memory sources, bytes32 destination)
+        private
+        returns (uint256)
+    {
         bytes32[] memory destinations = new bytes32[](1);
         destinations[0] = destination;
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
-        VaultAllocation.consolidateRotatedStake(
-            clone, coldkey, netuid, sources, destinations, alphaPriceE18, leaveUnmovable
-        );
+        VaultAllocation.consolidateRotatedStake(clone, coldkey, netuid, sources, destinations, alphaPriceE18, false);
         return IStaking(STAKING_PRECOMPILE).getStake(destination, coldkey, netuid);
     }
 
-    /// @notice Declare, clear or write off a shortfall, without moving stake before the window is out.
-    /// @dev A declared shortfall holds priced operations shut until this call observes full coverage.
-    ///      A sync that observes full coverage also brings the record up to date with any swap it
-    ///      followed. Each slot can restart the window once per recovery period, before any write-off, even
-    ///      after expiry. Repairs and repeated losses of a seen slot preserve the deadline. Once it
-    ///      expires without an unseen missing slot, the located remainder parks and the rest is written off.
+    /// @notice Secure located backing, then start or finalize one fixed recovery window.
+    /// @dev Partial returns are collected into parking without restarting the clock. Full coverage
+    ///      ends recovery; after expiry, only the remaining pooled deficit is written off.
     function syncBacking(uint256 tokenId) external nonReentrant {
         address clone = subnetClone[tokenId];
         if (clone == address(0)) revert NothingToUnwrap();
         uint16 netuid = VaultMath.netuidOf(tokenId);
         if (VaultReads.isDissolved(tokenId)) revert BackingUnchanged();
-
         Recovery storage state = recovery[tokenId];
         VaultReads.Slot[] memory slots = _slots[tokenId];
         bytes32 coldkey = VaultReads.coldkeyOf(clone);
-        VaultReads.Backing memory backing = VaultReads.resolveBacking(slots, coldkey, netuid);
-        uint256 shortSlots;
-        for (uint256 i; i < backing.short.length;) {
-            if (backing.short[i]) shortSlots |= uint256(1) << i;
-            unchecked {
-                ++i;
-            }
-        }
-        uint256 expected = _totalTracked(slots);
-
-        // forge-lint: disable-next-line(block-timestamp)
-        uint64 timestamp = uint64(block.timestamp);
-        if (shortSlots != 0 && (state.shortSince == 0 || (shortSlots & ~_seenShortSlots[tokenId]) != 0)) {
-            state.shortSince = timestamp;
-            _seenShortSlots[tokenId] |= shortSlots;
-            emit BackingShortfallDeclared(tokenId, expected, backing.total);
-        } else if (state.shortSince == 0) {
-            if (_followedSwap(slots, backing.keys)) {
+        bytes32[] memory keys = VaultReads.activesOf(slots);
+        if (state.shortSince == 0) {
+            VaultReads.Backing memory backing = VaultReads.resolveBacking(slots, coldkey, netuid);
+            if (VaultReads.firstShortOf(backing.short) == type(uint256).max) {
+                if (!_followedSwap(slots, backing.keys)) revert BackingUnchanged();
                 _reanchor(tokenId, backing.keys, backing.balances);
-            } else {
-                revert BackingUnchanged();
+                return;
             }
-        } else if (shortSlots == 0) {
-            state.shortSince = 0;
-            delete _seenShortSlots[tokenId];
-            _reanchor(tokenId, backing.keys, backing.balances);
+            keys = _collectionKeys(keys, backing.keys, coldkey, netuid);
+            uint256 initialExpected = _totalTracked(slots);
+            uint256 secured = _secureBacking(clone, coldkey, netuid, keys);
+            if (VaultReads.coversTracked(secured, initialExpected)) {
+                _finishRecovery(tokenId, secured);
+            } else {
+                _startRecovery(tokenId, keys, initialExpected, secured);
+            }
+            return;
+        }
+        uint256 before = IStaking(STAKING_PRECOMPILE).getStake(parkingHotkey, coldkey, netuid);
+        uint256 parked = _secureBacking(clone, coldkey, netuid, keys);
+        uint256 expected = _totalTracked(slots);
+        if (VaultReads.coversTracked(parked, expected)) {
             emit BackingShortfallCleared(tokenId);
-        } else if (timestamp >= state.shortSince + recoveryWindow) {
-            emit BackingWrittenOff(tokenId, expected, backing.total);
-            _park(tokenId, clone, coldkey, netuid, backing.keys, true);
+            _finishRecovery(tokenId, parked);
+            // forge-lint: disable-next-line(block-timestamp)
+        } else if (block.timestamp >= state.shortSince + recoveryWindow) {
+            emit BackingWrittenOff(tokenId, expected, parked);
+            _finishRecovery(tokenId, parked);
         } else {
-            revert BackingUnchanged();
+            if (parked <= before) revert BackingUnchanged();
+            emit BackingRecovered(tokenId, parkingHotkey, parked - before);
         }
     }
 

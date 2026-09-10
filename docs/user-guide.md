@@ -93,12 +93,13 @@ burning for TAO. See [dissolution](edge-cases.md#subnet-dissolution).
 On a live subnet, `BackingShortfall` blocks wraps, rebalances, both exits and value
 quotes until the position parks or the loss is written off. It means expected
 alpha is unlocated, not proof it was destroyed. While a loss is on file the
-token stays shut (`ShortfallOnFile`) until a `syncBacking` observes full
-coverage. Shares still transfer and accrued TAO stays claimable.
+token stays shut (`ShortfallOnFile`) until recovery completes or sync writes
+off the remaining deficit. Shares still transfer and accrued TAO stays claimable.
 
 The lens exposes:
 
 - `locatedStake(tokenId)`: alpha currently found.
+- `missingStake(tokenId)`: the aggregate alpha still missing.
 - `isBackingIntact(tokenId)`: whether all recorded expectations are covered and
   no loss is on file.
 - `frozenUntil(tokenId)`: zero while the position accounts for itself, the
@@ -114,11 +115,10 @@ Deposits (`Parked`) and weight alignment wait for the attesters to publish a
 new validator set; the first wrap or rebalance after that lands the parked alpha
 on the new set.
 
-Passing the deadline does not reopen anything by itself. A further `syncBacking`
-restarts the window if a slot is observed missing for the first time in this
-unresolved recovery period; otherwise, if backing is still short, it parks what
-is located and writes off the rest, reducing current holders' backing. A slot
-returning and disappearing again does not earn another extension.
+`syncBacking` parks located backing before starting one fixed window. Partial
+`recoverStray` calls secure additional funds without extending it. At expiry,
+a further sync collects returns before writing off the remaining deficit.
+A failed collection preserves the obligation and does not start a new clock.
 An intact backing report does not guarantee an exit either. See the
 [watcher runbook](hotkey-swaps.md).
 

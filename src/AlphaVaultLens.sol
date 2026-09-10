@@ -43,6 +43,16 @@ contract AlphaVaultLens {
         return backing.total;
     }
 
+    /// @notice Aggregate alpha still unlocated; recovered funds need no validator attribution.
+    function missingStake(uint256 tokenId) external view returns (uint256) {
+        (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _readBacking(tokenId);
+        uint256 expected;
+        for (uint256 i; i < slots.length; ++i) {
+            expected += slots[i].tracked;
+        }
+        return expected > backing.total ? expected - backing.total : 0;
+    }
+
     /// @notice Recorded active keys, before resolving any new swap.
     function lastSeenHotkeys(uint256 tokenId) external view returns (bytes32[] memory) {
         return VaultReads.activesOf(vault.recordedSlots(tokenId));
@@ -58,7 +68,7 @@ contract AlphaVaultLens {
 
     /// @return deadline When `syncBacking` may write the declared shortfall down; zero while the position
     ///         accounts for itself, max uint256 while a shortfall is still undeclared.
-    /// @dev Each slot can extend this deadline once per unresolved recovery period, before write-off.
+    /// @dev The fixed window starts after located backing parks; partial recoveries never extend it.
     ///      Expiry only permits the write-off; only `syncBacking` clears or finalizes a shortfall.
     function frozenUntil(uint256 tokenId) external view returns (uint256 deadline) {
         uint64 shortSince = _shortSince(tokenId);

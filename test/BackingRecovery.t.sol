@@ -13,7 +13,6 @@ import {
     NothingToRecover,
     NothingToUnwrap,
     Parked,
-    RecoveryIncomplete,
     ShortfallOnFile,
     SlippageExceeded,
     SubnetInDissolutionBlackoutPeriod,
@@ -52,7 +51,8 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.syncBacking(TOKEN1);
 
         assertEq(lens.frozenUntil(TOKEN1), block.timestamp + vault.recoveryWindow(), "the window runs from here");
-        assertEq(vault.recordedSlots(TOKEN1)[0].tracked, lost, "the slot still knows what it is owed");
+        assertEq(vault.recordedSlots(TOKEN1)[0].tracked, 30 ether, "the pool preserves the whole obligation");
+        assertEq(_parkedStake(NETUID1), 30 ether - lost, "located backing is secured before the clock starts");
         assertFalse(lens.isBackingIntact(TOKEN1), "and the token reports itself short");
     }
 
@@ -133,6 +133,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
 
         assertTrue(lens.isBackingIntact(TOKEN1), "the sync took it off file");
         assertEq(lens.frozenUntil(TOKEN1), 0, "and stopped the clock");
+        _reattestCurrentSet(NETUID1);
         vault.rebalance(NETUID1);
     }
 
@@ -144,6 +145,8 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         _simulateOffVaultSwap(NETUID1, tip, hotkey1);
         vault.syncBacking(TOKEN1);
 
+        _reattestCurrentSet(NETUID1);
+        vault.rebalance(NETUID1);
         vm.warp(block.timestamp + 2 * vault.recoveryWindow());
         _buildSwapTrail(NETUID1, hotkey1, 2);
         vault.syncBacking(TOKEN1);
@@ -151,26 +154,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertEq(lens.frozenUntil(TOKEN1), block.timestamp + vault.recoveryWindow(), "the new loss gets a full window");
         vm.expectRevert(BackingUnchanged.selector);
         vault.syncBacking(TOKEN1);
-    }
-
-    function test_SecondLoss_RestartsTheOpenClock() public {
-        _depositAndWrap(alice, NETUID1, 30 ether);
-        _buildSwapTrail(NETUID1, hotkey1, 2);
-        vault.syncBacking(TOKEN1);
-        uint256 deadline = lens.frozenUntil(TOKEN1);
-
-        vm.warp(block.timestamp + 1 hours);
-        _buildSwapTrail(NETUID1, hotkey2, 2);
-        vault.syncBacking(TOKEN1);
-        uint256 renewedDeadline = block.timestamp + vault.recoveryWindow();
-        assertEq(lens.frozenUntil(TOKEN1), renewedDeadline, "the later loss gets a full window");
-
-        vm.warp(deadline);
-        vm.expectRevert(BackingUnchanged.selector);
-        vault.syncBacking(TOKEN1);
-        vm.warp(renewedDeadline);
-        vault.syncBacking(TOKEN1);
-        assertEq(lens.totalStake(TOKEN1), _getVaultStake(vault.parkingHotkey(), NETUID1), "both losses are written off");
     }
 
     // --- Recovery parks the position ------------------------------------------------------------
@@ -243,8 +226,6 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         _simulateOffVaultSwap(NETUID1, hotkey2, hotkey4);
         MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey1, NETUID1, hotkey4);
         MockStaking(STAKING_PRECOMPILE).setHotkeySuccessor(hotkey2, NETUID1, hotkey4);
-        vault.syncBacking(TOKEN1);
-
         vault.recoverStray(TOKEN1, new bytes32[](0));
 
         assertEq(lens.totalStake(TOKEN1), 30 ether, "the merged balance is counted once");
@@ -282,7 +263,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
     }
 
     /// @dev Synthetic split backing exercises the coverage guard; ordinary swaps move whole entries.
-    function test_RevertWhen_TheSourcesCannotCoverTheLoss() public {
+    function test_RecoverStray_ParksPartialCoverageWithoutChangingTheDeadline() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);
         uint256 owed = _getVaultStake(hotkey1, NETUID1);
@@ -294,11 +275,11 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         vault.syncBacking(TOKEN1);
         uint256 deadline = lens.frozenUntil(TOKEN1);
 
-        vm.expectRevert(RecoveryIncomplete.selector);
         vm.prank(bob);
         vault.recoverStray(TOKEN1, _hotkeys(hotkey4));
         assertFalse(lens.isBackingIntact(TOKEN1), "the loss still stands");
-        assertEq(_getStakeForColdkey(hotkey4, coldkey, NETUID1), owed / 3, "the alpha it refused stayed put");
+        assertEq(_getStakeForColdkey(hotkey4, coldkey, NETUID1), 0, "the partial recovery is secured");
+        assertEq(lens.missingStake(TOKEN1), owed - owed / 3, "only the aggregate remainder is missing");
         assertEq(lens.frozenUntil(TOKEN1), deadline, "and the deadline did not move");
 
         vm.prank(bob);
@@ -510,32 +491,18 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertGe(lens.totalStake(TOKEN1), 5 ether, "and the next depositor starts a fresh position");
     }
 
-    /// @dev A remainder below the vault's conservative floor stays on the books until a pile carries it.
-    function test_WriteOff_KeepsARemainderItCannotMove() public {
+    function test_UnmovableBacking_PreventsTheRecoveryClockFromStarting() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         bytes32 coldkey = _subnetColdkey(NETUID1);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, coldkey, NETUID1, 1e6);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey2, coldkey, NETUID1, 0);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey3, coldkey, NETUID1, 0);
+        vm.expectRevert(ConsolidationBelowFloor.selector);
         vault.syncBacking(TOKEN1);
-        vm.warp(lens.frozenUntil(TOKEN1));
-
-        vm.expectEmit(true, false, false, true, address(vault));
-        emit BackingWrittenOff(TOKEN1, 30 ether, 1e6);
-        vm.expectEmit(true, false, false, true, address(vault));
-        emit BackingParked(TOKEN1, 1e6, registry.nonces(NETUID1));
-        vault.syncBacking(TOKEN1);
-
-        VaultReads.Slot[] memory slots = vault.recordedSlots(TOKEN1);
-        assertEq(slots.length, 2, "the parking slot and the remainder");
-        assertEq(slots[1].active, hotkey1, "the remainder stays where the chain left it");
-        assertEq(slots[1].tracked, 1e6, "and on the books");
-        assertEq(lens.totalStake(TOKEN1), 1e6, "so the quote still counts it");
-        assertTrue(lens.awaitingAttestation(TOKEN1), "while the position waits");
-
-        _reattestCurrentSet(NETUID1);
-        _depositAndWrap(bob, NETUID1, 5 ether);
-        assertEq(lens.totalStake(TOKEN1), 5 ether + 1e6, "and the next deposit carries it along");
+        (uint64 since,) = vault.recovery(TOKEN1);
+        assertEq(since, 0, "an unsecured balance cannot acquire a write-off deadline");
+        assertEq(_getVaultStake(hotkey1, NETUID1), 1e6);
+        assertEq(vault.recordedSlots(TOKEN1)[0].tracked, 30 ether * uint256(NETUID1_BPS_HK1) / 10000);
     }
 
     /// @dev The vault's stake on the parking hotkey is a nominator position the chain can sweep.
@@ -920,9 +887,9 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertEq(lens.totalStake(TOKEN1), 30 ether, "the position is whole under the new coldkey");
     }
 
-    function testFuzz_RecoverStray_ParksOnlyWhenTheSourcesCoverTheRecord(uint256 missing) public {
+    function testFuzz_RecoverStray_PreservesTheUnrecoveredDeficit(uint256 missing) public {
         _depositAndWrap(alice, NETUID1, 30 ether);
-        uint256 slack = VaultReads.TRACKED_SLACK_RAO * vault.recordedSlots(TOKEN1).length;
+        uint256 slack = VaultReads.TRACKED_SLACK_RAO;
         missing = bound(missing, 0, 2 * slack);
         bytes32 coldkey = _subnetColdkey(NETUID1);
         uint256 owed = _getVaultStake(hotkey1, NETUID1);
@@ -930,10 +897,14 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, coldkey, NETUID1, owed - missing);
         _simulateSameOwner(hotkey1, hotkey4);
 
-        if (missing > slack) vm.expectRevert(RecoveryIncomplete.selector);
         vault.recoverStray(TOKEN1, _hotkeys(hotkey4));
 
-        assertEq(lens.awaitingAttestation(TOKEN1), missing <= slack, "parked exactly when the sources cover the record");
+        assertEq(_getVaultStake(hotkey4, NETUID1), 0, "partial finds are secured too");
+        assertEq(lens.awaitingAttestation(TOKEN1), missing <= slack, "completion requires pooled coverage");
+        if (missing > slack) {
+            assertEq(lens.missingStake(TOKEN1), missing);
+            assertEq(vault.recordedSlots(TOKEN1)[0].tracked, 30 ether);
+        }
     }
 
     function test_SquattedFundedKey_IsRetiredNotFunded() public {

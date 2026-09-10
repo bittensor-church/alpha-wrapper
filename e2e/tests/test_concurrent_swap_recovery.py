@@ -1,10 +1,8 @@
-"""Unequal concurrent swaps cannot make recovery assign C's larger stake to A.
+"""Unequal concurrent swaps recover into one pool, in either source order.
 
-Both A -> B and C -> D complete before the vault settles either swap. With the
-successor edges present, D already backs C and cannot be supplied as stray stake.
-A stranger then cuts both edges by claiming the vacated names. Supplying only D,
-even twice, must revert without changing the record or moving either balance.
-Supplying D and B together must park the whole position and permit a full exit.
+After both successor edges are cut, the larger source can be recovered first,
+even when supplied twice. Its actual balance reduces the pooled deficit without
+assigning it to a validator. The smaller source then completes recovery.
 """
 import re
 
@@ -108,26 +106,27 @@ def test_concurrent_unequal_swaps_cannot_poison_stray_recovery(env):
         "D must cover the smaller slot but remain insufficient for the whole position"
     )
 
-    for supplied in ([successors[1]], [successors[1], successors[1]]):
-        env.assert_vault_reverts_with(
-            "RecoveryIncomplete()", 1_500_000,
-            "Concurrent swaps: D alone must not repair A at C's expense",
-            "recoverStray(uint256,bytes32[])", token_id, "[" + ",".join(supplied) + "]",
-            private_key=config.DEPLOYER_PRIVATE_KEY, sender=config.DEPLOYER_ADDRESS,
-        )
-        assert recorded_slots() == record_before, "rejected recovery must not change either slot"
-        assert env.frozen_until(token_id) == deadline, "rejected recovery must not change the deadline"
-        assert env.vault_shares(token_id) == shares, "rejected recovery must not change holder shares"
-        assert env.stake(parking_hotkey, clone_coldkey, netuid) == 0, "nothing may park on a failed recovery"
-        for key, before in zip(successors, source_balances):
-            assert env.stake(key, clone_coldkey, netuid) >= before - config.ROUNDING_DUST_SLOT_RAO, (
-                "rejected recovery must leave both source balances available"
-            )
-        assert not env.backing_intact(token_id), "the incomplete attempt must leave the shortfall visible"
+    parked_before = env.stake(parking_hotkey, clone_coldkey, netuid)
+    assert parked_before > 0, "syncBacking must secure the located remainder immediately"
+    located_before = parked_before + env.total_stake_across(clone_coldkey, netuid, hotkeys + successors)
 
-    # Deliberately supply the larger balance first, as in the poisoning attempt.
-    located_before = env.total_stake_across(clone_coldkey, netuid, hotkeys + successors)
-    env.recover_stray(token_id, list(reversed(successors)), "Concurrent swaps: joint recovery failed")
+    # Supply the larger source twice. It is credited once, with no attempt to assign it to A or C.
+    env.vault_send(
+        4_000_000, "Concurrent swaps: partial recovery of D failed",
+        "recoverStray(uint256,bytes32[])", token_id, f"[{successors[1]},{successors[1]}]",
+        private_key=config.DEPLOYER_PRIVATE_KEY, label="recoverStray [larger source, repeated]",
+    )
+    partial = env.stake(parking_hotkey, clone_coldkey, netuid)
+    assert abs(partial - parked_before - source_balances[1]) <= tolerance
+    missing = int(chain.cast_call(env.lens_address, "missingStake(uint256)(uint256)", token_id))
+    assert abs(missing - stake_a) <= tolerance
+    assert recorded_slots() == record_before, "partial recovery must preserve the full expected backing"
+    assert env.frozen_until(token_id) == deadline, "partial recovery must not restart the clock"
+    assert env.stake(successors[1], clone_coldkey, netuid) <= config.ROUNDING_DUST_SLOT_RAO
+    assert env.stake(successors[0], clone_coldkey, netuid) >= source_balances[0] - tolerance
+    assert env.vault_shares(token_id) == shares
+    assert not env.backing_intact(token_id)
+    env.recover_stray(token_id, [successors[0]], "Concurrent swaps: final partial recovery failed")
     parked = env.stake(parking_hotkey, clone_coldkey, netuid)
     assert parked >= max(backing_before, located_before) - tolerance, "both swapped balances must come home"
     assert env.total_stake_across(clone_coldkey, netuid, hotkeys + successors) <= config.ROUNDING_DUST_TOTAL_RAO

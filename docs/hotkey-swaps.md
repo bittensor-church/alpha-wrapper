@@ -100,28 +100,26 @@ any shortfall or recovery clock.
 1. Monitor current registry entries, recorded/resolved stake keys, backing
    status and `awaitingAttestation`. Include empty entries and newly attested
    keys with no recorded slot.
-2. For missing backing, call `syncBacking(tokenId)` to put the loss on file and
-   locate the stake under the clone's coldkey using chain history. Call
-   `recoverStray(tokenId, sources)` with every key holding it. The located
-   balances together must cover the whole record. Recovery works before the
-   clock starts as well.
-3. While a loss is on file, every priced operation refuses, even if the alpha
-   comes back on its own. A further `syncBacking` that observes full coverage
-   takes the loss off file and reopens the token.
-4. If backing remains missing, a further `syncBacking` after `recoveryWindow`
-   parks what is located and writes the rest off. Each slot can restart the whole
-   window once per unresolved recovery period, even at an expired deadline.
-   Returning and losing that slot again does not earn another window. Full
-   recovery resets this allowance. Time passing alone does nothing.
-   Alpha found later joins the position through `recoverStray` and belongs to
-   the holders at that time.
+2. For missing backing, call `syncBacking(tokenId)`. It secures all located
+   backing on `parkingHotkey` before starting one fixed recovery window. Failed
+   collection reverts, leaving the obligation and clock untouched.
+3. Locate more alpha under the clone's coldkey and call
+   `recoverStray(tokenId, sources)`. Partial finds park immediately and reduce
+   the pooled deficit; no validator association is needed. Recovery can also
+   start before an explicit sync. `missingStake(tokenId)` reports the deficit.
+4. While recovery is open, priced operations refuse. Further syncs collect
+   returns at recorded locations. Partial recovery never extends the deadline.
+   At expiry, sync collects returns before writing off the remaining deficit.
+   Full recovery or write-off leaves the position parked. Alpha recovered later
+   belongs to the holders at that time.
 5. Attesters publish a set without the lost or captured name, naming the
    intended successor. The next wrap or `rebalance(netuid)` releases the
    parked position onto it.
 
 `recoverStray` never edits the registry and cannot pay the caller from vault
-funds. Recovery emits `BackingParked`; a write-off emits `BackingWrittenOff`
-before it. Both calls are permissionless.
+funds. Partial collection emits `BackingRecovered`; completion emits
+`BackingParked`. A write-off emits `BackingWrittenOff` before it. Both calls
+are permissionless.
 
 ## Exit behavior and accepted tradeoffs
 

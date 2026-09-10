@@ -110,9 +110,14 @@ contract BackingHandler is Test {
         uint256 owedBefore = harness.trackedBacking();
         uint256 supplyBefore = vault.totalSupply(tokenId);
         try vault.recoverStray(tokenId, sources) {
-            bool[] memory covered = harness.coveredSlots();
-            for (uint256 i; i < covered.length; ++i) {
-                assertTrue(covered[i], "recovery left a slot short");
+            (uint64 since,) = vault.recovery(tokenId);
+            if (since == 0) {
+                bool[] memory covered = harness.coveredSlots();
+                for (uint256 i; i < covered.length; ++i) {
+                    assertTrue(covered[i], "completed recovery left a slot short");
+                }
+            } else {
+                assertEq(harness.trackedBacking(), owedBefore, "partial recovery changed the obligation");
             }
             assertEq(vault.totalSupply(tokenId), supplyBefore, "recovery changed the supply");
             // The record is rewritten from live balances; those balances must still answer for what was owed.

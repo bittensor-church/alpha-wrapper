@@ -121,10 +121,9 @@ class Environment:
         ))
 
     def sync_backing(self, token_id: int, label: Optional[str] = None) -> None:
-        """Put `token_id`'s unaccounted loss on file, starting the window after which the
-        record gives up on it. Anyone may call it."""
+        """Secure located backing and start, collect into, or finalize a fixed recovery window."""
         self.vault_send(
-            1_500_000, "syncBacking failed", "syncBacking(uint256)", token_id, label=label,
+            4_000_000, "syncBacking failed", "syncBacking(uint256)", token_id, label=label,
         )
 
     def recover_stray(self, token_id: int, source_pubkeys: List[str], message: str) -> dict:

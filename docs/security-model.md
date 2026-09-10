@@ -43,18 +43,17 @@ Holders rely on:
 
 The [hotkey-swap runbook](hotkey-swaps.md) separates two failures: names that
 answer to the wrong coldkey and unlocated alpha. Attestation repairs the first.
-`syncBacking` handles the second: it puts a shortfall on file, holds the token
-shut until a later call observes full coverage, and after the immutable
-recovery window parks what is located and writes off the rest. Parking moves
-the alpha onto a hotkey only the vault's coldkey controls, so a repaired
-position cannot be captured again by whoever claims a vacated name.
+`syncBacking` handles the second: it moves all located backing onto the vault's
+parking hotkey before starting one fixed recovery window. A failed collection
+reverts without starting the clock or reducing the obligation. Chain restrictions
+can therefore delay recovery indefinitely; accounting dust is tolerated.
 
-Each slot can restart the shared window once per unresolved recovery period,
-when `syncBacking` first observes it missing, before any write-off. Returning and
-losing the same slot again does not restart it or guarantee another full window.
-This bounds extensions to once per slot; full recovery resets that allowance.
-`recoverStray` can park sufficient movable backing at any time, regardless of the
-deadline. Changes entirely between observations cannot be distinguished.
+Recovery counts one expected total and one pool of located alpha, without assigning
+finds to validators. `recoverStray` accepts partial finds and parks them immediately;
+`syncBacking` also collects returns at recorded locations. Neither extends the clock.
+Validator swaps cannot move the secured balance off the vault-owned parking hotkey.
+At expiry, sync collects returns before writing off only the remaining deficit.
+Full recovery or write-off leaves the position parked pending a newer attestation.
 
 Write-off chooses repricing over indefinite waiting for missing alpha. It is a
 real loss of accounted backing for holders at finalization, not proof the alpha
