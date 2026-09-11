@@ -63,8 +63,7 @@ again.
 At deployment the vault claims one hotkey for its own coldkey, the parking
 hotkey. Nobody else can rename it, rename into it, or claim it. Sync gathers
 located backing onto that hotkey when a balance clears the conservative movement
-floor. Otherwise sub-floor balances may stay
-behind without delaying the fixed window. Completion collapses the record to
+floor. Otherwise sub-floor balances may stay behind without delaying the fixed window. Completion collapses the record to
 parking; abandoned dust needs explicit `recoverStray` sources later. The position
 is then parked:
 
@@ -110,7 +109,7 @@ any shortfall or recovery clock.
    Finds reduce the pooled deficit without validator attribution. If parking is
    empty, collect a movable source first so it can carry smaller sources home.
    `missingStake(tokenId)` reports unlocated alpha;
-   it excludes located dust that may also be written off if it cannot be parked.
+   dust at recorded keys reduces that amount but can still be written off if it cannot be parked.
 4. While recovery is open, priced operations refuse. Further syncs collect
    returns at recorded locations. Partial recovery never extends the deadline.
    At expiry, sync collects returns before writing off the remaining deficit.
@@ -125,6 +124,11 @@ any shortfall or recovery clock.
 funds. Collection emits `BackingRecovered`; sync finalization emits
 `BackingParked`. A write-off emits `BackingWrittenOff` before it. Both calls
 are permissionless.
+
+Declaration cost grows with the number of located keys. The E2E scenarios allow
+4M gas per sync for small sets. For large sets (up to 64 validators), simulate the
+actual chain call and budget above that estimate; mock snapshots do not include
+native dispatch costs. Keep funds for retries when a chain restriction blocks collection.
 
 ## Exit behavior and accepted tradeoffs
 

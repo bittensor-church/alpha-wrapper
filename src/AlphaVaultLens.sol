@@ -43,8 +43,8 @@ contract AlphaVaultLens {
         return backing.total;
     }
 
-    /// @notice Aggregate alpha still unlocated; recovered funds need no validator attribution.
-    /// @dev Located sub-floor dust is excluded here but may still be written off if it cannot be parked.
+    /// @notice Unlocated alpha relative to the recorded obligation.
+    /// @dev Dust at recorded keys reduces this amount, even if it cannot be parked and is later written off.
     function missingStake(uint256 tokenId) external view returns (uint256) {
         (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _readBacking(tokenId);
         uint256 expected;

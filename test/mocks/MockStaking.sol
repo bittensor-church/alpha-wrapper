@@ -16,6 +16,7 @@ uint256 constant CHAIN_NOMINATOR_MIN_STAKE = 20e6;
 contract MockStaking {
     mapping(bytes32 => mapping(bytes32 => mapping(uint256 => uint256))) public stakes;
     uint256 public moveStakeRoundingLoss;
+    uint256 public moveStakeResidual;
     uint256 public transferStakeRoundingLoss;
     bool public transferStakeReverts;
     bool public consumeAllGasOnFailure;
@@ -107,6 +108,11 @@ contract MockStaking {
         moveStakeRoundingLoss = loss;
     }
 
+    /// @dev Fault injection: leave alpha at the source despite a successful move call.
+    function setMoveStakeResidual(uint256 residual) external {
+        moveStakeResidual = residual;
+    }
+
     bool public moveStakeReverts;
 
     function setMoveStakeReverts(bool v) external {
@@ -129,8 +135,9 @@ contract MockStaking {
         if (_belowMinTransfer(amount, origin_netuid)) {
             _fail("MockStaking: AmountTooLow");
         }
-        stakes[origin_hotkey][_senderColdkey()][origin_netuid] -= amount;
-        stakes[destination_hotkey][_senderColdkey()][destination_netuid] += amount - moveStakeRoundingLoss;
+        uint256 moved = amount > moveStakeResidual ? amount - moveStakeResidual : 0;
+        stakes[origin_hotkey][_senderColdkey()][origin_netuid] -= moved;
+        stakes[destination_hotkey][_senderColdkey()][destination_netuid] += moved - moveStakeRoundingLoss;
     }
 
     function getStake(bytes32 hotkey, bytes32 coldkey, uint256 netuid) external view returns (uint256) {

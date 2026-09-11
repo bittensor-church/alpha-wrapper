@@ -50,6 +50,13 @@ floor, collection leaves those balances in place without delaying the window.
 Every sync retries collection before write-off, so a larger return or price rise
 can bring the dust home. Other collection failures revert without changing the
 clock or obligation; persistent chain restrictions can still delay recovery.
+A native precompile refusal consumes forwarded gas, even though state rolls back.
+
+The conservative floor uses `DefaultMinStake`: 0.002 TAO in [Subtensor `14cde6410`](https://github.com/opentensor/subtensor/blob/14cde6410fe8ec81a940e290c56f94a632a0988d/runtime/src/lib.rs#L841),
+20 times its 0.0001 TAO same-subnet transfer minimum. Thus some chain-movable
+balances can be skipped and written off. Ten skipped locations expose less than
+0.02 TAO at the floor check's price, not at a future price. Using the lower
+transfer minimum is a separate compatibility change.
 
 Recovery counts one expected total and one pool of located alpha, without assigning
 finds to validators. After sync declares a loss, `recoverStray(tokenId, source)`

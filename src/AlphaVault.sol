@@ -616,12 +616,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     }
 
     /// @dev Keep resolved keys and old-key residue locations.
-    function _collectionKeys(bytes32[] memory raw, bytes32[] memory resolved, bytes32 coldkey, uint16 netuid)
-        private
-        view
-        returns (bytes32[] memory)
-    {
-        (bytes32[] memory extra,) = VaultAllocation.novelSources(resolved, raw, coldkey, netuid);
+    function _collectionKeys(bytes32[] memory raw, bytes32[] memory resolved) private pure returns (bytes32[] memory) {
+        bytes32[] memory extra = VaultAllocation.novelSources(resolved, raw);
         return VaultMath.concat(resolved, extra);
     }
 
@@ -632,8 +628,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         returns (uint256 parked)
     {
         bool leftBelowFloor;
-        (parked, leftBelowFloor) = _gather(clone, coldkey, netuid, keys, parkingHotkey);
+        (parked, leftBelowFloor) = _gather(clone, coldkey, netuid, keys, parkingHotkey, true);
         if (leftBelowFloor) return parked;
+        // Defensive invariant: a successful collection must drain exposed backing within slack.
         uint256 exposed;
         for (uint256 i; i < keys.length;) {
             if (keys[i] != bytes32(0) && keys[i] != parkingHotkey) {
@@ -688,22 +685,25 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     ) private {
         bytes32 home = keys[0];
         uint256 before = IStaking(STAKING_PRECOMPILE).getStake(home, coldkey, netuid);
-        (uint256 balance, bool leftBelowFloor) = _gather(clone, coldkey, netuid, strays, home);
-        if (leftBelowFloor) revert ConsolidationBelowFloor();
+        (uint256 balance,) = _gather(clone, coldkey, netuid, strays, home, false);
         if (balance <= before) revert NothingToRecover();
         _reanchor(tokenId, keys, VaultReads.fetchBalances(keys, coldkey, netuid));
         emit BackingRecovered(tokenId, home, balance - before);
     }
 
-    function _gather(address clone, bytes32 coldkey, uint16 netuid, bytes32[] memory sources, bytes32 destination)
-        private
-        returns (uint256 balance, bool leftBelowFloor)
-    {
+    function _gather(
+        address clone,
+        bytes32 coldkey,
+        uint16 netuid,
+        bytes32[] memory sources,
+        bytes32 destination,
+        bool leaveUnmovable
+    ) private returns (uint256 balance, bool leftBelowFloor) {
         bytes32[] memory destinations = new bytes32[](1);
         destinations[0] = destination;
         uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(netuid);
         leftBelowFloor = VaultAllocation.consolidateRotatedStake(
-            clone, coldkey, netuid, sources, destinations, alphaPriceE18, true
+            clone, coldkey, netuid, sources, destinations, alphaPriceE18, leaveUnmovable
         );
         balance = IStaking(STAKING_PRECOMPILE).getStake(destination, coldkey, netuid);
     }
@@ -727,7 +727,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
                 _reanchor(tokenId, backing.keys, backing.balances);
                 return;
             }
-            keys = _collectionKeys(keys, backing.keys, coldkey, netuid);
+            keys = _collectionKeys(keys, backing.keys);
             uint256 initialExpected = _totalTracked(slots);
             uint256 secured = _secureBacking(clone, coldkey, netuid, keys);
             if (VaultReads.coversTracked(secured, initialExpected)) {
@@ -740,11 +740,12 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 before = IStaking(STAKING_PRECOMPILE).getStake(parkingHotkey, coldkey, netuid);
         uint256 parked = _secureBacking(clone, coldkey, netuid, keys);
         uint256 expected = _totalTracked(slots);
+        // forge-lint: disable-next-line(block-timestamp)
+        uint256 timestamp = block.timestamp;
         if (VaultReads.coversTracked(parked, expected)) {
             emit BackingShortfallCleared(tokenId);
             _finishRecovery(tokenId, parked);
-            // forge-lint: disable-next-line(block-timestamp)
-        } else if (block.timestamp >= state.shortSince + recoveryWindow) {
+        } else if (timestamp >= state.shortSince + recoveryWindow) {
             emit BackingWrittenOff(tokenId, expected, parked);
             _finishRecovery(tokenId, parked);
         } else {

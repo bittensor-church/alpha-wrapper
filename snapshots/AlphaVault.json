@@ -2,8 +2,6 @@
   "rebalance: after registry weight update": "248853",
   "rebalance: fully rotated (64 validators)": "10774683",
   "rebalance: release parked position (64 validators)": "10314094",
-  "recoverStray: park merged slots (64 validators)": "134708",
-  "recoverStray: park one lost slot (64 validators)": "129235",
   "syncBacking: loss on file (64 validators)": "3193594",
   "unwrap: full": "278497",
   "unwrap: full (64 validators)": "3560672",

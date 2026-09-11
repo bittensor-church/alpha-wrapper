@@ -222,7 +222,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         vault.syncBacking(TOKEN1);
 
         vault.recoverStray(TOKEN1, tip);
-        vm.snapshotGasLastCall("AlphaVault", "recoverStray: park one lost slot (64 validators)");
+        vm.snapshotGasLastCall("AlphaVault", "recoverStray: collect one source (64 validators)");
 
         vault.syncBacking(TOKEN1);
         assertEq(lens.totalStake(TOKEN1), 10 ether);
@@ -239,7 +239,7 @@ contract AlphaVaultGasTest is AlphaVaultTestBase {
         vault.syncBacking(TOKEN1);
 
         vault.recoverStray(TOKEN1, source);
-        vm.snapshotGasLastCall("AlphaVault", "recoverStray: park merged slots (64 validators)");
+        vm.snapshotGasLastCall("AlphaVault", "recoverStray: collect merged source (64 validators)");
 
         vault.syncBacking(TOKEN1);
         assertEq(lens.totalStake(TOKEN1), 10 ether);

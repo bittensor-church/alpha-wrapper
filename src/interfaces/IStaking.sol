@@ -34,7 +34,7 @@ interface IStaking {
     function getNominatorMinRequiredStake() external view returns (uint256);
 
     /// @notice Partial-unstake minimum in TAO RAO.
-    /// @dev Transfers/moves have a lower, unexposed minimum; the vault uses this conservative bound.
+    /// @dev Transfers/moves have a lower minimum, absent from this interface; this is a conservative bound.
     function getDefaultMinStake() external view returns (uint256);
 }
 

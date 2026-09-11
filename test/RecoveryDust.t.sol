@@ -48,6 +48,8 @@ contract RecoveryDustTest is AlphaVaultTestBase {
     function test_DustDuringEmptyRecovery_DoesNotBlockExpiryOrBurningWorthlessShares() public {
         (, uint256 deadline) = _emptyRecovery();
         _plant(hotkey1, DUST);
+        assertEq(lens.locatedStake(TOKEN1), DUST);
+        assertEq(lens.missingStake(TOKEN1), EXPECTED - DUST, "recorded dust is located backing");
         vm.warp(deadline - 1);
         vm.expectRevert(BackingUnchanged.selector);
         vault.syncBacking(TOKEN1);
@@ -132,6 +134,7 @@ contract RecoveryDustTest is AlphaVaultTestBase {
         _plant(hotkey1, DUST);
         _setAlphaPriceReadsZero(NETUID1);
         vm.warp(deadline);
+        // The mock supplies this reason; a native refusal consumes the forwarded gas.
         vm.expectRevert(bytes("MockStaking: AmountTooLow"));
         vault.syncBacking(TOKEN1);
         assertEq(lens.frozenUntil(TOKEN1), deadline);

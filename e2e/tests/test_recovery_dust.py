@@ -38,6 +38,8 @@ def _plant_dust(env, position):
 
 @pytest.mark.scenario
 def test_sub_floor_backing_cannot_block_the_fixed_recovery_window(env, recovery_window):
+    window = int(chain.cast_call(env.vault_address, "recoveryWindow()(uint256)"))
+    assert window == recovery_window, "env must use this scenario's recovery window"
     tolerance = config.CONSOLIDATION_ROUNDING_TOLERANCE_RAO
     parking = env.parking_hotkey()
     positions = []

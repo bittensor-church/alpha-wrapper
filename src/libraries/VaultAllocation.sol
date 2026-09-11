@@ -100,25 +100,23 @@ library VaultAllocation {
         }
     }
 
-    /// @dev Sources the record already lists, and repeats, leave an empty entry that holds nothing;
-    ///      `found` is what the rest hold under `coldkey`.
-    function novelSources(bytes32[] memory keys, bytes32[] memory sources, bytes32 coldkey, uint16 netuid)
+    /// @dev Unique nonzero sources absent from the record, without balance reads.
+    function novelSources(bytes32[] memory keys, bytes32[] memory sources)
         external
-        view
-        returns (bytes32[] memory strays, uint256 found)
+        pure
+        returns (bytes32[] memory strays)
     {
-        strays = new bytes32[](sources.length);
-        for (uint256 i; i < sources.length;) {
+        bytes32[] memory unique = new bytes32[](sources.length);
+        uint256 count;
+        for (uint256 i; i < sources.length; ++i) {
             bytes32 source = sources[i];
-            bool novel =
-                source != bytes32(0) && !VaultMath.contains(keys, source) && !VaultMath.contains(strays, source);
-            if (novel) {
-                strays[i] = source;
-                found += IStaking(STAKING_PRECOMPILE).getStake(source, coldkey, netuid);
+            if (source != bytes32(0) && !VaultMath.contains(keys, source) && !VaultMath.contains(unique, source)) {
+                unique[count++] = source;
             }
-            unchecked {
-                ++i;
-            }
+        }
+        strays = new bytes32[](count);
+        for (uint256 i; i < count; ++i) {
+            strays[i] = unique[i];
         }
     }
 
