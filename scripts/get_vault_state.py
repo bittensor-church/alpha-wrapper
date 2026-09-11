@@ -9,11 +9,13 @@ from web3.contract import Contract
 from web3.exceptions import ContractLogicError
 
 from common import (
+    add_block_argument,
     extract_error_name,
     get_web3_connection,
     load_abi,
     lookup_token_id,
     make_csv_writer,
+    resolve_block,
 )
 
 
@@ -37,7 +39,7 @@ def main() -> None:
                         help="AlphaVaultLens contract address, from the same trusted source as the vault")
     parser.add_argument("--registry-address", help="Optional ValidatorRegistry address (enables validator columns)")
     parser.add_argument("--rpc-url", required=True, help="HTTP RPC URL of the Subtensor EVM endpoint")
-    parser.add_argument("--block", type=int, help="Block to read at (default: the current head)")
+    add_block_argument(parser)
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--token-id", type=int, help="Packed tokenId")
     target.add_argument("--netuid", type=int, help="Subnet netuid")
@@ -45,7 +47,7 @@ def main() -> None:
 
     w3 = get_web3_connection(args.rpc_url)
     # Every read is pinned to one block, so the row is a single consistent snapshot.
-    block = args.block if args.block is not None else w3.eth.block_number
+    block = resolve_block(w3, args.block)
     vault = w3.eth.contract(
         address=w3.to_checksum_address(args.vault_address),
         abi=load_abi("AlphaVault"),

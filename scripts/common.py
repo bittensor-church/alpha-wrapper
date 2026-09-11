@@ -78,6 +78,29 @@ def lookup_token_id(vault: Contract, netuid: int, block: int | str = "latest") -
         sys.exit(f"netuid {netuid}: {extract_error_name(e, vault.abi)}")
 
 
+def block_number(text: str) -> int:
+    """argparse type for an absolute block number; a relative offset would be resolved
+    against a fresh head on every call and the report would span several blocks."""
+    value = int(text)
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"block must be an absolute, non-negative number, got {value}")
+    return value
+
+
+def add_block_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--block", type=block_number, help="Block to read at (default: the current head)")
+
+
+def resolve_block(w3: Web3, requested: Optional[int]) -> int:
+    """The one block every read of a report is pinned to: the requested one, or the
+    head read exactly once."""
+    if requested is None:
+        return w3.eth.block_number
+    if requested < 0:
+        raise ValueError(f"block must be an absolute, non-negative number, got {requested}")
+    return requested
+
+
 def add_block_range_arguments(parser: argparse.ArgumentParser) -> None:
     """The block window and per-request chunk size every event reader takes."""
     parser.add_argument("--block-start", required=True, type=int, help="Starting block (inclusive)")

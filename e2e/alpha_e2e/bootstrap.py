@@ -115,7 +115,9 @@ def _check_chain_reachable() -> None:
 def _ensure_alice_wallet() -> None:
     """Make sure the suite's alice wallet is the dev Alice (generating it from the
     dev seed when it is absent) and has a hotkey."""
+    wallet_dir = substrate.wallet_dir_path(config.ALICE_WALLET)
     coldkey_file = substrate.coldkeypub_file_path(config.ALICE_WALLET)
+    move_aside = "Move it aside, or point ALPHA_E2E_WALLET_PATH at another directory."
 
     if os.path.isfile(coldkey_file):
         with open(coldkey_file) as coldkey_pub_file:
@@ -123,16 +125,16 @@ def _ensure_alice_wallet() -> None:
         # Keys here may be an operator's own, and a regeneration would overwrite
         # them, so a foreign wallet stops the run instead.
         if config.ALICE_COLDKEY_SS58 not in content:
-            raise RuntimeError(
-                f"{substrate.wallet_dir_path(config.ALICE_WALLET)} holds a coldkey that is not "
-                "the dev Alice. Move it aside, or point ALPHA_E2E_WALLET_PATH at another directory."
-            )
+            raise RuntimeError(f"{wallet_dir} holds a coldkey that is not the dev Alice. {move_aside}")
         print("  Alice coldkey is the dev Alice")
+    elif os.path.isdir(wallet_dir) and os.listdir(wallet_dir):
+        # A private key with no public file is still a key; only an empty directory is safe to fill.
+        raise RuntimeError(f"{wallet_dir} exists without a readable coldkeypub. {move_aside}")
     else:
         print("  Setting up dev Alice wallet from seed...")
         chain.btcli_local(
             ["wallet", "regen-coldkey", "--wallet", config.ALICE_WALLET,
-             "--seed", config.ALICE_COLDKEY_SEED, "--no-password", "--overwrite"],
+             "--seed", config.ALICE_COLDKEY_SEED, "--no-password"],
         )
         if not os.path.isfile(coldkey_file):
             raise RuntimeError(f"Failed to regenerate the Alice coldkey at {coldkey_file}")

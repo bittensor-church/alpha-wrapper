@@ -13,6 +13,8 @@ from . import config
 _SS58_ALPHABET = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 _H160_HEX = re.compile(r"[0-9a-fA-F]{40}")
 _ACCOUNT_ID_BYTES = 32
+# Every chain the suite talks to uses the generic substrate prefix.
+_SS58_PREFIX = 42
 
 
 def h160_to_account_id(h160: str) -> bytes:
@@ -32,18 +34,13 @@ def h160_to_substrate_b32(h160: str) -> str:
     return "0x" + h160_to_account_id(h160).hex()
 
 
-def account_id_to_ss58(account_id: bytes, prefix: int = 42) -> str:
-    """Substrate account id -> SS58 (network prefix 42 by default)."""
+def account_id_to_ss58(account_id: bytes) -> str:
+    """Substrate account id -> SS58 with the generic network prefix."""
     if len(account_id) != _ACCOUNT_ID_BYTES:
         raise ValueError(
             f"a substrate account id is {_ACCOUNT_ID_BYTES} bytes, got {len(account_id)}"
         )
-    if prefix < 64:
-        prefix_bytes = bytes([prefix])
-    else:
-        prefix_bytes = bytes(
-            [((prefix & 0xFC) >> 2) | 0x40, (prefix >> 8) | ((prefix & 3) << 6)]
-        )
+    prefix_bytes = bytes([_SS58_PREFIX])
     checksum = hashlib.blake2b(
         b"SS58PRE" + prefix_bytes + account_id, digest_size=64
     ).digest()[:2]
@@ -61,9 +58,9 @@ def account_id_to_ss58(account_id: bytes, prefix: int = 42) -> str:
     return encoded.decode()
 
 
-def h160_to_ss58(h160: str, prefix: int = 42) -> str:
-    """H160 -> substrate account id -> SS58 (network prefix 42 by default)."""
-    return account_id_to_ss58(h160_to_account_id(h160), prefix)
+def h160_to_ss58(h160: str) -> str:
+    """H160 -> substrate account id -> SS58 with the generic network prefix."""
+    return account_id_to_ss58(h160_to_account_id(h160))
 
 
 def wallet_dir_path(wallet: str) -> str:

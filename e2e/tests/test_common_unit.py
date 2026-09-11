@@ -1,4 +1,5 @@
 """Chainless tests for the observability scripts' block-range handling."""
+import argparse
 import pathlib
 import sys
 
@@ -31,3 +32,43 @@ def test_block_chunks_rejects_a_chunk_size_that_makes_no_progress(size):
 def test_fetch_event_logs_rejects_an_impossible_range(block_start, block_end):
     with pytest.raises(ValueError, match="0 <= start <= end"):
         common.fetch_event_logs(None, "0x" + "11" * 20, "AlphaVault", "Deposited", block_start, block_end)
+
+
+class _MovingHead:
+    """A head that advances on every read, the way a live node's does."""
+
+    def __init__(self):
+        self.reads = 0
+
+    @property
+    def block_number(self):
+        self.reads += 1
+        return 1_000 + self.reads
+
+
+class _FakeWeb3:
+    def __init__(self):
+        self.eth = _MovingHead()
+
+
+def test_resolve_block_reads_the_head_exactly_once():
+    w3 = _FakeWeb3()
+    assert common.resolve_block(w3, None) == 1_001
+    assert w3.eth.reads == 1
+
+
+def test_resolve_block_keeps_an_explicit_block_without_touching_the_head():
+    w3 = _FakeWeb3()
+    assert common.resolve_block(w3, 42) == 42
+    assert w3.eth.reads == 0
+
+
+def test_resolve_block_rejects_a_relative_offset():
+    with pytest.raises(ValueError, match="non-negative"):
+        common.resolve_block(_FakeWeb3(), -1)
+
+
+def test_block_number_argument_rejects_a_relative_offset():
+    with pytest.raises(argparse.ArgumentTypeError, match="non-negative"):
+        common.block_number("-1")
+    assert common.block_number("7") == 7

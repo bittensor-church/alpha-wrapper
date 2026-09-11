@@ -16,7 +16,14 @@ from typing import Optional
 
 from web3.exceptions import ContractLogicError, Web3RPCError
 
-from common import extract_error_name, get_web3_connection, load_abi, lookup_token_id
+from common import (
+    add_block_argument,
+    extract_error_name,
+    get_web3_connection,
+    load_abi,
+    lookup_token_id,
+    resolve_block,
+)
 
 ALPHA_PRECOMPILE = "0x0000000000000000000000000000000000000808"
 # Frontier reports a call the EVM refused (as opposed to one that reverted) with this message.
@@ -110,12 +117,12 @@ def main() -> None:
     parser.add_argument("--holder", required=True, help="EVM address whose shares would be burned")
     parser.add_argument("--shares", required=True, type=int, help="Shares to burn, raw ERC-1155 units")
     parser.add_argument("--min-tao-out", type=int, default=0, help="Minimum TAO out in wei for the dry run")
-    parser.add_argument("--block", type=int, help="Block to plan against (default: the current head)")
+    add_block_argument(parser)
     args = parser.parse_args()
 
     w3 = get_web3_connection(args.rpc_url)
     # One block for the whole plan, so the mask matches the balances it was built from.
-    block = args.block if args.block is not None else w3.eth.block_number
+    block = resolve_block(w3, args.block)
     print(f"planning at block {block}", file=sys.stderr)
     vault = w3.eth.contract(address=w3.to_checksum_address(args.vault_address), abi=load_abi("AlphaVault"))
     lens = w3.eth.contract(address=w3.to_checksum_address(args.lens_address), abi=load_abi("AlphaVaultLens"))
