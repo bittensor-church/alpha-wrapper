@@ -15,22 +15,17 @@ error NothingToUnwrap();
 error NoSharesOutstanding();
 /// @dev Positive backing below share-price precision; use `previewUnwrap` for a larger burn.
 error SharePriceBelowPrecision();
-error DepositTooSmall();
 /// @dev The mailbox holds conviction-locked alpha; reclaim it to a coldkey that accepts locks.
 error LockedDeposit();
 error MailboxNotPrepared();
 error SubnetCloneNotPrepared();
 error LockedBacking();
-error CloneContaminated(address candidate);
-error CloneProtectionFailed(address clone);
 error WithdrawTooSmall();
 error ClaimBelowNativePrecision();
 error SupplyCapExceeded();
 error NetuidOutOfRange();
 error ChosenHotkeyNotInSet();
 error SlippageExceeded(uint256 amountOut);
-error ConsolidationBelowFloor();
-error GatherBelowFloor();
 /// @dev Located backing falls short of the recorded expectation, allowing for accounting dust.
 error BackingShortfall(uint16 netuid, bytes32 hotkey, uint256 tracked);
 /// @dev A declared shortfall holds priced operations shut until recovery completes or sync writes it off.
@@ -47,8 +42,6 @@ error BackingNotSecured();
 error Parked();
 /// @dev The parking hotkey already belongs to another coldkey; deploy with an unused one.
 error ParkingHotkeyUnavailable();
-/// @dev Two attested entries would share one backing key; attesters must resolve the collision.
-error SwappedHotkeyStillAttested();
 /// @dev No owned receiving key was resolved for this attested name.
 ///      Restore an owner record or replace the registry entry; the backing timer cannot fix ownership.
 error AttestedHotkeyRetired(bytes32 hotkey);

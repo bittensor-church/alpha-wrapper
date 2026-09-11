@@ -3,7 +3,8 @@ pragma solidity 0.8.36;
 
 import { VaultMath } from "src/libraries/VaultMath.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
-import { ConsolidationBelowFloor, DepositTooSmall, GatherBelowFloor, WithdrawTooSmall } from "src/VaultErrors.sol";
+import { WithdrawTooSmall } from "src/VaultErrors.sol";
+import { IAlphaVaultAbi } from "src/interfaces/IAlphaVaultAbi.sol";
 import { CHAIN_MIN_STAKE, CHAIN_MIN_TRANSFER, MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
@@ -20,7 +21,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
         _simulateAlphaDepositHotkey(alice, 99, 3e6, hotkey4);
         vm.prank(alice);
-        vm.expectRevert(DepositTooSmall.selector);
+        vm.expectRevert(IAlphaVaultAbi.DepositTooSmall.selector);
         vault.wrap(99, hotkey4, 0);
     }
 
@@ -89,7 +90,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         vm.prank(alice);
-        vm.expectRevert(GatherBelowFloor.selector);
+        vm.expectRevert(IAlphaVaultAbi.GatherBelowFloor.selector);
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
     }
 
@@ -122,7 +123,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
         _simulateAlphaDepositHotkey(alice, 99, 3e6, hotkey4);
         vm.prank(alice);
-        vm.expectRevert(DepositTooSmall.selector);
+        vm.expectRevert(IAlphaVaultAbi.DepositTooSmall.selector);
         vault.wrap(99, hotkey4, 0);
     }
 
@@ -143,7 +144,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, 99, deposit, hotkey4);
 
         vm.prank(alice);
-        vm.expectRevert(DepositTooSmall.selector);
+        vm.expectRevert(IAlphaVaultAbi.DepositTooSmall.selector);
         vault.wrap(99, hotkey4, 0);
 
         _setChainMinStake(CHAIN_MIN_TRANSFER);
@@ -199,7 +200,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         _simulateAlphaDepositHotkey(alice, 99, 1e6, hotkey4);
 
         vm.prank(alice);
-        vm.expectRevert(DepositTooSmall.selector);
+        vm.expectRevert(IAlphaVaultAbi.DepositTooSmall.selector);
         vault.wrap(99, hotkey4, 0);
 
         _setChainMinStake(5e5);
@@ -238,7 +239,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         if (!ok) {
             bytes memory expectedRefusal = clearsVaultGate
                 ? abi.encodeWithSignature("Error(string)", "MockStaking: AmountTooLow")
-                : abi.encodeWithSelector(DepositTooSmall.selector);
+                : abi.encodeWithSelector(IAlphaVaultAbi.DepositTooSmall.selector);
             assertEq(keccak256(ret), keccak256(expectedRefusal), "the refusal came from the bar that binds first");
             assertEq(_getVaultStake(hotkey4, 99), 0, "nothing staked behind the refusal");
             assertEq(vault.balanceOf(alice, vault.currentTokenId(99)), 0, "no shares minted behind the refusal");
@@ -252,7 +253,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
         uint256 shares = _sharesForExactAssets(TOKEN1, 25e6, 40e6);
         vm.prank(alice);
-        vm.expectRevert(GatherBelowFloor.selector);
+        vm.expectRevert(IAlphaVaultAbi.GatherBelowFloor.selector);
         vault.unwrap(TOKEN1, shares, _toSubstrate(alice), 0);
     }
 
@@ -303,7 +304,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
             assertEq(_getVaultStake(hotkey4, 99), 0, "rotated-out stake consolidated");
             assertEq(lens.totalStake(tokenId), dust, "pile conserved onto the current set");
             assertGe(trueValue, CHAIN_MIN_TRANSFER, "the roll landed, so it cleared the chain's move bar");
-        } else if (bytes4(ret) == ConsolidationBelowFloor.selector) {
+        } else if (bytes4(ret) == IAlphaVaultAbi.ConsolidationBelowFloor.selector) {
             assertLt(
                 (dust * (read + VaultMath.ALPHA_PRICE_QUANTUM_E18)) / VaultMath.ALPHA_PRICE_SCALE,
                 CHAIN_MIN_STAKE,
@@ -355,7 +356,8 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
             bool chainRefusedTheMove =
                 keccak256(ret) == keccak256(abi.encodeWithSignature("Error(string)", "MockStaking: AmountTooLow"));
             assertTrue(
-                selector == WithdrawTooSmall.selector || selector == GatherBelowFloor.selector || chainRefusedTheMove,
+                selector == WithdrawTooSmall.selector || selector == IAlphaVaultAbi.GatherBelowFloor.selector
+                    || chainRefusedTheMove,
                 "only floor-classed reverts are legitimate"
             );
             assertEq(vault.balanceOf(alice, TOKEN1), supply, "shares intact after rollback");

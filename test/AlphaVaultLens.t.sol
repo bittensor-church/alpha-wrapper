@@ -214,6 +214,60 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
         assertEq(lens.frozenUntil(TOKEN1), 0, "and nothing holding it shut");
     }
 
+    function test_ResolvedBacking_NamesEachRecordedKeyAndItsBalance() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+
+        VaultReads.Backing memory backing = lens.resolvedBacking(TOKEN1);
+
+        bytes32[] memory recorded = lens.lastSeenHotkeys(TOKEN1);
+        assertEq(backing.keys.length, recorded.length, "one entry per recorded slot");
+        for (uint256 i; i < recorded.length; ++i) {
+            assertEq(backing.keys[i], recorded[i], "an untouched slot sells from its recorded key");
+            assertEq(backing.balances[i], _getVaultStake(recorded[i], NETUID1), "balance");
+            assertFalse(backing.short[i], "nothing is short");
+        }
+        assertEq(backing.total, 30 ether, "the total covers the whole position");
+    }
+
+    function test_ResolvedBacking_FollowsASwappedSlotToItsSuccessor() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulatePerSubnetSwap(NETUID1, hotkey1, hotkey4);
+
+        VaultReads.Backing memory backing = lens.resolvedBacking(TOKEN1);
+
+        assertEq(backing.keys[0], hotkey4, "the exit sells the renamed slot from its successor");
+        assertEq(backing.balances[0], _getVaultStake(hotkey4, NETUID1), "the successor carries the slot");
+        assertFalse(backing.short[0], "a followed slot is not short");
+        assertEq(backing.total, 30 ether, "and the position is still whole");
+    }
+
+    /// @dev One balance must never answer for two slots, so only the first slot may claim the successor.
+    function test_ResolvedBacking_MarksTheFollowerOfASharedSuccessorShort() public {
+        _depositAndWrap(alice, NETUID1, 30 ether);
+        _simulatePerSubnetSwap(NETUID1, hotkey1, hotkey4);
+        _simulatePerSubnetSwap(NETUID1, hotkey2, hotkey4);
+
+        VaultReads.Backing memory backing = lens.resolvedBacking(TOKEN1);
+
+        assertEq(backing.keys[0], hotkey4, "the first slot takes the shared successor");
+        assertFalse(backing.short[0], "which leaves it covered");
+        assertEq(backing.keys[1], hotkey2, "the second slot stays on its emptied key");
+        assertEq(backing.balances[1], 0, "with nothing on it");
+        assertTrue(backing.short[1], "and is reported short");
+        assertEq(backing.total, _getVaultStake(hotkey4, NETUID1) + _getVaultStake(hotkey3, NETUID1), "located alpha");
+    }
+
+    function test_ResolvedBacking_AnswersEmptyWithoutAClone() public view {
+        assertEq(vault.subnetClone(TOKEN2), address(0), "the scenario needs a position with no clone");
+
+        VaultReads.Backing memory backing = lens.resolvedBacking(TOKEN2);
+
+        assertEq(backing.keys.length, 0, "keys");
+        assertEq(backing.balances.length, 0, "balances");
+        assertEq(backing.short.length, 0, "short flags");
+        assertEq(backing.total, 0, "total");
+    }
+
     function test_DissolvingSubnet_ReadsTheDrainAsNoLoss() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateDissolutionStarted(NETUID1);

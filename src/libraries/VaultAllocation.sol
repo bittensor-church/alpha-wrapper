@@ -8,15 +8,8 @@ import { IStaking, STAKING_PRECOMPILE } from "../interfaces/IStaking.sol";
 import { SubnetClone } from "../SubnetClone.sol";
 import { CloneBase } from "../CloneBase.sol";
 import { INeuron, NEURON_PRECOMPILE } from "../interfaces/INeuron.sol";
-import {
-    ConsolidationBelowFloor,
-    GatherBelowFloor,
-    SwappedHotkeyStillAttested,
-    LockedDeposit,
-    ZeroAmount,
-    DepositTooSmall,
-    CloneProtectionFailed
-} from "../VaultErrors.sol";
+import { LockedDeposit, ZeroAmount } from "../VaultErrors.sol";
+import { IAlphaVaultAbi } from "../interfaces/IAlphaVaultAbi.sol";
 import { CloneFactory } from "../CloneFactory.sol";
 
 /// @dev Deployed once and linked into the vault. Stake movement runs by delegatecall, so clones and
@@ -24,10 +17,6 @@ import { CloneFactory } from "../CloneFactory.sol";
 ///      Callers retain the backing gates, reentrancy guard and accounting; this library writes only the
 ///      clone records handed to it by storage reference.
 library VaultAllocation {
-    event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
-    event SubnetProxyCreated(uint256 indexed tokenId, address clone);
-    event MailboxCreated(address indexed user, uint256 indexed netuid, address mailbox);
-
     /// @dev Delegatecall keeps the vault as the initializer and the depositor as msg.sender.
     function prepareClones(
         CloneFactory factory,
@@ -45,14 +34,14 @@ library VaultAllocation {
             clone = factory.deploySubnetClone(tokenId, nid, uid);
             _initializeClone(clone);
             subnetClone[tokenId] = clone;
-            emit SubnetProxyCreated(tokenId, clone);
+            emit IAlphaVaultAbi.SubnetProxyCreated(tokenId, clone);
         }
         mailbox = mailboxes[msg.sender][netuid];
         if (mailbox == address(0)) {
             mailbox = factory.deployMailbox(msg.sender, nid, uid);
             _initializeClone(mailbox);
             mailboxes[msg.sender][netuid] = mailbox;
-            emit MailboxCreated(msg.sender, netuid, mailbox);
+            emit IAlphaVaultAbi.MailboxCreated(msg.sender, netuid, mailbox);
         }
     }
 
@@ -60,7 +49,7 @@ library VaultAllocation {
         CloneBase(payable(clone)).initialize(address(this));
         bytes32 coldkey = VaultReads.coldkeyOf(clone);
         if (!VaultReads.ownedBy(coldkey, coldkey) || !IStaking(STAKING_PRECOMPILE).getRejectLockedAlpha(coldkey)) {
-            revert CloneProtectionFailed(clone);
+            revert IAlphaVaultAbi.CloneProtectionFailed(clone);
         }
     }
 
@@ -74,7 +63,7 @@ library VaultAllocation {
         if (totalDeposit == 0) revert ZeroAmount();
         alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
         if (alphaPriceE18 != 0 && _taoValue(totalDeposit, alphaPriceE18) < _minStakeTao()) {
-            revert DepositTooSmall();
+            revert IAlphaVaultAbi.DepositTooSmall();
         }
         if (VaultReads.lockedAlphaOf(mailboxColdkey, nid) != 0) revert LockedDeposit();
     }
@@ -101,12 +90,14 @@ library VaultAllocation {
                 key = keys[at];
                 live = VaultReads.ownedBy(key, owner);
             } else if (_keyHeldElsewhere(keys, logicals, currentSet, name, at)) {
-                if (at == VaultMath.INDEX_NOT_FOUND) revert SwappedHotkeyStillAttested();
+                if (at == VaultMath.INDEX_NOT_FOUND) revert IAlphaVaultAbi.SwappedHotkeyStillAttested();
                 key = keys[at];
                 live = VaultReads.ownedBy(key, owner);
             } else {
                 (key, live) = _receivingKey(keys, logicals, currentSet, name, owner, at, netuid);
-                if (key != name && VaultMath.contains(actives, key)) revert SwappedHotkeyStillAttested();
+                if (key != name && VaultMath.contains(actives, key)) {
+                    revert IAlphaVaultAbi.SwappedHotkeyStillAttested();
+                }
             }
             actives[i] = key;
             if (!live && retired == bytes32(0)) retired = name;
@@ -224,7 +215,7 @@ library VaultAllocation {
             key != name
                 && (VaultMath.contains(currentSet, key) || _keyHeldElsewhere(keys, logicals, currentSet, key, ownSlot))
         ) {
-            revert SwappedHotkeyStillAttested();
+            revert IAlphaVaultAbi.SwappedHotkeyStillAttested();
         }
     }
 
@@ -303,7 +294,7 @@ library VaultAllocation {
         // A rejected precompile call consumes forwarded gas. Skip unproven moves and tolerate weight drift.
         if (alphaPriceE18 == 0 || _taoValue(moveAmount, alphaPriceE18) < minStakeTao) return false;
         _move(clone, hotkeys[overIndex], hotkeys[underIndex], VaultMath.netuidOf(tokenId), moveAmount);
-        emit Rebalanced(tokenId, hotkeys[overIndex], hotkeys[underIndex], moveAmount);
+        emit IAlphaVaultAbi.Rebalanced(tokenId, hotkeys[overIndex], hotkeys[underIndex], moveAmount);
         balances[overIndex] -= moveAmount;
         balances[underIndex] += moveAmount;
         return true;
@@ -329,7 +320,7 @@ library VaultAllocation {
         // so its starting size bounds every hop to within that rounding.
         if (_isBelowFloorAtAnyPrice(richestBalance, alphaPriceE18)) {
             if (leaveUnmovable) return true;
-            revert ConsolidationBelowFloor();
+            revert IAlphaVaultAbi.ConsolidationBelowFloor();
         }
         _rollRotatedStake(clone, coldkey, netuid, sourceKeys, currentSet, rollerHotkey, sourceBalances);
         return false;
@@ -413,7 +404,7 @@ library VaultAllocation {
         if (balances[deliveryIndex] < assets) {
             // Start with the largest slot; reject an unmovable pile before forwarding gas to the chain.
             if (_isBelowFloorAtAnyPrice(balances[deliveryIndex], alphaPriceE18)) {
-                revert GatherBelowFloor();
+                revert IAlphaVaultAbi.GatherBelowFloor();
             }
             // Re-read every hop: requesting a cached sum can exceed the balance after chain rounding.
             for (uint256 i; i < balances.length && balances[deliveryIndex] < assets;) {

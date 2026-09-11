@@ -5,7 +5,8 @@ import { VaultMath } from "src/libraries/VaultMath.sol";
 import { MAX_VALIDATORS } from "src/ValidatorRegistry.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { VaultReads } from "src/libraries/VaultReads.sol";
-import { AttestedHotkeyRetired, SwappedHotkeyStillAttested, ZeroAmount } from "src/VaultErrors.sol";
+import { AttestedHotkeyRetired, ZeroAmount } from "src/VaultErrors.sol";
+import { IAlphaVaultAbi } from "src/interfaces/IAlphaVaultAbi.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
@@ -146,9 +147,9 @@ contract BackingRecordTest is AlphaVaultTestBase {
         );
         MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
 
-        vm.expectRevert(SwappedHotkeyStillAttested.selector);
+        vm.expectRevert(IAlphaVaultAbi.SwappedHotkeyStillAttested.selector);
         vault.rebalance(NETUID1);
-        vm.expectRevert(SwappedHotkeyStillAttested.selector);
+        vm.expectRevert(IAlphaVaultAbi.SwappedHotkeyStillAttested.selector);
         vm.prank(alice);
         vault.unwrap(TOKEN1, shares / 4, _toSubstrate(alice), 0);
 
@@ -335,7 +336,7 @@ contract BackingRecordTest is AlphaVaultTestBase {
         MockStaking(STAKING_PRECOMPILE).setHotkeyDeleted(hotkey1, true);
         _drainTheFirstSlot(alice, NETUID1);
 
-        vm.expectRevert(SwappedHotkeyStillAttested.selector);
+        vm.expectRevert(IAlphaVaultAbi.SwappedHotkeyStillAttested.selector);
         vault.rebalance(NETUID1);
     }
 
@@ -346,7 +347,7 @@ contract BackingRecordTest is AlphaVaultTestBase {
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey4, hotkey2), _weights(3334, 3333, 3333));
         _drainTheFirstSlot(alice, NETUID1);
 
-        vm.expectRevert(SwappedHotkeyStillAttested.selector);
+        vm.expectRevert(IAlphaVaultAbi.SwappedHotkeyStillAttested.selector);
         vault.rebalance(NETUID1);
 
         _setValidators(NETUID1, _hotkeys(hotkey4, hotkey2), _weights(5000, 5000));

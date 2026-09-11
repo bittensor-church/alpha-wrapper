@@ -3,13 +3,11 @@ pragma solidity 0.8.36;
 
 import { VaultMath } from "src/libraries/VaultMath.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
-import { ConsolidationBelowFloor } from "src/VaultErrors.sol";
+import { IAlphaVaultAbi } from "src/interfaces/IAlphaVaultAbi.sol";
 import { CHAIN_MIN_STAKE, MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 contract RollerConsolidationTest is AlphaVaultTestBase {
-    event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaOut);
-
     function _seedDustOnlyVault() private returns (uint256 tokenId) {
         _registerSubnet(99, hotkey4);
         _simulateAlphaDepositHotkey(alice, 99, 10 ether, hotkey4);
@@ -122,7 +120,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
     function test_RevertWhen_ConsolidatingDustOnlyVault() public {
         _seedDustOnlyVault();
 
-        vm.expectRevert(ConsolidationBelowFloor.selector);
+        vm.expectRevert(IAlphaVaultAbi.ConsolidationBelowFloor.selector);
         vault.rebalance(99);
     }
 
@@ -131,7 +129,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
 
         uint256 shares = vault.balanceOf(alice, tokenId);
         vm.prank(alice);
-        vm.expectRevert(ConsolidationBelowFloor.selector);
+        vm.expectRevert(IAlphaVaultAbi.ConsolidationBelowFloor.selector);
         vault.unwrap(tokenId, shares, _toSubstrate(alice), 0);
     }
 

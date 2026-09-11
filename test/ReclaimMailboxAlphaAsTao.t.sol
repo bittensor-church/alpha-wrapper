@@ -9,10 +9,6 @@ import { RevertingReceiver, ReclaimMailboxReentrantReceiver } from "./helpers/Ta
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 contract ReclaimMailboxAlphaAsTaoTest is AlphaVaultTestBase {
-    event MailboxAlphaSoldForTao(
-        address indexed user, uint256 indexed netuid, bytes32 indexed hotkey, uint256 alpha, uint256 taoOut
-    );
-
     function _seedMailboxAlpha(address user, uint256 netuid, bytes32 hotkey, uint256 amount) internal {
         address predicted = _prepareMailbox(user, netuid);
         bytes32 ck = _toSubstrate(predicted);

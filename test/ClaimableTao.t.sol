@@ -8,9 +8,6 @@ import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.s
 import { Address } from "@openzeppelin/contracts/utils/Address.sol";
 
 contract ClaimableTaoTest is AlphaVaultTestBase {
-    event TaoClaimed(address indexed user, uint256 indexed tokenId, address recipient, uint256 amount);
-    event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaOut);
-
     uint256 internal constant DEPOSIT = 30 ether;
 
     uint256 internal constant NATIVE_TRANSFER_QUANTUM = 1e9;

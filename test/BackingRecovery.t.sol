@@ -10,7 +10,6 @@ import {
     AttestedHotkeyRetired,
     BackingShortfall,
     BackingUnchanged,
-    ConsolidationBelowFloor,
     NothingToRecover,
     NothingToUnwrap,
     Parked,
@@ -19,6 +18,7 @@ import {
     SubnetInDissolutionBlackoutPeriod,
     ZeroAmount
 } from "src/VaultErrors.sol";
+import { IAlphaVaultAbi } from "src/interfaces/IAlphaVaultAbi.sol";
 import { MockStaking, CHAIN_MIN_STAKE } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
@@ -403,7 +403,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, _subnetColdkey(NETUID1), NETUID1, 1);
         _simulateHotkeyOwnerPresent(hotkey4);
 
-        vm.expectRevert(ConsolidationBelowFloor.selector);
+        vm.expectRevert(IAlphaVaultAbi.ConsolidationBelowFloor.selector);
         vault.recoverStray(TOKEN1, hotkey4);
     }
 

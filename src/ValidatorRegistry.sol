@@ -71,10 +71,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
 
     /// @param signatures Sorted by recovered signer address, ascending.
     function updateValidators(WeightAttestation calldata attestation, bytes[] calldata signatures) external {
-        bytes32[] memory owners = _validatePayload(attestation);
-        _validateNonce(attestation);
-        _verifySignatures(attestation, signatures);
-        _commit(attestation, owners);
+        _update(attestation, signatures);
     }
 
     /// @param signatures Each attestation's signatures sorted by recovered signer address, ascending.
@@ -82,10 +79,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         uint256 attestationCount = attestations.length;
         if (attestationCount != signatures.length) revert LengthMismatch();
         for (uint256 i; i < attestationCount;) {
-            bytes32[] memory owners = _validatePayload(attestations[i]);
-            _validateNonce(attestations[i]);
-            _verifySignatures(attestations[i], signatures[i]);
-            _commit(attestations[i], owners);
+            _update(attestations[i], signatures[i]);
             unchecked {
                 ++i;
             }
@@ -140,15 +134,21 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
         emit SignersUpdated(newSigners, newThreshold);
     }
 
-    /// @dev Reject ownerless targets before installing a set; the owners are recorded so the vault can
-    ///      tell the attested validator from whoever claims a vacated name later.
-    function _validatePayload(WeightAttestation calldata attestation) private view returns (bytes32[] memory owners) {
+    /// @dev Cheapest first: an attestation that never lands pays for no chain read. Ownership is the
+    ///      only lookup, and it runs once the payload is well formed and carries a signer quorum.
+    function _update(WeightAttestation calldata attestation, bytes[] calldata signatures) private {
+        _validateNonce(attestation);
+        _validateShape(attestation);
+        _verifySignatures(attestation, signatures);
+        _commit(attestation, _resolveOwners(attestation.hotkeys));
+    }
+
+    function _validateShape(WeightAttestation calldata attestation) private pure {
         uint256 validatorCount = attestation.hotkeys.length;
         if (attestation.netuid > type(uint16).max) revert NetuidOutOfRange();
         if (validatorCount == 0 || validatorCount > MAX_VALIDATORS) revert InvalidValidatorCount();
         if (validatorCount != attestation.weights.length) revert LengthMismatch();
 
-        owners = new bytes32[](validatorCount);
         uint256 sum;
         for (uint256 i; i < validatorCount;) {
             bytes32 hotkey = attestation.hotkeys[i];
@@ -160,15 +160,27 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
                     ++j;
                 }
             }
-            (bool exists, bytes32 owner) = IStaking(STAKING_PRECOMPILE).getHotkeyOwner(hotkey);
-            if (!exists) revert OwnerlessHotkey(hotkey);
-            owners[i] = owner;
             sum += attestation.weights[i];
             unchecked {
                 ++i;
             }
         }
         if (sum != VaultMath.BPS_BASE) revert WeightsMustSum10000();
+    }
+
+    /// @dev Reject ownerless targets before installing a set; the owners are recorded so the vault can
+    ///      tell the attested validator from whoever claims a vacated name later.
+    function _resolveOwners(bytes32[] calldata hotkeys) private view returns (bytes32[] memory owners) {
+        uint256 validatorCount = hotkeys.length;
+        owners = new bytes32[](validatorCount);
+        for (uint256 i; i < validatorCount;) {
+            (bool exists, bytes32 owner) = IStaking(STAKING_PRECOMPILE).getHotkeyOwner(hotkeys[i]);
+            if (!exists) revert OwnerlessHotkey(hotkeys[i]);
+            owners[i] = owner;
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     /// @dev Signatures have no expiry; landing any update invalidates competing payloads at its nonce.
