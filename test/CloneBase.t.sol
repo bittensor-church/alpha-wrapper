@@ -32,6 +32,9 @@ contract CloneBaseSellAlphaTest is Test {
         clone.initialize(address(this));
 
         cloneColdkey = keccak256(abi.encodePacked("evm:", address(clone)));
+        // The chain sells stake only through a hotkey that has an owner record; the vault's own paths
+        // claim one before they call, and this test calls the clone directly.
+        MockStaking(STAKING_PRECOMPILE).setHotkeyOwned(HOTKEY, true);
         MockStaking(STAKING_PRECOMPILE).setStake(HOTKEY, cloneColdkey, NETUID, 50 ether);
     }
 

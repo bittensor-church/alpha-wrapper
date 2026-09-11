@@ -50,6 +50,9 @@ requires withdrawals to succeed and closes every holder's position.
 - The staking mock controls observable precompile responses: balances, ownership,
   successors, quotes, rounding, partial fills, and failures. It is not a second
   implementation of the chain. Live scenarios cover actual precompile behavior.
+  Its stake operations refuse every hotkey it reports as ownerless, so a fixture
+  that moves or sells stake without the vault's own claim must mark the hotkey
+  owned.
 - Deposit helpers explicitly create protected mailboxes before adding to existing balances. A failed wrap must not make a
   later simulated deposit erase the earlier one. Balance helpers whose names end
   in `AndWriteOffShortfalls` also synchronize and expire recovery; recovery tests

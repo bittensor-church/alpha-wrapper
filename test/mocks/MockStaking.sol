@@ -142,7 +142,7 @@ contract MockStaking {
         if (transferStakeReverts) {
             _fail("MockStaking: transferStake reverted");
         }
-        if (hotkeyDeleted[hotkey]) {
+        if (!_hasOwnerRecord(hotkey)) {
             _fail("MockStaking: hotkey has no owner");
         }
         if (_belowMinTransfer(amount, origin_netuid)) {
@@ -199,7 +199,7 @@ contract MockStaking {
         if (moveStakeReverts) {
             _fail("MockStaking: moveStake reverted");
         }
-        if (hotkeyDeleted[origin_hotkey] || hotkeyDeleted[destination_hotkey]) {
+        if (!_hasOwnerRecord(origin_hotkey) || !_hasOwnerRecord(destination_hotkey)) {
             _fail("MockStaking: hotkey has no owner");
         }
         if (_belowMinTransfer(amount, origin_netuid)) {
@@ -235,7 +235,12 @@ contract MockStaking {
     function setHotkeyOwner(bytes32 hotkey, bytes32 coldkey) external {
         _hotkeyOwned[hotkey] = true;
         _hotkeyOwner[hotkey] = coldkey;
-        _ownedHotkeys[coldkey].push(hotkey);
+        _recordOwnedHotkey(coldkey, hotkey);
+    }
+
+    /// @dev Every stake operation the chain accepts touches hotkeys that have an owner record.
+    function _hasOwnerRecord(bytes32 hotkey) private view returns (bool) {
+        return _hotkeyOwned[hotkey] && !hotkeyDeleted[hotkey];
     }
 
     /// @dev The owner a hotkey answers with while it has one, ignoring a deleted record.
@@ -246,16 +251,15 @@ contract MockStaking {
 
     /// @dev The neuron mock's association: an ownerless hotkey goes to `coldkey`; an owned one stays put.
     function associate(bytes32 hotkey, bytes32 coldkey) external {
-        (bool exists,) = this.getHotkeyOwner(hotkey);
-        if (exists) return;
+        if (_hasOwnerRecord(hotkey)) return;
         hotkeyDeleted[hotkey] = false;
         _hotkeyOwned[hotkey] = true;
         _hotkeyOwner[hotkey] = coldkey;
-        _ownedHotkeys[coldkey].push(hotkey);
+        _recordOwnedHotkey(coldkey, hotkey);
     }
 
     function getHotkeyOwner(bytes32 hotkey) external view returns (bool, bytes32) {
-        bool exists = _hotkeyOwned[hotkey] && !hotkeyDeleted[hotkey];
+        bool exists = _hasOwnerRecord(hotkey);
         return (exists, exists ? ownerOf(hotkey) : bytes32(0));
     }
 
@@ -266,6 +270,15 @@ contract MockStaking {
         return _ownedHotkeys[coldkey];
     }
 
+    /// @dev The chain holds the owned hotkeys as a set.
+    function _recordOwnedHotkey(bytes32 coldkey, bytes32 hotkey) private {
+        bytes32[] storage owned = _ownedHotkeys[coldkey];
+        for (uint256 i; i < owned.length; ++i) {
+            if (owned[i] == hotkey) return;
+        }
+        owned.push(hotkey);
+    }
+
     function getColdkeyRoot(bytes32 coldkey) external view returns (bool, bytes32) {
         return (_coldkeyRoot[coldkey] != bytes32(0), _coldkeyRoot[coldkey]);
     }
@@ -274,16 +287,15 @@ contract MockStaking {
         _coldkeyRoot[coldkey] = root;
     }
 
-    /// @dev Scoped fixture for an incoming coldkey swap, with the runtime's destination gates.
+    /// @dev An incoming coldkey swap narrowed to one subnet. It models the rules a swap runs against the
+    ///      destination: the destination is refused when it is itself a hotkey, and refused when it already
+    ///      holds stake, which the chain tests across all subnets and this fixture tests on `netuid`. On a
+    ///      swap the source's stake, owned hotkeys, locks and accept-locked flag all land on the destination.
     function simulateColdkeySwap(bytes32 source, bytes32 destination, uint256 netuid, bytes32[] calldata hotkeys)
         external
     {
-        (bool isHotkey,) = this.getHotkeyOwner(destination);
-        require(!isHotkey, "MockStaking: NewColdKeyIsHotkey");
-        require(
-            coldkeyAlpha[destination][netuid] == 0 && _ownedHotkeys[destination].length == 0,
-            "MockStaking: ColdKeyAlreadyAssociated"
-        );
+        require(!_hasOwnerRecord(destination), "MockStaking: NewColdKeyIsHotkey");
+        require(coldkeyAlpha[destination][netuid] == 0, "MockStaking: ColdKeyAlreadyAssociated");
         for (uint256 i; i < hotkeys.length; ++i) {
             uint256 amount = stakes[hotkeys[i]][source][netuid];
             stakes[hotkeys[i]][source][netuid] = 0;
@@ -297,6 +309,12 @@ contract MockStaking {
         delete lockHotkey[source][netuid];
         _acceptsLockedAlpha[destination] = _acceptsLockedAlpha[source];
         _coldkeyRoot[destination] = source;
+        bytes32[] storage sourceHotkeys = _ownedHotkeys[source];
+        for (uint256 i; i < sourceHotkeys.length; ++i) {
+            _hotkeyOwner[sourceHotkeys[i]] = destination;
+            _recordOwnedHotkey(destination, sourceHotkeys[i]);
+        }
+        delete _ownedHotkeys[source];
     }
 
     mapping(bytes32 => mapping(uint256 => bytes32)) private _successor;
@@ -357,7 +375,7 @@ contract MockStaking {
         if (removeStakeReverts || removeStakeRevertsFor[hotkey]) {
             _fail("MockStaking: removeStake reverted");
         }
-        if (hotkeyDeleted[hotkey]) {
+        if (!_hasOwnerRecord(hotkey)) {
             _fail("MockStaking: hotkey has no owner");
         }
         uint256 staked = stakes[hotkey][_senderColdkey()][netuid];
