@@ -73,7 +73,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @notice Hotkey owned by this contract's coldkey; recovered and written-down positions rest here.
     bytes32 public immutable parkingHotkey;
 
-    mapping(address => bool) public cloneDeployed;
     mapping(address => mapping(uint256 => address)) private _mailboxes;
     mapping(uint256 => address) public subnetClone;
 
@@ -163,7 +162,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         returns (address mailbox, address clone)
     {
         return VaultAllocation.prepareClones(
-            cloneFactory, subnetClone, _mailboxes, cloneDeployed, currentTokenId(netuid), netuid, deploymentUid
+            cloneFactory, subnetClone, _mailboxes, currentTokenId(netuid), netuid, deploymentUid
         );
     }
 
@@ -485,21 +484,36 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     function reclaimMailboxAlphaAsTao(uint256 netuid, bytes32 hotkey, uint256 minTaoOut) external nonReentrant {
         if (netuid > type(uint16).max) revert NetuidOutOfRange();
         if (hotkey == bytes32(0)) revert ZeroHotkey();
-        address predicted = _requireMailbox(msg.sender, netuid);
-        bytes32 mailboxColdkey = VaultReads.coldkeyOf(predicted);
+        _sellMailboxAlpha(_requireMailbox(msg.sender, netuid), netuid, hotkey, minTaoOut);
+    }
+
+    /// @notice Sell unlocked alpha held by a rejected candidate for native TAO; works while alpha
+    ///         transfers are disabled.
+    function reclaimUnpreparedMailboxAlphaAsTao(uint256 netuid, bytes32 uid, bytes32 hotkey, uint256 minTaoOut)
+        external
+        nonReentrant
+    {
+        if (netuid > type(uint16).max) revert NetuidOutOfRange();
+        if (hotkey == bytes32(0)) revert ZeroHotkey();
+        address mailbox = VaultAllocation.recoveryMailbox(cloneFactory, _mailboxes, netuid, uid);
+        _sellMailboxAlpha(mailbox, netuid, hotkey, minTaoOut);
+    }
+
+    function _sellMailboxAlpha(address mailbox, uint256 netuid, bytes32 hotkey, uint256 minTaoOut) private {
+        bytes32 mailboxColdkey = VaultReads.coldkeyOf(mailbox);
         uint256 amount = IStaking(STAKING_PRECOMPILE).getStake(hotkey, mailboxColdkey, netuid);
         if (amount == 0) revert ZeroAmount();
         // Locked alpha cannot be sold; the chain would refuse and burn the forwarded gas.
         // forge-lint: disable-next-line(unsafe-typecast)
         if (VaultReads.lockedAlphaOf(mailboxColdkey, uint16(netuid)) != 0) revert LockedDeposit();
 
-        uint256 balanceBefore = predicted.balance;
+        uint256 balanceBefore = mailbox.balance;
         // forge-lint: disable-next-line(unsafe-typecast)
-        _sell(predicted, hotkey, uint16(netuid), amount);
+        _sell(mailbox, hotkey, uint16(netuid), amount);
 
-        uint256 taoOut = predicted.balance - balanceBefore;
+        uint256 taoOut = mailbox.balance - balanceBefore;
         if (taoOut < minTaoOut) revert SlippageExceeded(taoOut);
-        DepositMailbox(payable(predicted)).unwrapTao(payable(msg.sender), taoOut);
+        DepositMailbox(payable(mailbox)).unwrapTao(payable(msg.sender), taoOut);
         emit MailboxAlphaSoldForTao(msg.sender, netuid, hotkey, amount, taoOut);
     }
 
@@ -918,9 +932,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         nonReentrant
     {
         if (netuid > type(uint16).max) revert NetuidOutOfRange();
-        VaultAllocation.reclaimCandidateFunds(
-            cloneFactory, _mailboxes, cloneDeployed, netuid, uid, hotkey, destinationColdkey
-        );
+        VaultAllocation.reclaimCandidateFunds(cloneFactory, _mailboxes, netuid, uid, hotkey, destinationColdkey);
     }
 
     function _syncTao(uint256 tokenId) private {

@@ -166,5 +166,7 @@ If you funded a candidate that was later rejected, call
 account. It moves the alpha at that hotkey to `destColdkey` and returns native
 TAO to you; a zero hotkey reclaims TAO only. A lock travels with the alpha, so
 the recipient must accept locks and, if it already holds a lock on the subnet,
-that lock must sit on the same hotkey. The candidate never becomes your mailbox;
+that lock must sit on the same hotkey. While alpha transfers are disabled,
+`reclaimUnpreparedMailboxAlphaAsTao(netuid, uid, hotkey, minTaoOut)` sells the
+unlocked alpha for native TAO instead. The candidate never becomes your mailbox;
 keep each UID you tried until its funds are recovered.

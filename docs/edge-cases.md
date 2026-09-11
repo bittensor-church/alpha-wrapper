@@ -30,9 +30,9 @@ A refund on an unwrapped deposit's mailbox is collected with
 Disabling alpha transfers blocks wrapping, live alpha exits and alpha mailbox
 reclaims. The vault reads the switch first and reverts `AlphaTransfersDisabled`,
 so shares and stake are preserved and the caller keeps the gas the chain would
-have taken. `unwrapForTao` and `reclaimMailboxAlphaAsTao` unstake instead, so
-this setting does not block them; ownership, backing, minimums and pool
-execution still can.
+have taken. `unwrapForTao`, `reclaimMailboxAlphaAsTao` and
+`reclaimUnpreparedMailboxAlphaAsTao` unstake instead, so this setting does not
+block them; ownership, backing, minimums and pool execution still can.
 
 ## Locked alpha
 
@@ -57,7 +57,8 @@ Locked alpha never backs a share:
   rejects locks; `reclaimMailboxAlphaAsTao` refuses any locked mailbox. Both fail
   before the chain can refuse and burn the forwarded gas.
 - Funds sent to a rejected candidate return through `reclaimUnpreparedMailbox`,
-  which never activates it; transferred alpha keeps its lock.
+  which never activates it; transferred alpha keeps its lock. Unlocked alpha can
+  instead be sold through `reclaimUnpreparedMailboxAlphaAsTao`.
 
 ## Minimum stake size and rounding
 

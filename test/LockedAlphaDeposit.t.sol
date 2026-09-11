@@ -7,6 +7,7 @@ import { CloneFactory } from "src/CloneFactory.sol";
 import { IAlpha, ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 import { IStaking, STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 import {
+    AlphaTransfersDisabled,
     CloneContaminated,
     CloneProtectionFailed,
     LockedDeposit,
@@ -14,6 +15,7 @@ import {
     MailboxNotPrepared,
     SubnetCloneNotPrepared,
     MailboxAlreadyPrepared,
+    SlippageExceeded,
     ZeroAmount
 } from "src/VaultErrors.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
@@ -279,6 +281,88 @@ contract LockedAlphaDepositTest is AlphaVaultTestBase {
         vm.prank(alice);
         vault.reclaimUnpreparedMailbox(NETUID1, UID, bytes32(0), bytes32(0));
         assertEq(alice.balance - before, 2 ether);
+    }
+
+    function _fundCandidate(uint256 alpha, uint256 tao) private returns (address candidate, bytes32 coldkey) {
+        candidate = vault.cloneFactory().predictMailbox(alice, NETUID1, UID);
+        coldkey = _toSubstrate(candidate);
+        mock.setStake(hotkey1, coldkey, NETUID1, alpha);
+        vm.deal(candidate, tao);
+    }
+
+    function test_RecoverUnpreparedMailbox_CarriesTheLockOntoAMatchingDestinationLock() public {
+        (, bytes32 coldkey) = _fundCandidate(10 ether, 0);
+        mock.setLockedAlpha(coldkey, NETUID1, hotkey1, 10 ether);
+        bytes32 aliceColdkey = _toSubstrate(alice);
+        mock.setAcceptsLockedAlpha(aliceColdkey, true);
+        mock.setStake(hotkey1, aliceColdkey, NETUID1, 5 ether);
+        mock.setLockedAlpha(aliceColdkey, NETUID1, hotkey1, 5 ether);
+        vm.prank(alice);
+        vault.reclaimUnpreparedMailbox(NETUID1, UID, hotkey1, aliceColdkey);
+        assertEq(mock.getStake(hotkey1, aliceColdkey, NETUID1), 15 ether);
+        assertEq(mock.lockedAlpha(aliceColdkey, NETUID1), 15 ether);
+    }
+
+    function test_RecoverUnpreparedMailbox_RevertsWhenTheDestinationLockNamesAnotherHotkey() public {
+        (address candidate, bytes32 coldkey) = _fundCandidate(10 ether, 2 ether);
+        mock.setLockedAlpha(coldkey, NETUID1, hotkey1, 10 ether);
+        bytes32 aliceColdkey = _toSubstrate(alice);
+        mock.setAcceptsLockedAlpha(aliceColdkey, true);
+        mock.setStake(hotkey5, aliceColdkey, NETUID1, 5 ether);
+        mock.setLockedAlpha(aliceColdkey, NETUID1, hotkey5, 5 ether);
+        vm.prank(alice);
+        vm.expectRevert(bytes("MockStaking: LockHotkeyMismatch"));
+        vault.reclaimUnpreparedMailbox(NETUID1, UID, hotkey1, aliceColdkey);
+        assertEq(mock.getStake(hotkey1, coldkey, NETUID1), 10 ether);
+        assertEq(candidate.balance, 2 ether);
+        assertEq(candidate.code.length, 0, "a failed recovery rolls back the deployment");
+        assertEq(mock.lockedAlpha(aliceColdkey, NETUID1), 5 ether);
+    }
+
+    function test_RecoverUnpreparedMailboxAsTao_SellsUnlockedAlphaWhileTransfersAreDisabled() public {
+        (address candidate, bytes32 coldkey) = _fundCandidate(50 ether, 2 ether);
+        mock.setHotkeyOwner(coldkey, _toSubstrate(bob));
+        _setTransfersEnabled(NETUID1, false);
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(AlphaTransfersDisabled.selector, uint16(NETUID1)));
+        vault.reclaimUnpreparedMailbox(NETUID1, UID, hotkey1, _toSubstrate(alice));
+        vm.prank(bob);
+        vm.expectRevert(ZeroAmount.selector);
+        vault.reclaimUnpreparedMailboxAlphaAsTao(NETUID1, UID, hotkey1, 0);
+
+        uint256 before = alice.balance;
+        vm.prank(alice);
+        vault.reclaimUnpreparedMailboxAlphaAsTao(NETUID1, UID, hotkey1, 50 ether);
+        assertEq(alice.balance - before, 50 ether, "pays the sale proceeds only");
+        assertEq(candidate.balance, 2 ether, "held TAO waits for a TAO-only reclaim");
+        assertEq(mock.getStake(hotkey1, coldkey, NETUID1), 0);
+        assertEq(vault.getDepositAddress(alice, NETUID1), address(0));
+
+        vm.prank(alice);
+        vm.expectRevert(ZeroAmount.selector);
+        vault.reclaimUnpreparedMailboxAlphaAsTao(NETUID1, UID, hotkey1, 0);
+        vm.prank(alice);
+        vault.reclaimUnpreparedMailbox(NETUID1, UID, bytes32(0), bytes32(0));
+        assertEq(alice.balance - before, 52 ether, "the deployed recovery mailbox serves repeated calls");
+    }
+
+    function testFuzz_RecoverUnpreparedMailboxAsTao_RevertsBelowMinimumDespiteHeldTao(uint256 minTaoOut) public {
+        (address candidate, bytes32 coldkey) = _fundCandidate(50 ether, 2 ether);
+        minTaoOut = bound(minTaoOut, 50 ether + 1, 52 ether);
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(SlippageExceeded.selector, 50 ether));
+        vault.reclaimUnpreparedMailboxAlphaAsTao(NETUID1, UID, hotkey1, minTaoOut);
+        assertEq(candidate.code.length, 0, "a failed sale rolls back the deployment");
+        assertEq(mock.getStake(hotkey1, coldkey, NETUID1), 50 ether);
+        assertEq(candidate.balance, 2 ether);
+    }
+
+    function test_RecoverUnpreparedMailboxAsTao_RefusesLockedAlpha() public {
+        (, bytes32 coldkey) = _fundCandidate(10 ether, 0);
+        mock.setLockedAlpha(coldkey, NETUID1, hotkey1, 10 ether);
+        vm.prank(alice);
+        vm.expectRevert(LockedDeposit.selector);
+        vault.reclaimUnpreparedMailboxAlphaAsTao(NETUID1, UID, hotkey1, 0);
     }
 
     function test_FactoryCannotBeUsedToDeployAnotherUsersMailbox() public {

@@ -154,11 +154,13 @@ contract MockStaking {
             if (!_acceptsLockedAlpha[destination_coldkey]) {
                 _fail("MockStaking: AccountRejectsLockedAlpha");
             }
+            bytes32 destinationLockHotkey = lockHotkey[destination_coldkey][destination_netuid];
+            if (destinationLockHotkey != bytes32(0) && destinationLockHotkey != hotkey) {
+                _fail("MockStaking: LockHotkeyMismatch");
+            }
             lockedAlpha[origin][origin_netuid] -= carriedLock;
             if (lockedAlpha[origin][origin_netuid] == 0) lockHotkey[origin][origin_netuid] = bytes32(0);
-            if (lockedAlpha[destination_coldkey][destination_netuid] == 0) {
-                lockHotkey[destination_coldkey][destination_netuid] = hotkey;
-            }
+            lockHotkey[destination_coldkey][destination_netuid] = hotkey;
             lockedAlpha[destination_coldkey][destination_netuid] += carriedLock;
         }
         stakes[hotkey][origin][origin_netuid] -= amount;

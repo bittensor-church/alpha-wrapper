@@ -35,7 +35,6 @@ library VaultAllocation {
         CloneFactory factory,
         mapping(uint256 => address) storage subnetClone,
         mapping(address => mapping(uint256 => address)) storage mailboxes,
-        mapping(address => bool) storage cloneDeployed,
         uint256 tokenId,
         uint256 netuid,
         bytes32 uid
@@ -46,26 +45,50 @@ library VaultAllocation {
         clone = subnetClone[tokenId];
         if (clone == address(0)) {
             clone = factory.deploySubnetClone(tokenId, nid, uid);
-            _initializeClone(cloneDeployed, clone, true);
+            _initializeClone(clone, true);
             subnetClone[tokenId] = clone;
             emit SubnetProxyCreated(tokenId, clone);
         }
         mailbox = mailboxes[msg.sender][netuid];
         if (mailbox == address(0)) {
             mailbox = factory.deployMailbox(msg.sender, nid, uid);
-            _initializeClone(cloneDeployed, mailbox, true);
+            _initializeClone(mailbox, true);
             mailboxes[msg.sender][netuid] = mailbox;
             emit MailboxCreated(msg.sender, netuid, uid, mailbox);
         }
     }
 
-    function _initializeClone(mapping(address => bool) storage cloneDeployed, address clone, bool accepted) private {
+    function _initializeClone(address clone, bool accepted) private {
         CloneBase(payable(clone)).initialize(address(this));
         // Accepted clones must already reject locks; recovery must tolerate inherited flags.
         if (accepted && !IStaking(STAKING_PRECOMPILE).getRejectLockedAlpha(VaultReads.coldkeyOf(clone))) {
             revert CloneProtectionFailed(clone);
         }
-        cloneDeployed[clone] = true;
+    }
+
+    /// @dev The caller's UID-bound candidate, deployed for recovery only. Only the factory can put
+    ///      code at a candidate address, so existing code means an earlier recovery deployment.
+    function recoveryMailbox(
+        CloneFactory factory,
+        mapping(address => mapping(uint256 => address)) storage mailboxes,
+        uint256 netuid,
+        bytes32 uid
+    ) external returns (address) {
+        return _recoveryMailbox(factory, mailboxes, netuid, uid);
+    }
+
+    function _recoveryMailbox(
+        CloneFactory factory,
+        mapping(address => mapping(uint256 => address)) storage mailboxes,
+        uint256 netuid,
+        bytes32 uid
+    ) private returns (address mailbox) {
+        mailbox = factory.predictMailbox(msg.sender, netuid, uid);
+        if (mailbox == mailboxes[msg.sender][netuid]) revert MailboxAlreadyPrepared();
+        if (mailbox.code.length == 0) {
+            factory.deployRecoveryMailbox(msg.sender, netuid, uid);
+            _initializeClone(mailbox, false);
+        }
     }
 
     function admitDeposit(address userClone, bytes32 chosenHotkey, uint16 nid)
@@ -87,18 +110,12 @@ library VaultAllocation {
     function reclaimCandidateFunds(
         CloneFactory factory,
         mapping(address => mapping(uint256 => address)) storage mailboxes,
-        mapping(address => bool) storage cloneDeployed,
         uint256 netuid,
         bytes32 uid,
         bytes32 hotkey,
         bytes32 destinationColdkey
     ) external {
-        address mailbox = factory.predictMailbox(msg.sender, netuid, uid);
-        if (mailbox == mailboxes[msg.sender][netuid]) revert MailboxAlreadyPrepared();
-        if (!cloneDeployed[mailbox]) {
-            factory.deployRecoveryMailbox(msg.sender, netuid, uid);
-            _initializeClone(cloneDeployed, mailbox, false);
-        }
+        address mailbox = _recoveryMailbox(factory, mailboxes, netuid, uid);
         uint256 tao = mailbox.balance;
         uint256 alpha;
         if (hotkey != bytes32(0)) {
