@@ -10,7 +10,6 @@ import {
     AlphaTransfersDisabled,
     ChosenHotkeyNotInSet,
     ClaimBelowNativePrecision,
-    DepositTooSmall,
     InsufficientShares,
     NetuidOutOfRange,
     NoSharesOutstanding,
@@ -29,6 +28,7 @@ import {
     ZeroColdkey,
     ZeroHotkey
 } from "src/VaultErrors.sol";
+import { IAlphaVaultAbi } from "src/interfaces/IAlphaVaultAbi.sol";
 import { CloneBase } from "src/CloneBase.sol";
 import { DepositMailbox } from "src/DepositMailbox.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
@@ -39,9 +39,6 @@ import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
 contract AlphaVaultTest is AlphaVaultTestBase {
-    event DissolvedSubnetUnwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 taoOut);
-    event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaOut);
-
     function test_RevertWhen_ConstructorZeroMailboxLogic() public {
         vm.expectRevert(ZeroAddress.selector);
         new AlphaVault(VAULT_URI, address(0), address(subnetLogic), address(registry), RECOVERY_WINDOW, PARKING_HOTKEY);
@@ -1811,7 +1808,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     function test_RevertWhen_WrapWhenDepositBelowMinStake() public {
         _simulateAlphaDepositHotkey(alice, NETUID1, 1_999_999, hotkey1);
         vm.prank(alice);
-        vm.expectRevert(DepositTooSmall.selector);
+        vm.expectRevert(IAlphaVaultAbi.DepositTooSmall.selector);
         vault.wrap(NETUID1, hotkey1, 0);
     }
 

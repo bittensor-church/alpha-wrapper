@@ -23,10 +23,6 @@ import {
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 contract UnwrapForTaoTest is AlphaVaultTestBase {
-    event UnwrappedForTao(
-        address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaSold, uint256 taoOut
-    );
-
     function _depositForAlice(uint256 amount) internal returns (uint256 shares) {
         shares = _depositAndWrap(alice, NETUID1, amount);
     }

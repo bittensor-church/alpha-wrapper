@@ -15,22 +15,14 @@ import { MockSubnetPrecompile } from "./mocks/MockSubnetPrecompile.sol";
 import { MockAlpha } from "./mocks/MockAlpha.sol";
 import { MockNeuron } from "./mocks/MockNeuron.sol";
 import { AttestationHelper } from "./helpers/AttestationHelper.sol";
+import { IAlphaVaultAbi } from "src/interfaces/IAlphaVaultAbi.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 import { ADDRESS_MAPPING_PRECOMPILE } from "src/interfaces/IAddressMapping.sol";
 import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 import { NEURON_PRECOMPILE } from "src/interfaces/INeuron.sol";
 import { SUBNET_PRECOMPILE } from "src/interfaces/ISubnet.sol";
 
-abstract contract AlphaVaultTestBase is AttestationHelper {
-    event SubnetProxyCreated(uint256 indexed tokenId, address clone);
-    event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
-    event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
-    event BackingShortfallDeclared(uint256 indexed tokenId, uint256 expected, uint256 located);
-    event BackingShortfallCleared(uint256 indexed tokenId);
-    event BackingWrittenOff(uint256 indexed tokenId, uint256 expected, uint256 located);
-    event BackingParked(uint256 indexed tokenId, uint256 backing, uint256 registryNonce);
-    event BackingRecovered(uint256 indexed tokenId, bytes32 indexed hotkey, uint256 amount);
-
+abstract contract AlphaVaultTestBase is AttestationHelper, IAlphaVaultAbi {
     AlphaVault public vault;
     AlphaVaultLens public lens;
     DepositMailbox public mailboxLogic;

@@ -4,7 +4,7 @@ pragma solidity 0.8.36;
 import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
 import { IStaking, STAKING_PRECOMPILE } from "./interfaces/IStaking.sol";
 import { VaultReads } from "./libraries/VaultReads.sol";
-import { CloneContaminated } from "./VaultErrors.sol";
+import { IAlphaVaultAbi } from "./interfaces/IAlphaVaultAbi.sol";
 
 /// @dev Deployed and owned by the vault, which initializes each clone as its own hotkey owner and
 ///      verifies that protection before publishing its address.
@@ -46,7 +46,7 @@ contract CloneFactory {
         if (
             candidate.code.length != 0 || owned || swapped || staking.getOwnedHotkeys(coldkey).length != 0
                 || VaultReads.lockedAlphaOf(coldkey, netuid) != 0
-        ) revert CloneContaminated(candidate);
+        ) revert IAlphaVaultAbi.CloneContaminated(candidate);
         Clones.cloneDeterministic(implementation, salt);
     }
 }

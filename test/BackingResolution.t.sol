@@ -3,12 +3,8 @@ pragma solidity 0.8.36;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { VaultReads } from "src/libraries/VaultReads.sol";
-import {
-    AttestedHotkeyRetired,
-    BackingShortfall,
-    ShortfallOnFile,
-    SwappedHotkeyStillAttested
-} from "src/VaultErrors.sol";
+import { AttestedHotkeyRetired, BackingShortfall, ShortfallOnFile } from "src/VaultErrors.sol";
+import { IAlphaVaultAbi } from "src/interfaces/IAlphaVaultAbi.sol";
 import { CHAIN_MIN_TRANSFER, MockStaking } from "./mocks/MockStaking.sol";
 import { IStaking, STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 
@@ -234,7 +230,7 @@ contract BackingResolutionTest is AlphaVaultTestBase {
 
         _setValidators(NETUID1, _hotkeys(hotkey1, hotkey4, hotkey2), _weights(3334, 3333, 3333));
 
-        vm.expectRevert(SwappedHotkeyStillAttested.selector);
+        vm.expectRevert(IAlphaVaultAbi.SwappedHotkeyStillAttested.selector);
         vault.rebalance(NETUID1);
     }
 

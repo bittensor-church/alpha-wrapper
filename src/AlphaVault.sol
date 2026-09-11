@@ -14,6 +14,7 @@ import { IAlpha, ALPHA_PRECOMPILE } from "./interfaces/IAlpha.sol";
 import { INeuron, NEURON_PRECOMPILE } from "./interfaces/INeuron.sol";
 import { IValidatorRegistry } from "./interfaces/IValidatorRegistry.sol";
 import { ISubnet, SUBNET_PRECOMPILE } from "./interfaces/ISubnet.sol";
+import { IAlphaVaultAbi } from "./interfaces/IAlphaVaultAbi.sol";
 import { VaultAllocation } from "./libraries/VaultAllocation.sol";
 import { VaultMath } from "./libraries/VaultMath.sol";
 import { VaultReads } from "./libraries/VaultReads.sol";
@@ -38,7 +39,6 @@ import {
     SlotMaskOutOfRange,
     SubnetNotRegistered,
     SupplyCapExceeded,
-    SwappedHotkeyStillAttested,
     WithdrawTooSmall,
     ZeroAddress,
     ZeroAmount,
@@ -50,14 +50,7 @@ import {
 /// @dev No vault admin. Registry signers choose weights; watchers handle unresolved swaps.
 ///      Missing backing parks the position on the vault's own hotkey until the registry publishes a
 ///      newer set. See docs/hotkey-swaps.md for the exit restrictions and recovery policy.
-contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
-    // Keep errors bubbled by VaultAllocation in the vault ABI for callers and decoders.
-    error ConsolidationBelowFloor();
-    error GatherBelowFloor();
-    error DepositTooSmall();
-    error CloneProtectionFailed(address clone);
-    error CloneContaminated(address candidate);
-
+contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard, IAlphaVaultAbi {
     /// @dev One shortfall clock per token. A parked position rests on `parkingHotkey` until the
     ///      registry nonce moves past `parkedAtNonce`; zero means the position is not parked.
     struct Recovery {
@@ -91,34 +84,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
 
     /// @dev Keeps index-flooring loss below one native quantum and every whole-RAO arrival indexable.
     uint256 private constant SUPPLY_CAP = VaultMath.TAO_NATIVE_QUANTUM * VaultMath.TAO_INDEX_PRECISION;
-
-    event Deposited(address indexed user, uint256 indexed tokenId, uint256 assets, uint256 shares);
-    /// @dev `alphaOut` is observed recipient credit in alpha RAO, not the requested transfer.
-    event Unwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaOut);
-    /// @dev `taoOut` is native TAO in EVM wei.
-    event DissolvedSubnetUnwrapped(address indexed user, uint256 indexed tokenId, uint256 shares, uint256 taoOut);
-    /// @dev Weight-alignment moves only; excludes consolidation and payout-gather hops.
-    event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
-    event SubnetProxyCreated(uint256 indexed tokenId, address clone);
-    event MailboxCreated(address indexed user, uint256 indexed netuid, address mailbox);
-    /// @dev Net of refunds; `taoOut` is EVM wei. A full burn's empty-vault refund rate can mint
-    ///      more shares than were burned, in which case the event's `shares` is zero.
-    event UnwrappedForTao(
-        address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaSold, uint256 taoOut
-    );
-    event MailboxAlphaSoldForTao(
-        address indexed user, uint256 indexed netuid, bytes32 indexed hotkey, uint256 alpha, uint256 taoOut
-    );
-    /// @dev `amount` is native TAO in EVM wei.
-    event TaoClaimed(address indexed user, uint256 indexed tokenId, address recipient, uint256 amount);
-    /// @dev The window starts once located backing above the floor sits on parking; smaller piles can stay behind.
-    event BackingShortfallDeclared(uint256 indexed tokenId, uint256 expected, uint256 located);
-    event BackingShortfallCleared(uint256 indexed tokenId);
-    /// @dev Loss falls on holders at write-off; later recovery belongs to holders at recovery time.
-    event BackingWrittenOff(uint256 indexed tokenId, uint256 expected, uint256 located);
-    /// @dev The position rests on the parking hotkey until an attestation newer than `registryNonce` lands.
-    event BackingParked(uint256 indexed tokenId, uint256 backing, uint256 registryNonce);
-    event BackingRecovered(uint256 indexed tokenId, bytes32 indexed hotkey, uint256 amount);
 
     constructor(
         string memory _uri,
