@@ -24,7 +24,7 @@ def test_token_follows_the_registration_counter_not_the_block(env):
     shares = env.vault_shares(token_id)
     assert shares != 0, "no shares minted by the setup wrap"
     registrations = env.registration_counter(netuid)
-    assert token_id == netuid | (registrations << 16), "the token id carries the registration counter"
+    assert token_id == netuid | (registrations << config.NETUID_BITS), "the token id carries the registration counter"
 
     block_before = extrinsics.network_registration_block(netuid)
     extrinsics.set_network_registration_block(netuid, block_before + IMMUNITY_EXTENSION_BLOCKS)
@@ -54,6 +54,6 @@ def test_token_follows_the_registration_counter_not_the_block(env):
     assert bootstrap.create_subnet() == netuid, "the chain hands the freed netuid back"
 
     assert env.registration_counter(netuid) == registrations + 1, "the counter stepped with the registration"
-    assert env.current_token_id(netuid) == netuid | ((registrations + 1) << 16), "so the new subnet has a new token"
+    assert env.current_token_id(netuid) == netuid | ((registrations + 1) << config.NETUID_BITS), "so the new subnet has a new token"
     alpha_quote, tao_quote = env.preview_unwrap(token_id, env.vault_shares(token_id))
     assert alpha_quote == 0 and tao_quote > 0, "while the old token redeems its dissolution refund"

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import { MAX_VALIDATORS } from "src/ValidatorRegistry.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { BackingUnchanged, NothingToRecover, ShortfallOnFile } from "src/VaultErrors.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
@@ -170,16 +171,17 @@ contract RecoveryDeadlineTest is AlphaVaultTestBase {
         assertEq(lens.frozenUntil(TOKEN1), deadline);
     }
 
-    function testFuzz_PartialRecovery_IsIndependentOfSourceOrder(uint256 rawSplit, bool largerFirst) public {
+    function testFuzz_PartialRecovery_IsIndependentOfSourceOrder(uint256 rawSplit, bool secondSourceFirst) public {
         (bytes32 firstTip, bytes32 secondTip, uint256 deadline) = _twoLosses();
-        uint256 split = bound(rawSplit, 1001, 32 ether - 1001);
+        uint256 minShortfall = BACKING_SLACK_RAO + 1;
+        uint256 split = bound(rawSplit, minShortfall, 32 ether - minShortfall);
         MockStaking staking = MockStaking(STAKING_PRECOMPILE);
         staking.setStake(firstTip, _subnetColdkey(NETUID1), NETUID1, split);
         staking.setStake(secondTip, _subnetColdkey(NETUID1), NETUID1, 32 ether - split);
-        bytes32 first = largerFirst ? secondTip : firstTip;
-        bytes32 second = largerFirst ? firstTip : secondTip;
+        bytes32 first = secondSourceFirst ? secondTip : firstTip;
+        bytes32 second = secondSourceFirst ? firstTip : secondTip;
         vault.recoverStray(TOKEN1, _hotkeys(first));
-        assertEq(lens.missingStake(TOKEN1), largerFirst ? split : 32 ether - split);
+        assertEq(lens.missingStake(TOKEN1), secondSourceFirst ? split : 32 ether - split);
         assertEq(lens.frozenUntil(TOKEN1), deadline);
         vault.recoverStray(TOKEN1, _hotkeys(second));
         assertEq(lens.totalStake(TOKEN1), 40 ether);
@@ -188,15 +190,15 @@ contract RecoveryDeadlineTest is AlphaVaultTestBase {
     function testFuzz_Recovery_ParksEveryOtherSlotBeforeStartingTheClock(uint256 rawIndex) public {
         uint256 netuid = 9;
         _setRegBlock(netuid, 400);
-        bytes32[] memory hotkeys = _setValidatorCount(netuid, 64);
-        _simulateAlphaDepositHotkey(alice, netuid, 64 ether, hotkeys[0]);
+        bytes32[] memory hotkeys = _setValidatorCount(netuid, MAX_VALIDATORS);
+        _simulateAlphaDepositHotkey(alice, netuid, MAX_VALIDATORS * 1 ether, hotkeys[0]);
         _wrapHotkey(alice, netuid, hotkeys[0]);
         uint256 tokenId = vault.currentTokenId(netuid);
-        uint256 index = bound(rawIndex, 0, 63);
+        uint256 index = bound(rawIndex, 0, MAX_VALIDATORS - 1);
         uint256 lost = _getVaultStake(hotkeys[index], netuid);
         _buildSwapTrail(netuid, hotkeys[index], 2);
         vault.syncBacking(tokenId);
-        assertEq(_parkedStake(netuid), 64 ether - lost);
+        assertEq(_parkedStake(netuid), MAX_VALIDATORS * 1 ether - lost);
         assertEq(lens.missingStake(tokenId), lost);
         for (uint256 i; i < hotkeys.length; ++i) {
             assertEq(_getVaultStake(hotkeys[i], netuid), 0);

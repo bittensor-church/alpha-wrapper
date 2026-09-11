@@ -100,7 +100,7 @@ def test_concurrent_unequal_swaps_cannot_poison_stray_recovery(env):
     assert not env.backing_intact(token_id), "both successor balances must now be unlocated"
     env.sync_backing(token_id, label="syncBacking [two missing slots]")
     deadline = env.frozen_until(token_id)
-    assert 0 < deadline < 2**256 - 1, "the shortfall must have a real recovery deadline"
+    assert 0 < deadline < config.UNDECLARED_SHORTFALL, "the shortfall must have a real recovery deadline"
     record_before = recorded_slots()
     source_balances = [env.stake(key, clone_coldkey, netuid) for key in successors]
     assert 0 < source_balances[0] < source_balances[1]

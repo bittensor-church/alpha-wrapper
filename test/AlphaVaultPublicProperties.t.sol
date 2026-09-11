@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import { MAX_VALIDATORS } from "src/ValidatorRegistry.sol";
+import { VaultMath } from "src/libraries/VaultMath.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { BackingShortfall } from "src/VaultErrors.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
@@ -17,7 +19,7 @@ contract AlphaVaultPublicPropertiesTest is AlphaVaultTestBase {
         stakePerValidator = bound(stakePerValidator, 1e9, type(uint64).max);
         gift = bound(gift, 2e9, 1e30);
         exitBps = bound(exitBps, 2500, 7500);
-        _setValidators(NETUID1, _hotkeys(hotkey1), _weights(10_000));
+        _setValidators(NETUID1, _hotkeys(hotkey1), _weights(VaultMath.BPS_BASE));
         _setDustThreshold(0);
         _depositAndWrap(alice, NETUID1, 1e9);
 
@@ -32,18 +34,18 @@ contract AlphaVaultPublicPropertiesTest is AlphaVaultTestBase {
         assertGe(supply, 9e44);
         assertLe(supply, 1e45);
 
-        bytes32[] memory hotkeys = _setValidatorCount(NETUID1, 64);
+        bytes32[] memory hotkeys = _setValidatorCount(NETUID1, MAX_VALIDATORS);
         vault.rebalance(NETUID1);
         bytes32 coldkey = _subnetColdkey(NETUID1);
         for (uint256 i; i < hotkeys.length; ++i) {
             MockStaking(STAKING_PRECOMPILE).setStake(hotkeys[i], coldkey, NETUID1, stakePerValidator);
         }
-        uint256 backing = 64 * stakePerValidator;
+        uint256 backing = MAX_VALIDATORS * stakePerValidator;
         assertEq(lens.totalStake(TOKEN1), backing);
         address clone = vault.subnetClone(TOKEN1);
         _donateToClone(clone, gift);
 
-        uint256 sharesToExit = supply * exitBps / 10_000;
+        uint256 sharesToExit = supply * exitBps / VaultMath.BPS_BASE;
         (uint256 quote,) = lens.previewUnwrap(TOKEN1, sharesToExit);
         assertGt(quote, 0);
         assertLt(quote, backing);
@@ -78,9 +80,9 @@ contract AlphaVaultPublicPropertiesTest is AlphaVaultTestBase {
         vault.claimTao(TOKEN1, payable(alice));
         uint256 paid = alice.balance - before;
 
-        assertEq(paid % 1e9, 0, "native delivery is in whole RAO");
+        assertEq(paid % VaultMath.TAO_NATIVE_QUANTUM, 0, "native delivery is in whole RAO");
         assertLe(paid, gift, "the gift bounds the payout");
-        assertLe(gift - paid, 1e9, "only index and native rounding can remain");
+        assertLe(gift - paid, VaultMath.TAO_NATIVE_QUANTUM, "only index and native rounding can remain");
         assertEq(vault.subnetClone(TOKEN1).balance, gift - paid);
     }
 
@@ -100,7 +102,7 @@ contract AlphaVaultPublicPropertiesTest is AlphaVaultTestBase {
     function testFuzz_DepositAndFullExit_LoseOnlyTheConfiguredTransferRounding(uint256 deposit, uint256 loss) public {
         deposit = bound(deposit, 1e9, type(uint64).max);
         loss = bound(loss, 0, 2);
-        _setValidators(NETUID1, _hotkeys(hotkey1), _weights(10_000));
+        _setValidators(NETUID1, _hotkeys(hotkey1), _weights(VaultMath.BPS_BASE));
         MockStaking(STAKING_PRECOMPILE).setTransferStakeRoundingLoss(loss);
         uint256 shares = _depositAndWrap(alice, NETUID1, deposit);
 

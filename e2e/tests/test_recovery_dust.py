@@ -32,7 +32,7 @@ def _plant_dust(env, position):
     balance = env.stake(hotkeys[0], position["coldkey"], netuid)
     assert balance > config.ROUNDING_DUST_TOTAL_RAO, "the plant must exceed accounting slack"
     # Match the collector's conservative upper price bound, not just a rounded-down quote.
-    assert balance * (env.alpha_price(netuid) + 10**9) // 10**18 < floor
+    assert balance * (env.alpha_price(netuid) + config.ALPHA_PRICE_QUANTUM_E18) // config.ALPHA_PRICE_SCALE < floor
     position["dust"] = balance
 
 

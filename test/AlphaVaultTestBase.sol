@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import { VaultMath } from "src/libraries/VaultMath.sol";
 import { Vm } from "forge-std/Test.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { AlphaVaultLens } from "src/AlphaVaultLens.sol";
@@ -51,7 +52,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     string internal constant VAULT_URI = "https://api.tao20.io/{id}.json";
     uint256 internal constant RECOVERY_WINDOW = 3 hours;
-    uint256 internal constant BACKING_SLACK_RAO = 1_000;
+    uint256 internal constant BACKING_SLACK_RAO = VaultReads.TRACKED_SLACK_RAO;
     bytes32 internal constant PARKING_HOTKEY = keccak256("parking-hotkey");
 
     uint256 public constant NETUID1 = 1;
@@ -64,7 +65,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     uint16 public constant NETUID2_BPS_HK2 = 6000;
     uint16 public constant NETUID2_BPS_HK1 = 4000;
 
-    uint16 public constant BPS_BASE = 10_000;
+    uint16 public constant BPS_BASE = VaultMath.BPS_BASE;
 
     uint256 internal constant DUST_THRESHOLD = CHAIN_NOMINATOR_MIN_STAKE;
 
@@ -297,7 +298,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     function _catchRecordUpFor(uint256 tokenId) internal {
         if (lens.isBackingIntact(tokenId)) return;
         _runOutRecoveryWindow(tokenId);
-        uint256 netuid = tokenId & 0xFFFF;
+        uint256 netuid = tokenId & VaultMath.NETUID_MASK;
         _reattestCurrentSet(netuid);
         vault.rebalance(netuid);
     }
@@ -313,9 +314,12 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         view
         returns (uint256 shares)
     {
-        uint256 scaledSupply = vault.totalSupply(tokenId) + 1e9;
-        shares = (targetAssets * scaledSupply + totalAlpha) / (totalAlpha + 1);
-        require((shares * (totalAlpha + 1)) / scaledSupply == targetAssets, "no share count hits target assets");
+        uint256 scaledSupply = vault.totalSupply(tokenId) + VaultMath.VIRTUAL_SHARES;
+        shares = (targetAssets * scaledSupply + totalAlpha) / (totalAlpha + VaultMath.VIRTUAL_ASSETS);
+        require(
+            (shares * (totalAlpha + VaultMath.VIRTUAL_ASSETS)) / scaledSupply == targetAssets,
+            "no share count hits target assets"
+        );
     }
 
     function _totalVaultStakeAcrossHotkeys(uint256 netuid) internal view returns (uint256) {
@@ -361,7 +365,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     }
 
     function _registerSubnet(uint256 netuid, bytes32 hotkey) internal {
-        _setValidators(netuid, _hotkeys(hotkey), _weights(10_000));
+        _setValidators(netuid, _hotkeys(hotkey), _weights(BPS_BASE));
         _setRegBlock(netuid, 300);
     }
 
@@ -369,7 +373,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
         address clone = vault.subnetClone(tokenId);
         bytes32 cloneColdkey = _toSubstrate(clone);
         MockStaking mock = MockStaking(STAKING_PRECOMPILE);
-        uint256 netuid = tokenId & 0xFFFF;
+        uint256 netuid = tokenId & VaultMath.NETUID_MASK;
         mock.setStake(hotkey1, cloneColdkey, netuid, 0);
         mock.setStake(hotkey2, cloneColdkey, netuid, 0);
         mock.setStake(hotkey3, cloneColdkey, netuid, 0);
@@ -384,7 +388,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     function _simulateNewNetworkRegistered(uint256 tokenId, uint256 taoInClone) internal {
         _simulateTaoAwardedOnDissolution(tokenId, taoInClone);
-        _reregisterSubnet(tokenId & 0xFFFF);
+        _reregisterSubnet(tokenId & VaultMath.NETUID_MASK);
     }
 
     /// @dev The registration block survives the start of asynchronous dissolution cleanup.
@@ -524,7 +528,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     }
 
     function _wholeRao(uint256 amount) internal pure returns (uint256) {
-        return amount / 1e9 * 1e9;
+        return amount / VaultMath.TAO_NATIVE_QUANTUM * VaultMath.TAO_NATIVE_QUANTUM;
     }
 
     function _drainTheFirstSlot(address holder, uint256 netuid) internal {

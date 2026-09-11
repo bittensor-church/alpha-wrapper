@@ -15,6 +15,10 @@ import {
 } from "../VaultErrors.sol";
 
 library VaultReads {
+    uint256 internal constant NO_SHORT_SLOT = type(uint256).max;
+    /// @dev Frozen with no deadline until recovery is declared.
+    uint256 internal constant UNDECLARED_SHORTFALL = type(uint256).max;
+
     function coldkeyOf(address evmAddress) internal view returns (bytes32) {
         return IAddressMapping(ADDRESS_MAPPING_PRECOMPILE).addressMapping(evmAddress);
     }
@@ -49,8 +53,7 @@ library VaultReads {
         }
     }
 
-    /// @dev Generations are told apart by the registration counter; the registration block only says
-    ///      whether the netuid is registered at all, since chain migrations have rewritten it on live subnets.
+    /// @dev The counter identifies generations; migrations may rewrite the registration block.
     function _subnetState(uint256 tokenId) private view returns (bool ownGeneration, bool registered, bool dissolving) {
         uint16 netuid = VaultMath.netuidOf(tokenId);
         ISubnet subnet = ISubnet(SUBNET_PRECOMPILE);
@@ -95,14 +98,13 @@ library VaultReads {
     }
 
     /// @dev `logical` is the attested name; `active` is the recorded stake location, possibly a successor.
-    ///      A parked position has one slot with no name whose `active` is the vault's parking hotkey.
+    ///      During recovery, only the parking slot carries the pooled tracked obligation.
     struct Slot {
         bytes32 logical;
         bytes32 active;
         uint256 tracked;
     }
 
-    /// @dev Bundled to avoid stack exhaustion in unoptimized builds.
     struct Backing {
         bytes32[] keys;
         uint256[] balances;
@@ -192,12 +194,12 @@ library VaultReads {
                 ++i;
             }
         }
-        return type(uint256).max;
+        return NO_SHORT_SLOT;
     }
 
     function requireIntact(Slot[] memory slots, Backing memory backing, uint16 netuid) internal pure {
         uint256 shortIndex = firstShortOf(backing.short);
-        if (shortIndex != type(uint256).max) {
+        if (shortIndex != NO_SHORT_SLOT) {
             revert BackingShortfall(netuid, slots[shortIndex].active, slots[shortIndex].tracked);
         }
     }

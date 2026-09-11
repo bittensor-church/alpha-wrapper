@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { AlphaVaultLens } from "src/AlphaVaultLens.sol";
+import { VaultMath } from "src/libraries/VaultMath.sol";
 import { VaultReads } from "src/libraries/VaultReads.sol";
 import {
     AttestedHotkeyRetired,
@@ -44,7 +45,9 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         uint256 lost = _getVaultStake(hotkey1, NETUID1);
         _buildSwapTrail(NETUID1, hotkey1, 2);
 
-        assertEq(lens.frozenUntil(TOKEN1), type(uint256).max, "short, but nothing is on file before the sync");
+        assertEq(
+            lens.frozenUntil(TOKEN1), VaultReads.UNDECLARED_SHORTFALL, "short, but nothing is on file before the sync"
+        );
         vm.expectEmit(true, false, false, true, address(vault));
         emit BackingShortfallDeclared(TOKEN1, 30 ether, 30 ether - lost);
         vm.prank(bob);
@@ -185,7 +188,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
     function test_RecoverStray_ParksALossNobodyDeclared() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
-        assertEq(lens.frozenUntil(TOKEN1), type(uint256).max, "the loss is visible with no clock");
+        assertEq(lens.frozenUntil(TOKEN1), VaultReads.UNDECLARED_SHORTFALL, "the loss is visible with no clock");
 
         vm.prank(bob);
         vault.recoverStray(TOKEN1, _hotkeys(hotkey4));
@@ -836,7 +839,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         recapitalizerGain = recapitalizerValueAfter - cohorts.recapitalizerValueBefore;
         assertGe(
             recapitalizerGain,
-            (recovered * cohorts.recapitalizerShares) / (cohorts.supplyAtRecovery + 1e9),
+            (recovered * cohorts.recapitalizerShares) / (cohorts.supplyAtRecovery + VaultMath.VIRTUAL_SHARES),
             "the late cohort receives its pro-rata share of the returned balance"
         );
     }

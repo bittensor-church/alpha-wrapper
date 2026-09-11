@@ -239,7 +239,7 @@ def _stake_validators(
             flat_index = subnet_index * config.VALIDATORS_PER_SUBNET + validator_index
             hotkey_name = hotkey_names[flat_index]
 
-            extrinsics.add_stake(hotkey_ss58s[flat_index], netuid, amount_tao * 10**9)
+            extrinsics.add_stake(hotkey_ss58s[flat_index], netuid, amount_tao * config.RAO_PER_TAO)
             stake = read_stake(hotkey_pubkeys[flat_index], config.ALICE_COLDKEY_PUBKEY, netuid)
             if stake == 0:
                 raise RuntimeError(

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import { VaultMath } from "src/libraries/VaultMath.sol";
 import { Test, Vm } from "forge-std/Test.sol";
-import { ValidatorRegistry, MAX_VALIDATORS } from "src/ValidatorRegistry.sol";
+import { ValidatorRegistry, MAX_VALIDATORS, MAX_SIGNERS } from "src/ValidatorRegistry.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 import { AttestationHelper } from "./helpers/AttestationHelper.sol";
 import { MockStaking } from "./mocks/MockStaking.sol";
@@ -63,7 +64,7 @@ contract ValidatorRegistryTest is AttestationHelper {
         att.weights = new uint256[](len);
         if (len == 1) {
             att.hotkeys[0] = hk1;
-            att.weights[0] = 10_000;
+            att.weights[0] = VaultMath.BPS_BASE;
         } else if (len == 2) {
             att.hotkeys[0] = hk1;
             att.hotkeys[1] = hk2;
@@ -208,8 +209,8 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_RevertWhen_TooManyInitialSigners() public {
-        address[] memory init = new address[](17);
-        for (uint256 i; i < 17; ++i) {
+        address[] memory init = new address[](MAX_SIGNERS + 1);
+        for (uint256 i; i < init.length; ++i) {
             init[i] = vm.addr(uint256(keccak256(abi.encode("init-signer", i))));
         }
         vm.expectRevert(ValidatorRegistry.TooManySigners.selector);
@@ -314,8 +315,8 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_RevertWhen_SetSignersTooMany() public {
-        address[] memory ns = new address[](17);
-        for (uint256 i; i < 17; ++i) {
+        address[] memory ns = new address[](MAX_SIGNERS + 1);
+        for (uint256 i; i < ns.length; ++i) {
             ns[i] = vm.addr(uint256(keccak256(abi.encode("set-signer", i))));
         }
         vm.expectRevert(ValidatorRegistry.TooManySigners.selector);
@@ -323,12 +324,12 @@ contract ValidatorRegistryTest is AttestationHelper {
     }
 
     function test_SetSigners_AcceptsMaxSigners() public {
-        address[] memory ns = new address[](16);
-        for (uint256 i; i < 16; ++i) {
+        address[] memory ns = new address[](MAX_SIGNERS);
+        for (uint256 i; i < ns.length; ++i) {
             ns[i] = vm.addr(uint256(keccak256(abi.encode("max-signer", i))));
         }
         registry.setSigners(ns, 2);
-        assertEq(registry.signers(15), ns[15]);
+        assertEq(registry.signers(MAX_SIGNERS - 1), ns[MAX_SIGNERS - 1]);
     }
 
     function test_SetSigners_RemovedSignersUnmarked() public {
@@ -435,7 +436,7 @@ contract ValidatorRegistryTest is AttestationHelper {
             assertEq(hks[i], wide.hotkeys[i]);
             sum += wts[i];
         }
-        assertEq(sum, 10_000);
+        assertEq(sum, VaultMath.BPS_BASE);
     }
 
     function test_Update_OverwritesPreviousAttestationOnGrow() public {
@@ -472,7 +473,7 @@ contract ValidatorRegistryTest is AttestationHelper {
         assertEq(hks1.length, 1);
         assertEq(wts1.length, 1);
         assertEq(hks1[0], hk1);
-        assertEq(wts1[0], 10_000);
+        assertEq(wts1[0], VaultMath.BPS_BASE);
 
         (bytes32[] memory hks2, uint16[] memory wts2,) = registry.getValidators(SN2);
         assertEq(hks2.length, 3);
@@ -499,7 +500,7 @@ contract ValidatorRegistryTest is AttestationHelper {
             assertEq(wts[i], att.weights[i]);
             sum += wts[i];
         }
-        assertEq(sum, 10_000);
+        assertEq(sum, VaultMath.BPS_BASE);
     }
 
     function testFuzz_Update_SequentialCommitsReplaceWholeSet(uint256 firstCount, uint256 secondCount) public {
@@ -812,7 +813,7 @@ contract ValidatorRegistryTest is AttestationHelper {
         assertEq(hks.length, 1);
         assertEq(wts.length, 1);
         assertEq(hks[0], hk1);
-        assertEq(wts[0], 10_000);
+        assertEq(wts[0], VaultMath.BPS_BASE);
     }
 
     function test_SignatureForAnotherRegistry_RejectsTheValidatorSet() public {
@@ -903,7 +904,7 @@ contract ValidatorRegistryTest is AttestationHelper {
         assertEq(hksA[2], hk3);
         assertEq(hksB[1], hk2);
         assertEq(hksC[0], hk1);
-        assertEq(wtsC[0], 10_000);
+        assertEq(wtsC[0], VaultMath.BPS_BASE);
     }
 
     function test_Batch_EmitsValidatorsUpdatedPerEntry() public {

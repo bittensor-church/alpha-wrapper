@@ -14,9 +14,8 @@ from . import chain, config, extrinsics, substrate, validators
 
 
 def largest_burn_leaving_alpha(total: int, supply: int) -> int:
-    """The most shares whose alpha payout, `shares * (total + 1) // (supply + 1e9)`, stays below
-    `total`, and never the whole supply, so the position outlives the burn."""
-    return min(supply - 1, (total * (supply + 10**9) - 1) // (total + 1))
+    """Largest burn that leaves both alpha and shares in the position."""
+    return min(supply - 1, (total * (supply + config.VIRTUAL_SHARES) - 1) // (total + config.VIRTUAL_ASSETS))
 
 
 def alpha_to_tao_quote(netuid: int, alpha_rao: int, block: Optional[int] = None) -> int:
@@ -259,14 +258,14 @@ class Environment:
 
     def alpha_value_tao(self, netuid: int, alpha_rao: int) -> int:
         """Spot TAO value (RAO) of an alpha amount at the current oracle price."""
-        return alpha_rao * self.alpha_price(netuid) // 10**18
+        return alpha_rao * self.alpha_price(netuid) // config.ALPHA_PRICE_SCALE
 
     def floor_boundary(self, netuid: int, floor_rao: int) -> Tuple[int, int]:
         """(alpha price, boundary): the smallest alpha-RAO deposit whose TAO value
         clears `floor_rao` at the current price."""
         price = self.alpha_price(netuid)
         assert price != 0, f"netuid {netuid}: alpha price reads 0 (oracle unavailable)"
-        boundary = (floor_rao * 10**18 + price - 1) // price
+        boundary = (floor_rao * config.ALPHA_PRICE_SCALE + price - 1) // price
         return price, boundary
 
     def alpha_to_tao_quote(self, netuid: int, alpha_rao: int) -> int:

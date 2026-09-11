@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import { VaultMath } from "src/libraries/VaultMath.sol";
+import { MAX_VALIDATORS } from "src/ValidatorRegistry.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { VaultReads } from "src/libraries/VaultReads.sol";
 import { AttestedHotkeyRetired, SwappedHotkeyStillAttested, ZeroAmount } from "src/VaultErrors.sol";
@@ -293,7 +295,7 @@ contract BackingRecordTest is AlphaVaultTestBase {
     }
 
     function test_FullUnwrapBesideARetiredEntry_PaysFromTheHeldKeys() public {
-        _setValidators(NETUID1, _hotkeys(hotkey2), _weights(10000));
+        _setValidators(NETUID1, _hotkeys(hotkey2), _weights(VaultMath.BPS_BASE));
         uint256 shares = _depositAndWrap(alice, NETUID1, 30 ether);
         _setValidators(NETUID1, _hotkeys(hotkey4, hotkey2), _weights(5000, 5000));
         _simulateFollowedSwap(NETUID1, hotkey4, hotkey5);
@@ -450,12 +452,12 @@ contract BackingRecordTest is AlphaVaultTestBase {
     }
 
     function testFuzz_WideSet_FollowsASwap(uint256 rawCount) public {
-        uint256 count = bound(rawCount, 2, 64);
+        uint256 count = bound(rawCount, 2, MAX_VALIDATORS);
         uint256 netuid = 9;
         _setRegBlock(netuid, 400);
         bytes32[] memory hks = _setValidatorCount(netuid, count);
 
-        _simulateAlphaDepositHotkey(alice, netuid, 64 ether, hks[0]);
+        _simulateAlphaDepositHotkey(alice, netuid, MAX_VALIDATORS * 1 ether, hks[0]);
         _wrapHotkey(alice, netuid, hks[0]);
         uint256 tokenId = vault.currentTokenId(netuid);
 
@@ -463,7 +465,7 @@ contract BackingRecordTest is AlphaVaultTestBase {
         _simulateFollowedSwap(netuid, hks[0], swapped);
         vault.rebalance(netuid);
 
-        assertEq(lens.totalStake(tokenId), 64 ether, "backing whole across the wide set");
+        assertEq(lens.totalStake(tokenId), MAX_VALIDATORS * 1 ether, "backing whole across the wide set");
         assertTrue(lens.isBackingIntact(tokenId), "record sound after the follow");
     }
 }

@@ -145,7 +145,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint16 nid = uint16(netuid);
         ISubnet subnet = ISubnet(SUBNET_PRECOMPILE);
         if (subnet.getNetworkRegistrationBlock(nid) == 0) revert SubnetNotRegistered();
-        return uint256(nid) | (uint256(subnet.getRegisteredSubnetCounter(nid)) << 16);
+        return uint256(nid) | (uint256(subnet.getRegisteredSubnetCounter(nid)) << VaultMath.NETUID_BITS);
     }
 
     function createSubnetProxy(uint256 netuid) external {
@@ -181,7 +181,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         (bytes32[] memory hotkeys, uint16[] memory weights, bytes32[] memory owners) =
             VaultReads.resolveValidators(validatorRegistry, nid);
         uint256 chosenIndex = VaultMath.indexOf(hotkeys, chosenHotkey);
-        if (chosenIndex == type(uint256).max) revert ChosenHotkeyNotInSet();
+        if (chosenIndex == VaultMath.INDEX_NOT_FOUND) revert ChosenHotkeyNotInSet();
 
         address clone = subnetClone[tokenId];
         if (clone == address(0)) clone = _deploySubnetClone(tokenId);
@@ -495,7 +495,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     }
 
     function _taoValue(uint256 alphaAmount, uint256 alphaPriceE18) private pure returns (uint256) {
-        return (alphaAmount * alphaPriceE18) / 1e18;
+        return (alphaAmount * alphaPriceE18) / VaultMath.ALPHA_PRICE_SCALE;
     }
 
     /// @dev The only exposed minimum is for unstakes; using it for transfers/moves is conservative.
@@ -549,7 +549,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         if (alphaPriceE18 == 0) return 0;
 
         // One extra RAO covers the leftover quote's rounding.
-        uint256 minLeftover = dustThresholdTao == 0 ? 0 : Math.ceilDiv((dustThresholdTao + 1) * 1e18, alphaPriceE18);
+        uint256 minLeftover = dustThresholdTao == 0
+            ? 0
+            : Math.ceilDiv((dustThresholdTao + 1) * VaultMath.ALPHA_PRICE_SCALE, alphaPriceE18);
         if (balance <= minLeftover) return 0;
 
         uint256 maxChunk = balance - minLeftover;
@@ -589,9 +591,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     }
 
     /// @notice Bring the vault's own alpha home from caller-supplied locations.
-    /// @dev Recovery pools alpha without assigning it to validators. Partial finds park immediately;
-    ///      the expected total and fixed deadline remain until coverage is complete or sync writes off.
-    ///      With no shortfall, strays join live backing. Recovery never pays the caller.
+    /// @dev Partial recovery preserves the pooled obligation and deadline. With no shortfall,
+    ///      strays join live backing. Recovery never pays the caller.
     function recoverStray(uint256 tokenId, bytes32[] calldata sources) external nonReentrant {
         address clone = subnetClone[tokenId];
         if (clone == address(0)) revert NothingToUnwrap();
@@ -604,7 +605,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32[] memory keys = VaultReads.activesOf(slots);
         if (!recovering) {
             VaultReads.Backing memory backing = VaultReads.resolveBacking(slots, coldkey, netuid);
-            if (VaultReads.firstShortOf(backing.short) == type(uint256).max) {
+            if (VaultReads.firstShortOf(backing.short) == VaultReads.NO_SHORT_SLOT) {
                 (bytes32[] memory annexSources,) = VaultAllocation.novelSources(backing.keys, sources, coldkey, netuid);
                 _annex(tokenId, clone, coldkey, netuid, backing.keys, annexSources);
                 return;
@@ -625,8 +626,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
     }
 
-    /// @dev Preserve raw locations as well as resolved ones, including residue left at an old name.
-    ///      These are collection addresses, never assignments of recovered alpha to missing validators.
+    /// @dev Keep resolved keys and old-key residue locations.
     function _collectionKeys(bytes32[] memory raw, bytes32[] memory resolved, bytes32 coldkey, uint16 netuid)
         private
         view
@@ -657,8 +657,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         if (exposed > VaultReads.TRACKED_SLACK_RAO) revert BackingNotSecured();
     }
 
-    /// @dev Only the parking entry carries an obligation. Other entries are zero-weight collection
-    ///      locations, so every actual balance is counted once without guessing its origin.
+    /// @dev Only parking carries the pooled obligation; other entries are collection locations.
     function _startRecovery(uint256 tokenId, bytes32[] memory keys, uint256 expected, uint256 parked) private {
         VaultReads.Slot[] storage slots = _slots[tokenId];
         _writeSlot(slots, 0, parkingHotkey, parkingHotkey, expected);
@@ -689,9 +688,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         emit BackingParked(tokenId, parked, nonce);
     }
 
-    /// @dev With nothing short, strays join the first slot the way a dropped validator's stake does:
-    ///      carried by the slot's own pile, so even dust comes home. The record then follows the keys
-    ///      the stake actually sits on.
+    /// @dev With no shortfall, add strays to live backing. A movable pile also collects dust.
     function _annex(
         uint256 tokenId,
         address clone,
@@ -709,7 +706,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         emit BackingRecovered(tokenId, home, balance - before);
     }
 
-    /// @dev Roll the sources onto one destination and report what it holds afterwards.
     function _gather(address clone, bytes32 coldkey, uint16 netuid, bytes32[] memory sources, bytes32 destination)
         private
         returns (uint256 balance, bool leftBelowFloor)
@@ -737,7 +733,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         bytes32[] memory keys = VaultReads.activesOf(slots);
         if (state.shortSince == 0) {
             VaultReads.Backing memory backing = VaultReads.resolveBacking(slots, coldkey, netuid);
-            if (VaultReads.firstShortOf(backing.short) == type(uint256).max) {
+            if (VaultReads.firstShortOf(backing.short) == VaultReads.NO_SHORT_SLOT) {
                 if (!_followedSwap(slots, backing.keys)) revert BackingUnchanged();
                 _reanchor(tokenId, backing.keys, backing.balances);
                 return;

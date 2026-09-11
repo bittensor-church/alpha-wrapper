@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import { VaultMath } from "src/libraries/VaultMath.sol";
 import { Test } from "forge-std/Test.sol";
 import { ValidatorRegistry } from "src/ValidatorRegistry.sol";
 import { MockStaking } from "../mocks/MockStaking.sol";
@@ -73,11 +74,11 @@ abstract contract AttestationHelper is Test {
         weights = new uint16[](count);
         // forge-lint: disable-next-line(unsafe-typecast)
         uint16 slots = uint16(count);
-        uint16 share = 10_000 / slots;
+        uint16 share = VaultMath.BPS_BASE / slots;
         for (uint16 i; i + 1 < slots; ++i) {
             weights[i] = share;
         }
-        weights[slots - 1] = 10_000 - share * (slots - 1);
+        weights[slots - 1] = VaultMath.BPS_BASE - share * (slots - 1);
     }
 
     function _buildAttestation(uint256 netuid, bytes32[] memory hotkeys, uint16[] memory weights, uint256 nonce)

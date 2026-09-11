@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import { VaultMath } from "src/libraries/VaultMath.sol";
 import { MockAlpha } from "./MockAlpha.sol";
 import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 
@@ -58,7 +59,7 @@ contract MockStaking {
     function _belowTaoValue(uint256 amount, uint256 netuid, uint256 thresholdTao) private view returns (bool) {
         // forge-lint: disable-next-line(unsafe-typecast)
         uint256 alphaPriceE18 = MockAlpha(ALPHA_PRECOMPILE).chainAlphaPrice(uint16(netuid));
-        return (amount * alphaPriceE18) / 1e18 < thresholdTao;
+        return (amount * alphaPriceE18) / VaultMath.ALPHA_PRICE_SCALE < thresholdTao;
     }
 
     function setChainMinStake(uint256 minStakeTao) external {
@@ -255,7 +256,7 @@ contract MockStaking {
             }
         }
         stakes[hotkey][_senderColdkey()][netuid] = remainder;
-        (bool ok,) = msg.sender.call{ value: nativeTaoUnits ? taoOut * 1e9 : taoOut }("");
+        (bool ok,) = msg.sender.call{ value: nativeTaoUnits ? taoOut * VaultMath.TAO_NATIVE_QUANTUM : taoOut }("");
         require(ok, "MockStaking: TAO credit failed");
     }
 }

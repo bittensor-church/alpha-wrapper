@@ -10,6 +10,15 @@ CHAIN_ENDPOINT = "ws://127.0.0.1:9944"
 RPC_URL = "http://127.0.0.1:9944"
 CHAIN_ID = 42
 
+NETUID_BITS = 16
+BPS_BASE = 10_000
+UNDECLARED_SHORTFALL = 2**256 - 1
+ALPHA_PRICE_SCALE = 10**18
+ALPHA_PRICE_QUANTUM_E18 = 10**9
+VIRTUAL_SHARES = 10**9
+VIRTUAL_ASSETS = 1
+RAO_PER_TAO = 10**9
+
 # --- Wallets -----------------------------------------------------------------
 ALICE_WALLET = "alice"
 ALICE_HOTKEY_NAME = "default"
@@ -44,7 +53,7 @@ HOTKEY_SUFFIXES = ("a", "b", "c")
 VALIDATORS_PER_SUBNET = len(HOTKEY_SUFFIXES)
 TRANSFER_AMOUNT_TAO = 100
 # Per-validator transfer amount in RAO (TRANSFER_AMOUNT_TAO split across the 3 validators).
-PER_HOTKEY_TRANSFER_RAO = TRANSFER_AMOUNT_TAO * 10**9 // VALIDATORS_PER_SUBNET
+PER_HOTKEY_TRANSFER_RAO = TRANSFER_AMOUNT_TAO * RAO_PER_TAO // VALIDATORS_PER_SUBNET
 
 # --- Foundry / subprocess flags ------------------------------------------------
 # Bittensor EVM: gas estimation fails; always use legacy txs with explicit gas.
