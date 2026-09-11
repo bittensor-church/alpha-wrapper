@@ -120,6 +120,28 @@ contract MockStakingTest is AlphaVaultTestBase {
         assertEq(mock.getOwnedHotkeys(second).length, 1);
     }
 
+    function test_ReseedingADeletedRecord_KeepsItOutOfEveryOwnedHotkeyList() public {
+        bytes32 first = keccak256("first-owner");
+        bytes32 destination = keccak256("swap-destination");
+        mock.setHotkeyOwner(STRAY_HOTKEY, first);
+        mock.setHotkeyDeleted(STRAY_HOTKEY, true);
+        mock.setHotkeyOwned(STRAY_HOTKEY, true);
+
+        (bool exists,) = mock.getHotkeyOwner(STRAY_HOTKEY);
+        assertFalse(exists, "reseeding does not restore a deleted record");
+        assertEq(mock.getOwnedHotkeys(first).length, 0, "and the index agrees");
+
+        mock.simulateColdkeySwap(first, destination, NETUID1, new bytes32[](0));
+
+        assertEq(mock.getOwnedHotkeys(first).length, 0);
+        assertEq(mock.getOwnedHotkeys(destination).length, 0, "a swap carries only existing records");
+
+        mock.setHotkeyDeleted(STRAY_HOTKEY, false);
+        (, bytes32 owner) = mock.getHotkeyOwner(STRAY_HOTKEY);
+        assertEq(owner, first, "a restored record answers to the owner it was seeded with");
+        assertEq(mock.getOwnedHotkeys(first).length, 1);
+    }
+
     function test_RevertWhen_SwappingIntoAHotkeyAccount() public {
         vm.expectRevert(bytes("MockStaking: NewColdKeyIsHotkey"));
         mock.simulateColdkeySwap(_toSubstrate(bob), hotkey1, NETUID1, _hotkeys(hotkey1));

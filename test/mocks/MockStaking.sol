@@ -249,11 +249,13 @@ contract MockStaking {
     }
 
     /// @dev The one path that writes ownership, so the owner a hotkey answers with and the index of
-    ///      owned hotkeys never disagree: the previous index entry goes, the new one is recorded.
+    ///      owned hotkeys never disagree: the previous index entry goes, and a new one is recorded only
+    ///      while the record is not deleted, since reseeding never restores a deleted record.
     function _assignOwner(bytes32 hotkey, bytes32 coldkey) private {
+        _dropOwnedHotkey(hotkey);
         _hotkeyOwned[hotkey] = true;
         _hotkeyOwner[hotkey] = coldkey;
-        _indexOwnedHotkey(coldkey, hotkey);
+        if (!hotkeyDeleted[hotkey]) _indexOwnedHotkey(coldkey, hotkey);
     }
 
     /// @dev Every stake operation the chain accepts touches hotkeys that have an owner record.
