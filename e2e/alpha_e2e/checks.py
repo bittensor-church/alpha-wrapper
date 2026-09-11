@@ -82,7 +82,7 @@ class TaoSale:
     tao_word: int
 
 
-VAULT_TAO_EXIT = TaoSale("UnwrappedForTao(address,uint256,uint256,uint256,uint256)", 1, 2)
+VAULT_TAO_EXIT = TaoSale("UnwrappedForTao(address,uint256,uint256,uint256,uint256,uint256)", 2, 3)
 MAILBOX_TAO_RECLAIM = TaoSale(
     "MailboxAlphaSoldForTao(address,uint256,bytes32,uint256,uint256)", 0, 1,
 )

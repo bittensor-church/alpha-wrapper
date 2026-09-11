@@ -17,7 +17,7 @@ import { CloneFactory } from "../CloneFactory.sol";
 ///      caller and logs still originate from the vault. Callers retain the backing gates, reentrancy
 ///      guard and accounting; this library writes only the clone records handed to it by storage reference.
 library VaultAllocation {
-    /// @dev What collection does with a pile the chain would refuse to move.
+    /// @dev What collection does with a pile below the wrapper's conservative floor.
     enum CollectionPolicy {
         RevertBelowFloor,
         LeaveBelowFloor

@@ -250,8 +250,10 @@ contract ClaimableTaoTest is AlphaVaultTestBase {
     }
 
     function test_UnwrapForTaoAfterDonation_ExitPaysSaleProceedsOnly() public {
-        _depositAndWrap(alice, NETUID1, DEPOSIT);
-        _depositAndWrap(bob, NETUID1, DEPOSIT);
+        // The sale narrows slot balances to the chain's 64-bit stake amounts, so this deposit stays in RAO.
+        uint256 deposit = 30 * ALPHA;
+        _depositAndWrap(alice, NETUID1, deposit);
+        _depositAndWrap(bob, NETUID1, deposit);
         uint256 donated = 5 ether;
         _donateToTokenClone(TOKEN1, donated);
 

@@ -57,7 +57,8 @@ def build_volume_row(
         "alpha_unwrap_shares_burned": alpha_unwraps.total("shares"),
         "alpha_unwrapped_rao": alpha_unwraps.total("alphaOut"),
         "tao_unwrap_count": tao_unwraps.count,
-        "tao_unwrap_shares_burned": tao_unwraps.total("shares"),
+        "tao_unwrap_shares_burned": tao_unwraps.total("sharesBurned"),
+        "tao_unwrap_shares_refunded": tao_unwraps.total("sharesRefunded"),
         "alpha_sold_for_tao_rao": tao_unwraps.total("alphaSold"),
         "tao_from_alpha_sales_wei": tao_from_alpha_sales,
         "dissolved_unwrap_count": dissolved_unwraps.count,
@@ -66,7 +67,7 @@ def build_volume_row(
         "unwrap_count": alpha_unwraps.count + tao_unwraps.count + dissolved_unwraps.count,
         "shares_burned": (
             alpha_unwraps.total("shares")
-            + tao_unwraps.total("shares")
+            + tao_unwraps.total("sharesBurned")
             + dissolved_unwraps.total("shares")
         ),
         "tao_received_wei": tao_from_alpha_sales + tao_from_dissolutions,
@@ -112,7 +113,7 @@ def main() -> None:
         user_filter if user_filter is not None else "",
         totals_for("Deposited", "assets", "shares"),
         totals_for("Unwrapped", "shares", "alphaOut"),
-        totals_for("UnwrappedForTao", "shares", "alphaSold", "taoOut"),
+        totals_for("UnwrappedForTao", "sharesBurned", "sharesRefunded", "alphaSold", "taoOut"),
         totals_for("DissolvedSubnetUnwrapped", "shares", "taoOut"),
     )
 

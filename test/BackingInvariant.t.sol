@@ -56,7 +56,8 @@ contract BackingHandler is Test {
     }
 
     function wrap(uint256 actorSeed, uint256 amount, uint256 hotkeySeed) external {
-        harness.wrapFor(_actor(actorSeed), bound(amount, 1 ether, 200 ether), _attested(hotkeySeed));
+        // Alpha in RAO: a TAO exit narrows slot balances to the chain's 64-bit stake amounts.
+        harness.wrapFor(_actor(actorSeed), bound(amount, 1e9, 200e9), _attested(hotkeySeed));
     }
 
     function unwrap(uint256 actorSeed, uint256 shareSeed) external {
@@ -154,7 +155,7 @@ contract BackingInvariantTest is AlphaVaultTestBase {
         address[] memory actors = new address[](2);
         actors[0] = alice;
         actors[1] = bob;
-        _depositAndWrap(alice, NETUID1, 50 ether);
+        _depositAndWrap(alice, NETUID1, 50 * ALPHA);
 
         currentSet = _hotkeys(hotkey1, hotkey2, hotkey3);
         bytes32[] memory seeds = _hotkeys(hotkey1, hotkey2, hotkey3);

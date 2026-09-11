@@ -6,6 +6,7 @@ import { ERC1155Supply } from "@openzeppelin/contracts/token/ERC1155/extensions/
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import { CloneFactory } from "./CloneFactory.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
+import { SafeCast } from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import { SubnetClone } from "./SubnetClone.sol";
 import { DepositMailbox } from "./DepositMailbox.sol";
 import { IStaking, STAKING_PRECOMPILE } from "./interfaces/IStaking.sol";
@@ -287,7 +288,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard, IAlphaVaultAbi {
         // With no shares left there is nothing to keep parked.
         if (totalSupply(tokenId) == 0) delete recovery[tokenId];
 
-        emit UnwrappedForTao(msg.sender, tokenId, refundShares < shares ? shares - refundShares : 0, sold, taoOut);
+        emit UnwrappedForTao(msg.sender, tokenId, shares, refundShares, sold, taoOut);
     }
 
     /// @dev Claims survive transfers and full exits, including dissolution. Sub-RAO residue stays reserved.
@@ -513,6 +514,8 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard, IAlphaVaultAbi {
 
     /// @dev Partial sales must clear the post-fee minimum without leaving dust the chain would force-sell
     ///      into this caller's payout at the remaining holders' expense.
+    ///      The chain reports a slot balance as a 64-bit amount, so narrowing one for a quote cannot
+    ///      truncate; a wider value is a fixture rather than a position and is refused.
     function _sellableChunk(uint16 netuid, uint256 remaining, uint256 balance, uint256 dustThresholdTao)
         private
         view
@@ -532,21 +535,16 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard, IAlphaVaultAbi {
         // Keep gas-consuming simulation failures away from provably sub-floor inputs.
         if (StakeOps.isBelowFloorAtReadPrice(chunk, alphaPriceE18)) return 0;
 
-        uint256 chunkQuote = IAlpha(ALPHA_PRECOMPILE).simSwapAlphaForTao(netuid, _saturateU64(chunk));
+        uint256 chunkQuote = IAlpha(ALPHA_PRECOMPILE).simSwapAlphaForTao(netuid, SafeCast.toUint64(chunk));
         if (chunkQuote < StakeOps.minStakeTao()) return 0;
 
-        // The marginal quote bounds leftover value at the post-sale price. A saturated u64 quote is not faithful.
-        if (dustThresholdTao != 0 && balance <= type(uint64).max) {
-            // forge-lint: disable-next-line(unsafe-typecast)
-            uint256 leftoverQuote = IAlpha(ALPHA_PRECOMPILE).simSwapAlphaForTao(netuid, uint64(balance)) - chunkQuote;
+        // The marginal quote bounds leftover value at the post-sale price.
+        if (dustThresholdTao != 0) {
+            uint256 leftoverQuote =
+                IAlpha(ALPHA_PRECOMPILE).simSwapAlphaForTao(netuid, SafeCast.toUint64(balance)) - chunkQuote;
             if (leftoverQuote < dustThresholdTao) return 0;
         }
         return chunk;
-    }
-
-    function _saturateU64(uint256 value) private pure returns (uint64) {
-        // forge-lint: disable-next-line(unsafe-typecast)
-        return value > type(uint64).max ? type(uint64).max : uint64(value);
     }
 
     function _holdsRotatedOutStake(VaultReads.Backing memory backing, bytes32[] memory currentSet)
