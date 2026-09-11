@@ -76,6 +76,50 @@ contract MockStakingTest is AlphaVaultTestBase {
         assertEq(mock.getStake(STRAY_HOTKEY, source, NETUID1), 0);
     }
 
+    function test_ColdkeySwap_MovesAHotkeySeededWithoutAnExplicitOwner() public {
+        mock.setHotkeyOwned(STRAY_HOTKEY, true);
+        bytes32 derivedOwner = mock.ownerOf(STRAY_HOTKEY);
+        bytes32 destination = keccak256("fresh-destination-coldkey");
+
+        mock.simulateColdkeySwap(derivedOwner, destination, NETUID1, new bytes32[](0));
+
+        (, bytes32 owner) = mock.getHotkeyOwner(STRAY_HOTKEY);
+        assertEq(owner, destination, "the reported owner moves with the swap");
+        assertEq(mock.getOwnedHotkeys(derivedOwner).length, 0);
+        assertEq(mock.getOwnedHotkeys(destination).length, 1);
+    }
+
+    function test_ColdkeySwap_LeavesAReassignedHotkeyWithItsCurrentOwner() public {
+        bytes32 first = keccak256("first-owner");
+        bytes32 second = keccak256("second-owner");
+        bytes32 destination = keccak256("swap-destination");
+        mock.setHotkeyOwner(STRAY_HOTKEY, first);
+        mock.setHotkeyOwner(STRAY_HOTKEY, second);
+
+        mock.simulateColdkeySwap(first, destination, NETUID1, new bytes32[](0));
+
+        (, bytes32 owner) = mock.getHotkeyOwner(STRAY_HOTKEY);
+        assertEq(owner, second, "a swap of the former owner leaves the current owner's key alone");
+        assertEq(mock.getOwnedHotkeys(first).length, 0);
+        assertEq(mock.getOwnedHotkeys(second).length, 1);
+        assertEq(mock.getOwnedHotkeys(destination).length, 0);
+    }
+
+    function test_Association_ReplacesTheDeletedOwnersIndexEntry() public {
+        bytes32 first = keccak256("first-owner");
+        bytes32 second = keccak256("second-owner");
+        mock.setHotkeyOwner(STRAY_HOTKEY, first);
+        mock.setHotkeyDeleted(STRAY_HOTKEY, true);
+        assertEq(mock.getOwnedHotkeys(first).length, 0, "a deleted record leaves the index");
+
+        mock.associate(STRAY_HOTKEY, second);
+
+        (, bytes32 owner) = mock.getHotkeyOwner(STRAY_HOTKEY);
+        assertEq(owner, second);
+        assertEq(mock.getOwnedHotkeys(first).length, 0);
+        assertEq(mock.getOwnedHotkeys(second).length, 1);
+    }
+
     function test_RevertWhen_SwappingIntoAHotkeyAccount() public {
         vm.expectRevert(bytes("MockStaking: NewColdKeyIsHotkey"));
         mock.simulateColdkeySwap(_toSubstrate(bob), hotkey1, NETUID1, _hotkeys(hotkey1));
