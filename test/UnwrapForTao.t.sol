@@ -1007,7 +1007,9 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
         assets = bound(assets, 1, balance - 1);
         _setAlphaPrice(NETUID1, priceE18);
         _setRemoveStakeRate(priceE18, VaultMath.ALPHA_PRICE_SCALE);
-        _depositForAlice(100 * ALPHA);
+        // A supply this large keeps the virtual offsets from rounding a near-full request past the
+        // holder's balance for any slot in range.
+        _depositForAlice(1e9 * ALPHA);
         uint256 total = _plantVaultStakes(NETUID1, balance, 0, 0);
         uint256 shares = _sharesForExactAssets(TOKEN1, assets, total);
         uint256 balanceBefore = alice.balance;
