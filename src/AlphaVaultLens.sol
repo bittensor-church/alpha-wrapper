@@ -87,7 +87,8 @@ contract AlphaVaultLens {
     }
 
     /// @notice Whether deposits and weight alignment await an attestation newer than the parking one.
-    /// @dev Alpha can rest on the parking hotkey after this turns false, until the next wrap or rebalance moves it.
+    /// @dev Alpha can rest on the parking hotkey after this turns false, until the next wrap, rebalance or alpha
+    ///      exit moves it.
     function awaitingAttestation(uint256 tokenId) external view returns (bool) {
         return vault.awaitingAttestation(tokenId);
     }

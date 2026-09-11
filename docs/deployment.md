@@ -19,7 +19,7 @@
 
 ```sh
 forge create src/ValidatorRegistry.sol:ValidatorRegistry \
-  --rpc-url <url> --private-key <key> \
+  --rpc-url <url> --private-key <key> --broadcast \
   --constructor-args <admin> "[<signer1>,<signer2>]" 2
 ```
 
@@ -43,8 +43,12 @@ Choose a fresh random `PARKING_HOTKEY`. The constructor claims it with
 `ParkingHotkeyUnavailable` when another coldkey already owns that account.
 
 ```sh
-forge script script/DeployAlpha.s.sol --rpc-url <url> --broadcast
+forge script script/DeployAlpha.s.sol --rpc-url <url> --private-key <key> --broadcast
 ```
+
+The script broadcasts from whichever signer the command line supplies; a
+keystore account (`--account <name>`) or hardware wallet works in place of the
+raw key.
 
 The broadcast deploys the `DepositMailbox` logic, the `SubnetClone` logic, the
 `AlphaVault` whose constructor deploys its own `CloneFactory`, and
