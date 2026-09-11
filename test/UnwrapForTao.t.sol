@@ -21,6 +21,7 @@ import {
     UnwrapForTaoReentrantReceiver
 } from "./helpers/TaoRailReceivers.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { SafeCast } from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 contract UnwrapForTaoTest is AlphaVaultTestBase {
@@ -1004,13 +1005,11 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
     {
         priceE18 = bound(priceE18, 0.5e18, 10e18);
         balance = bound(balance, 1e6, 1e15);
-        assets = bound(assets, 1, balance - 1);
         _setAlphaPrice(NETUID1, priceE18);
         _setRemoveStakeRate(priceE18, VaultMath.ALPHA_PRICE_SCALE);
-        // A supply this large keeps the virtual offsets from rounding a near-full request past the
-        // holder's balance for any slot in range.
-        _depositForAlice(1e9 * ALPHA);
+        _depositForAlice(100 * ALPHA);
         uint256 total = _plantVaultStakes(NETUID1, balance, 0, 0);
+        assets = bound(assets, 1, _largestPartialRequest(balance, total));
         uint256 shares = _sharesForExactAssets(TOKEN1, assets, total);
         uint256 balanceBefore = alice.balance;
         uint256 supplyBefore = vault.balanceOf(alice, TOKEN1);
@@ -1030,6 +1029,29 @@ contract UnwrapForTaoTest is AlphaVaultTestBase {
             assertEq(bytes4(reason), WithdrawTooSmall.selector, "only an unsellable partial request may fail");
             assertEq(vault.balanceOf(alice, TOKEN1), supplyBefore, "refusal preserves the holder's shares");
         }
+    }
+
+    /// @dev The largest request that is both below the slot and redeemable with fewer shares than the
+    ///      holder owns; the virtual offsets can otherwise round a near-full request past that balance.
+    function _largestPartialRequest(uint256 balance, uint256 total) private view returns (uint256) {
+        uint256 supply = vault.totalSupply(TOKEN1);
+        return Math.min(balance - 1, VaultMath.assetsFor(total, supply, supply - 1));
+    }
+
+    function test_NearFullPartialSale_StaysWithinTheHolderBalance() public {
+        _setAlphaPrice(NETUID1, 0.5e18);
+        _setRemoveStakeRate(0.5e18, VaultMath.ALPHA_PRICE_SCALE);
+        _depositForAlice(100 * ALPHA);
+        uint256 total = _plantVaultStakes(NETUID1, 1e15, 0, 0);
+        uint256 assets = _largestPartialRequest(1e15, total);
+        uint256 shares = _sharesForExactAssets(TOKEN1, assets, total);
+        assertLt(shares, vault.balanceOf(alice, TOKEN1), "the request stays spendable");
+
+        vm.prank(alice);
+        (bool ok, bytes memory reason) =
+            address(vault).call(abi.encodeWithSignature("unwrapForTao(uint256,uint256,uint256)", TOKEN1, shares, 0));
+
+        assertTrue(ok || bytes4(reason) == WithdrawTooSmall.selector, "the sale path answers, not the share guard");
     }
 
     function test_ExactFitLaterSlot_PreferredOverEarlierPartial() public {
