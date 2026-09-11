@@ -24,8 +24,6 @@ transaction ordering, and the separate alpha and TAO accounting.
   credits the caller's own mailbox.
 - `CloneFactory`: a vault-owned CREATE2 deployer that checks candidate accounts
   before deployment.
-- `CloneGuard`: one immutable owner per clone, associating the clone's mapped
-  account as a hotkey to prevent incoming coldkey swaps, even with zero stake.
 - `ValidatorRegistry`: 1–64 target hotkeys and basis-point weights per subnet,
   chosen by a quorum of off-chain signers. Its admin manages signer membership.
 
@@ -37,7 +35,7 @@ token unchanged.
 `currentTokenId(netuid)` identifies the live generation. Users first call
 `createMailbox(netuid, deploymentUid)` with a random 32-byte UID; the first call
 on a generation also creates its subnet clone, which later users share. Both
-addresses are checked and guarded before publication. The factory predicts
+addresses are checked and protected before publication. The factory predicts
 candidate addresses, but only the address the vault publishes receives deposits;
 a rejected candidate is retried with another UID.
 

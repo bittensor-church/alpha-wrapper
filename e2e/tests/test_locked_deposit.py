@@ -36,12 +36,11 @@ def _swap_into(signer_uri: str, destination: str) -> None:
 
 def _protected(env, factory: str, address: str) -> None:
     coldkey = h160_to_substrate_b32(address)
-    guard = chain.cast_call(factory, "predictGuard(address)(address)", address)
     owner = chain.cast_call_lines(
         config.STAKING_PRECOMPILE, "getHotkeyOwner(bytes32)(bool,bytes32)", coldkey,
     )
     assert owner[0] == "true"
-    assert owner[1].lower() == h160_to_substrate_b32(guard).lower()
+    assert owner[1].lower() == coldkey.lower(), "a clone owns its own account as a hotkey"
     assert chain.cast_call(
         config.STAKING_PRECOMPILE, "getRejectLockedAlpha(bytes32)(bool)", coldkey,
     ) == "true"
@@ -114,6 +113,9 @@ def test_locked_deposit(env, recovery_window):
     assert mailbox.lower() != poisoned_mailbox.lower()
     _protected(env, factory, clone)
     _protected(env, factory, mailbox)
+    extrinsics.associate_hotkey(h160_to_ss58(clone), signer_uri=LOCK_HOME)
+    _protected(env, factory, clone)
+    print("  A stranger's association attempt leaves the self-owned clone untouched")
     env.vault_send(2_000_000, "idempotent creation failed", "createMailbox(uint256,bytes32)", netuid, _uid())
     assert env.clone_address(token_id) == clone
     assert env.mailbox_address(netuid) == mailbox

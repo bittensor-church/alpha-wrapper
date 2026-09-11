@@ -23,7 +23,7 @@ contract CloneBaseSellAlphaTest is Test {
 
         SubnetClone impl = new SubnetClone();
         clone = SubnetClone(payable(Clones.clone(address(impl))));
-        clone.initialize(address(this));
+        clone.initialize(address(this), false);
 
         cloneColdkey = keccak256(abi.encodePacked("evm:", address(clone)));
         MockStaking(STAKING_PRECOMPILE).setStake(HOTKEY, cloneColdkey, NETUID, 50 ether);

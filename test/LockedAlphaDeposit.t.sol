@@ -37,15 +37,13 @@ contract LockedAlphaDepositTest is AlphaVaultTestBase {
 
     function _assertProtected(address clone) private view {
         bytes32 coldkey = _toSubstrate(clone);
-        address guard = vault.cloneFactory().predictGuard(clone);
         (bool exists, bytes32 owner) = mock.getHotkeyOwner(coldkey);
         assertTrue(exists);
-        assertEq(owner, _toSubstrate(guard));
-        assertGt(guard.code.length, 0);
+        assertEq(owner, coldkey, "a clone owns its own account as a hotkey");
         assertTrue(mock.getRejectLockedAlpha(coldkey));
         assertEq(mock.rejectLockedAlphaCalls(coldkey), 0, "creation must not dispatch a redundant flag write");
-        bytes32[] memory owned = mock.getOwnedHotkeys(owner);
-        assertEq(owned.length, 1, "each guard owns only its own clone");
+        bytes32[] memory owned = mock.getOwnedHotkeys(coldkey);
+        assertEq(owned.length, 1);
         assertEq(owned[0], coldkey);
     }
 
@@ -141,16 +139,6 @@ contract LockedAlphaDepositTest is AlphaVaultTestBase {
         assertEq(vault.totalSupply(TOKEN1), 0);
         (, address accepted) = _create(alice, NEXT_UID);
         assertTrue(accepted != candidate);
-    }
-
-    function test_PrecontaminatedGuard_IsRejected() public {
-        address candidate = vault.cloneFactory().predictSubnetClone(TOKEN1, UID);
-        address guard = vault.cloneFactory().predictGuard(candidate);
-        mock.setColdkeyRoot(_toSubstrate(guard), _toSubstrate(bob));
-        vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(CloneContaminated.selector, guard));
-        vault.createMailbox(NETUID1, UID);
-        _create(alice, NEXT_UID);
     }
 
     function test_SwappedCandidateWithoutCurrentLock_IsStillRejected() public {

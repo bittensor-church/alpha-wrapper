@@ -32,9 +32,9 @@ differ slightly from the preview. Zero waives the minimum.
 
 After a netuid is recycled, call `createMailbox` again before wrapping its new
 registration; your mailbox stays the same and the new subnet clone is created.
-The first user on a generation pays for the shared clone as well as their mailbox
-and both guards; later users pay for a mailbox and guard. A public UID can be
-front-run, so a failed creation can need another attempt.
+The first user on a generation pays for the shared clone as well as their
+mailbox; later users pay for a mailbox. A public UID can be front-run, so a
+failed creation can need another attempt.
 
 A deposit below the vault's conservative stake floor reverts `DepositTooSmall`;
 top up the mailbox before retrying. A mailbox holding conviction-locked alpha

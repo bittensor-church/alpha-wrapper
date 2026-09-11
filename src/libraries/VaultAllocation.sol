@@ -58,10 +58,13 @@ library VaultAllocation {
         }
     }
 
+    /// @dev Accepted clones own their account as a hotkey and must already reject locks; recovery
+    ///      mailboxes skip both, since their candidate may carry an inherited owner or flag.
     function _initializeClone(address clone, bool accepted) private {
-        CloneBase(payable(clone)).initialize(address(this));
-        // Accepted clones must already reject locks; recovery must tolerate inherited flags.
-        if (accepted && !IStaking(STAKING_PRECOMPILE).getRejectLockedAlpha(VaultReads.coldkeyOf(clone))) {
+        CloneBase(payable(clone)).initialize(address(this), accepted);
+        if (!accepted) return;
+        bytes32 coldkey = VaultReads.coldkeyOf(clone);
+        if (!VaultReads.ownedBy(coldkey, coldkey) || !IStaking(STAKING_PRECOMPILE).getRejectLockedAlpha(coldkey)) {
             revert CloneProtectionFailed(clone);
         }
     }

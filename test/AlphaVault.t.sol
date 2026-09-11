@@ -350,13 +350,13 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         address clone = vault.getDepositAddress(alice, NETUID1);
         vm.expectRevert(CloneBase.AlreadyInitialized.selector);
-        CloneBase(payable(clone)).initialize(address(0xdead));
+        CloneBase(payable(clone)).initialize(address(0xdead), false);
     }
 
     function test_RevertWhen_MailboxInitializeForeignWrapper() public {
         address clone = Clones.clone(address(mailboxLogic));
         vm.expectRevert(CloneBase.UnauthorizedInitializer.selector);
-        CloneBase(payable(clone)).initialize(address(0xbeef));
+        CloneBase(payable(clone)).initialize(address(0xbeef), false);
     }
 
     function testFuzz_PreviewWrapScalesLinearlyOnEmptyVault(uint256 assets) public view {
@@ -736,12 +736,12 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     function test_ImplementationMailboxRejectsInitialize() public {
         vm.expectRevert(CloneBase.AlreadyInitialized.selector);
-        mailboxLogic.initialize(address(this));
+        mailboxLogic.initialize(address(this), false);
     }
 
     function test_ImplementationSubnetCloneRejectsInitialize() public {
         vm.expectRevert(CloneBase.AlreadyInitialized.selector);
-        subnetLogic.initialize(address(this));
+        subnetLogic.initialize(address(this), false);
     }
 
     function test_UserCanRetrieveTaoFromMailboxAfterDeregistration() public {

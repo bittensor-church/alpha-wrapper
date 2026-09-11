@@ -42,7 +42,7 @@ Holders rely on:
   a name claimed by anyone else receives nothing.
 - Alpha exits avoid pool trades. TAO exits are opt-in market sales with fees and
   price impact, including price impact borne by remaining holders.
-- Mailboxes and subnet clones are checked and guarded at creation, so locked
+- Mailboxes and subnet clones are checked and protected at creation, so locked
   alpha never backs a share.
 
 ## Why clone contamination matters
@@ -53,18 +53,18 @@ its consent. A poisoned mailbox blocks its user's deposit. Locked alpha priced
 as backing would let an attacker mint shares and exit with honest holders'
 unlocked alpha, leaving them alpha that neither exit can move.
 
-- Creation checks every clone and guard candidate for code, ownership, swap
-  history and locks, then makes each clone a hotkey owned by an immutable guard.
-  The chain refuses coldkey swaps into existing hotkeys, so the protection holds
-  at zero stake. Creation also verifies that the clone rejects locked-alpha
-  transfers. One guard per clone keeps each owner's hotkey list short.
+- Creation checks every clone candidate for code, ownership, swap history and
+  locks, then has the clone claim its own account as a hotkey it owns. The chain
+  refuses coldkey swaps into existing hotkeys, so the protection holds at zero
+  stake, and a clone has no function that could rename or hand over that hotkey.
+  Creation also verifies that the clone rejects locked-alpha transfers.
 - An unexpected lock fails closed: a locked mailbox cannot be wrapped, and a
   locked subnet clone stops prices, deposits, alignment and exits until the lock
   clears. Recovery reads and accrued TAO claims stay available.
 - Funds sent to a rejected candidate are returned without accepting it.
 
-The cost is one creation transaction per user, with guard deployments; the first
-user of a subnet generation also pays for the shared clone. A UID is public once
+The cost is one creation transaction per user; the first user of a subnet
+generation also pays for the shared clone. A UID is public once
 submitted, so a front-run creation can fail and need a retry with a new UID.
 Ordinary unlocked-alpha and TAO donations remain allowed.
 
