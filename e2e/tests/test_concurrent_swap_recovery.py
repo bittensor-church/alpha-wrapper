@@ -147,7 +147,12 @@ def test_concurrent_unequal_swaps_cannot_poison_stray_recovery(env):
     assert abs(missing - max(expected - partial, 0)) <= tolerance
     assert recorded_slots() == record_before, "partial recovery must preserve the full expected backing"
     assert env.frozen_until(token_id) == deadline, "partial recovery must not restart the clock"
-    assert env.stake(successors[1], clone_coldkey, netuid) <= config.ROUNDING_DUST_SLOT_RAO
+    # Check consolidation residue at the same block as its credit; registered keys can earn emissions.
+    residual = int(chain.cast_call(
+        config.STAKING_PRECOMPILE, "getStake(bytes32,bytes32,uint256)(uint256)",
+        successors[1], clone_coldkey, netuid, block=block,
+    ))
+    assert residual <= tolerance, "collection must leave only rounding residue at D"
     assert env.stake(successors[0], clone_coldkey, netuid) >= source_balances[0] - tolerance
     assert env.vault_shares(token_id) == shares
     assert not env.backing_intact(token_id)
@@ -157,7 +162,9 @@ def test_concurrent_unequal_swaps_cannot_poison_stray_recovery(env):
     env.sync_backing(token_id, label="syncBacking [finalize full recovery]")
     parked = env.stake(parking_hotkey, clone_coldkey, netuid)
     assert parked >= max(backing_before, located_before) - tolerance, "both swapped balances must come home"
-    assert env.total_stake_across(clone_coldkey, netuid, hotkeys + successors) <= config.ROUNDING_DUST_TOTAL_RAO
+    assert env.total_stake_across(clone_coldkey, netuid, hotkeys + successors) <= tolerance, (
+        "all non-parking balances together must stay within the consolidation rounding allowance"
+    )
     recorded_keys = re.findall(r"0x[0-9a-fA-F]{64}", recorded_slots())
     assert [key.lower() for key in recorded_keys] == [parking_hotkey.lower()] * 2, (
         "the record must collapse to one parking slot, with no unresolved C slot"
