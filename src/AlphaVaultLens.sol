@@ -210,8 +210,7 @@ contract AlphaVaultLens {
     function getCurrentValidators(uint256 netuid) external view returns (bytes32[] memory) {
         if (netuid > type(uint16).max) revert NetuidOutOfRange();
         // forge-lint: disable-next-line(unsafe-typecast)
-        (bytes32[] memory hotkeys,,) = VaultReads.resolveValidators(validatorRegistry, uint16(netuid));
-        return hotkeys;
+        return VaultReads.resolveValidators(validatorRegistry, uint16(netuid)).hotkeys;
     }
 
     function _shortSince(uint256 tokenId) private view returns (uint64 shortSince) {

@@ -32,14 +32,23 @@ library VaultReads {
         (,, lockedAlpha,,) = IStaking(STAKING_PRECOMPILE).getColdkeyLock(coldkey, netuid);
     }
 
+    /// @dev One attestation: the target hotkeys, their basis-point weights and the coldkey that owned
+    ///      each name when it was attested.
+    struct ValidatorSet {
+        bytes32[] hotkeys;
+        uint16[] weights;
+        bytes32[] owners;
+    }
+
     function resolveValidators(IValidatorRegistry registry, uint16 netuid)
         internal
         view
-        returns (bytes32[] memory hotkeys, uint16[] memory weights, bytes32[] memory owners)
+        returns (ValidatorSet memory set)
     {
-        (hotkeys, weights, owners) = registry.getValidators(netuid);
+        (bytes32[] memory hotkeys, uint16[] memory weights, bytes32[] memory owners) = registry.getValidators(netuid);
         if (hotkeys.length == 0) revert NoValidatorFound();
         if (hotkeys.length != weights.length || hotkeys.length != owners.length) revert ValidatorSetMalformed();
+        set = ValidatorSet({ hotkeys: hotkeys, weights: weights, owners: owners });
     }
 
     function fetchBalances(bytes32[] memory hotkeys, bytes32 coldkey, uint16 netuid)
