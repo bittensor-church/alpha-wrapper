@@ -45,10 +45,10 @@ locks onto it without that account's consent.
 Locked alpha never backs a share:
 
 - Mailboxes and subnet clones are created through `createMailbox` before they
-  are funded. Creation skips candidates that carry a lock, swap history or
-  ownership roles, then has each accepted clone claim its own account as a
-  hotkey, because the chain refuses coldkey swaps into existing hotkeys even at
-  zero stake.
+  are funded. Creation rejects candidates that carry a lock, swap history or
+  ownership roles (`CloneContaminated`; retry with a fresh UID), then has each
+  accepted clone claim its own account as a hotkey, because the chain refuses
+  coldkey swaps into existing hotkeys even at zero stake.
 - `wrap` reverts `LockedDeposit` while the caller's mailbox holds a lock.
 - Priced operations and quotes revert `LockedBacking` while the subnet clone
   holds a lock. The conviction hotkey need not hold the locked stake, so a lock

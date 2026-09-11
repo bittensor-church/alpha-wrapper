@@ -53,20 +53,20 @@ its consent. A poisoned mailbox blocks its user's deposit. Locked alpha priced
 as backing would let an attacker mint shares and exit with honest holders'
 unlocked alpha, leaving them alpha that neither exit can move.
 
-- Creation derives candidate addresses from the previous block hash, so nobody
-  can target one in advance, skips any candidate carrying code, ownership, swap
-  history or a lock, then has the clone claim its own account as a hotkey it
-  owns. The chain refuses coldkey swaps into existing hotkeys, so the protection
-  holds at zero stake, and a clone has no function that could rename or hand over
-  that hotkey. Creation also verifies that the clone rejects locked-alpha
-  transfers.
+- Creation checks the candidate chosen by the caller's UID for code, ownership,
+  swap history and locks, rejects a poisoned one so the caller retries with a
+  fresh UID, then has the clone claim its own account as a hotkey it owns. The
+  chain refuses coldkey swaps into existing hotkeys, so the protection holds at
+  zero stake, and a clone has no function that could rename or hand over that
+  hotkey. Creation also verifies that the clone rejects locked-alpha transfers.
 - An unexpected lock fails closed: a locked mailbox cannot be wrapped, and a
   locked subnet clone stops prices, deposits, alignment and exits until the lock
   clears. Recovery reads and accrued TAO claims stay available.
 
 The cost is one creation transaction per user; the first user of a subnet
-generation also pays for the shared clone. Ordinary unlocked-alpha and TAO
-donations remain allowed.
+generation also pays for the shared clone. A UID is public once submitted, so a
+front-run creation can fail and need a retry with a new UID. Ordinary
+unlocked-alpha and TAO donations remain allowed.
 
 ## Recovery-window tradeoff and late-recovery attack
 
@@ -141,8 +141,8 @@ them; accrued TAO survives either way.
   cutting the trail.
 - Signatures have no expiry; landing a replacement retires a competing old list.
 - Clone protection relies on the chain refusing coldkey swaps into existing
-  hotkeys and rejecting locked-alpha transfers by default. A candidate poisoned
-  within the creating block is skipped and never becomes backing.
+  hotkeys and rejecting locked-alpha transfers by default. A public UID can be
+  front-run into a retry; a poisoned candidate never becomes backing.
 - A dissolved token can wait through a successor's late cleanup when the chain
   no longer distinguishes their registration state.
 

@@ -22,8 +22,8 @@ transaction ordering, and the separate alpha and TAO accounting.
   that position's stake and TAO from other positions.
 - `DepositMailbox`: one accepted address per user and netuid. The vault only
   credits the caller's own mailbox.
-- `CloneFactory`: a vault-owned deployer that checks each candidate account and
-  skips poisoned ones.
+- `CloneFactory`: a vault-owned deployer that checks each candidate account
+  before deployment.
 - `ValidatorRegistry`: 1–64 target hotkeys and basis-point weights per subnet,
   chosen by a quorum of off-chain signers. Its admin manages signer membership.
 
@@ -33,10 +33,10 @@ steps it and creates a different token; old shares retain their old clone and
 refund. A chain migration that rewrites a subnet's registration block leaves its
 token unchanged.
 `currentTokenId(netuid)` identifies the live generation. Users first call
-`createMailbox(netuid)`; the first call on a generation also creates its subnet
-clone, which later users share. Candidate addresses derive from the previous
-block hash, so nobody can target one in advance, and a poisoned candidate is
-skipped. Only the address the vault publishes receives deposits.
+`createMailbox(netuid, uid)` with a random 32-byte UID; the first call on a
+generation also creates its subnet clone, which later users share. A poisoned
+candidate is rejected and retried with another UID. Only the address the vault
+publishes receives deposits.
 
 ## Share value and allocation
 

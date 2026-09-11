@@ -456,7 +456,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_RevertWhen_SharePriceWhenSupplyIsZero() public {
-        vault.createMailbox(NETUID1);
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
         uint256 tokenId = vault.currentTokenId(NETUID1);
         assertEq(vault.totalSupply(tokenId), 0);
         vm.expectRevert(NoSharesOutstanding.selector);
@@ -678,7 +678,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_SubnetCloneCanMoveStake() public {
-        vault.createMailbox(NETUID1);
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
         uint256 tokenId = vault.currentTokenId(NETUID1);
         address clone = vault.subnetClone(tokenId);
         _plantVaultStake(hotkey1, NETUID1, 100 ether);
@@ -691,7 +691,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_SubnetCloneCanUnwrapTao() public {
-        vault.createMailbox(NETUID1);
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
         address clone = vault.subnetClone(vault.currentTokenId(NETUID1));
         vm.deal(clone, 50 ether);
 
@@ -704,7 +704,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_OnlyWrapperCanCallMoveStake() public {
-        vault.createMailbox(NETUID1);
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
         address clone = vault.subnetClone(vault.currentTokenId(NETUID1));
         vm.prank(alice);
         vm.expectRevert(CloneBase.NotWrapper.selector);
@@ -712,7 +712,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_OnlyWrapperCanCallUnwrapTao() public {
-        vault.createMailbox(NETUID1);
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
         address clone = vault.subnetClone(vault.currentTokenId(NETUID1));
         vm.deal(clone, 50 ether);
         vm.prank(alice);
@@ -964,7 +964,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     function test_RevertWhen_CreateMailboxSubnetNotRegistered() public {
         vm.expectRevert(SubnetNotRegistered.selector);
-        vault.createMailbox(42);
+        vault.createMailbox(42, keccak256("fixture-creation"));
     }
 
     function test_CreateMailboxDeploysClone() public {
@@ -973,25 +973,25 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         vm.expectEmit(true, false, false, false);
         emit SubnetProxyCreated(tokenId, address(0));
-        vault.createMailbox(NETUID1);
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
 
         assertTrue(vault.subnetClone(tokenId) != address(0));
     }
 
     function test_CreateMailboxNoopForExistingClone() public {
-        vault.createMailbox(NETUID1);
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
         address first = vault.subnetClone(vault.currentTokenId(NETUID1));
-        vault.createMailbox(NETUID1);
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
         assertEq(vault.subnetClone(vault.currentTokenId(NETUID1)), first);
     }
 
     function test_CreateMailboxDeploysNewCloneAfterRecycle() public {
-        vault.createMailbox(NETUID1);
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
         uint256 oldTokenId = vault.currentTokenId(NETUID1);
 
         _reregisterSubnet(NETUID1);
         uint256 newTokenId = vault.currentTokenId(NETUID1);
-        vault.createMailbox(NETUID1);
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
 
         address oldClone = vault.subnetClone(oldTokenId);
         address newClone = vault.subnetClone(newTokenId);
@@ -2102,7 +2102,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     function test_EmptyVault_ViewsReturnZeroNotRevert() public {
         (AlphaVault fresh, AlphaVaultLens freshLens) = _deployVaultAndLens(address(registry));
-        fresh.createMailbox(NETUID1);
+        fresh.createMailbox(NETUID1, keccak256("fixture-creation"));
         uint256 tokenId = fresh.currentTokenId(NETUID1);
 
         assertEq(freshLens.totalStake(tokenId), 0, "totalStake returns 0 for a vault with no stake");

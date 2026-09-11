@@ -12,11 +12,11 @@ use 18-decimal EVM wei. One native RAO is 1e9 wei.
 
 1. Read `getCurrentValidators(netuid)` on the lens. The deposit must sit under a
    currently attested hotkey; move your stake there first if needed.
-2. Call `createMailbox(netuid)`. This creates your mailbox and, for the first
-   user of this subnet generation, the shared subnet clone. A `CloneContaminated`
-   revert means every fresh candidate was poisoned in that block; retry later.
-3. Read `getDepositAddress(you, netuid)` from the vault. Zero means creation has
-   not succeeded yet.
+2. Call `createMailbox(netuid, uid)` with a fresh random `bytes32` UID. This
+   creates your mailbox and, for the first user of this subnet generation, the
+   shared subnet clone. If it reverts `CloneContaminated`, retry with a new UID.
+3. Read `getDepositAddress(you, netuid)` from the vault, or take the addresses
+   the call returns. Zero means creation has not succeeded yet.
 4. Convert that EVM address to its Substrate coldkey using
    `addressMapping(address)` at `0x080C` (Frontier HashedAddressMapping).
 5. Use Subtensor's `transfer_stake` to send alpha to that coldkey on the same
@@ -32,7 +32,8 @@ differ slightly from the preview. Zero waives the minimum.
 After a netuid is recycled, call `createMailbox` again before wrapping its new
 registration; your mailbox stays the same and the new subnet clone is created.
 The first user on a generation pays for the shared clone as well as their
-mailbox; later users pay for a mailbox.
+mailbox; later users pay for a mailbox. A public UID can be front-run, so a
+failed creation can need another attempt.
 
 A deposit below the vault's conservative stake floor reverts `DepositTooSmall`;
 top up the mailbox before retrying. A mailbox holding conviction-locked alpha

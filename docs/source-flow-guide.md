@@ -54,7 +54,7 @@ cleanup, then old shares redeem the clone's unreserved TAO.
 
 ## Follow a transaction
 
-- **`createMailbox`:** resolve the live generation -> skip poisoned candidates -> deploy
+- **`createMailbox`:** resolve the live generation -> check the candidates -> deploy
   any missing subnet clone and personal mailbox -> initialize as own hotkey owner
   and verify locked-alpha rejection -> publish accepted addresses. All steps are atomic.
 - **`wrap`:** require prepared addresses -> check backing, receivers and that the mailbox holds no lock ->

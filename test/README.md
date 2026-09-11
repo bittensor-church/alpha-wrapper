@@ -64,7 +64,7 @@ requires withdrawals to succeed and closes every holder's position.
 
 ## Public API coverage
 
-`LockedAlphaDepositTest` covers poisoned-candidate skipping, atomic rollback,
+`LockedAlphaDepositTest` covers poisoned-candidate rejection, UID retries, atomic rollback,
 shared-clone reuse, generation changes, postdeployment swap and locked-transfer
 refusal (including empty and TAO-only accounts) and unexpected-lock failures.
 The mock separates conviction hotkeys from actual stake locations; the live

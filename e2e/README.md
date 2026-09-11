@@ -36,9 +36,10 @@ Scenario files in `tests/` cover:
 
 - `test_full_flow.py`: deposits, exits, emissions, rotation and observability.
 - `test_transfers_off.py`, `test_convicted_alpha.py`: disabled transfers and locks.
-- `test_locked_deposit.py`: creation makes mailboxes and subnet clones their own
-  hotkey owners, so coldkey swaps and locked-alpha transfers into them are
-  refused on the real chain; an honest deposit still wraps and exits.
+- `test_locked_deposit.py`: poisoned candidates are rejected before deployment
+  and a fresh UID creates protected mailboxes and subnet clones that own their
+  own hotkeys, so coldkey swaps and locked-alpha transfers into them are refused
+  on the real chain; an honest deposit still wraps and exits.
 - `test_subnet_dissolved.py`: refunds and mailbox recovery.
 - `test_min_stake_floor.py`, `test_dust_dos.py`, `test_min_stake_liveness.py`:
   minimums, top-ups, dust and repeated position changes.

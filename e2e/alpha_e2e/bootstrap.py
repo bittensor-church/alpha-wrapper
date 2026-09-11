@@ -367,7 +367,8 @@ def build_environment(*, recovery_window: int = 3 * 60 * 60) -> Environment:
 
     for netuid in netuids:
         receipt = chain.cast_send(
-            contracts.vault_address, "createMailbox(uint256)", netuid,
+            contracts.vault_address, "createMailbox(uint256,bytes32)", netuid,
+            "0x" + secrets.token_hex(32),
             private_key=config.WRAPPER_USER_PRIVATE_KEY, gas_limit=2_000_000,
         )
         if not chain.receipt_ok(receipt):

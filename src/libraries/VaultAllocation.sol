@@ -34,21 +34,22 @@ library VaultAllocation {
         mapping(uint256 => address) storage subnetClone,
         mapping(address => mapping(uint256 => address)) storage mailboxes,
         uint256 tokenId,
-        uint256 netuid
+        uint256 netuid,
+        bytes32 uid
     ) external returns (address mailbox, address clone) {
         // forge-lint: disable-next-line(unsafe-typecast)
         uint16 nid = uint16(netuid);
         VaultReads.requireNotDissolving(nid);
         clone = subnetClone[tokenId];
         if (clone == address(0)) {
-            clone = factory.deploySubnetClone(tokenId, nid);
+            clone = factory.deploySubnetClone(tokenId, nid, uid);
             _initializeClone(clone);
             subnetClone[tokenId] = clone;
             emit SubnetProxyCreated(tokenId, clone);
         }
         mailbox = mailboxes[msg.sender][netuid];
         if (mailbox == address(0)) {
-            mailbox = factory.deployMailbox(msg.sender, nid);
+            mailbox = factory.deployMailbox(msg.sender, nid, uid);
             _initializeClone(mailbox);
             mailboxes[msg.sender][netuid] = mailbox;
             emit MailboxCreated(msg.sender, netuid, mailbox);

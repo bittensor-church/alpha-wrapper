@@ -1,7 +1,7 @@
 {
-  "createMailbox: existing": "43897",
-  "createMailbox: first on subnet": "472435",
-  "createMailbox: shared subnet": "263420",
+  "createMailbox: existing": "44575",
+  "createMailbox: first on subnet": "472521",
+  "createMailbox: shared subnet": "263802",
   "rebalance: after registry weight update": "267129",
   "rebalance: fully rotated (64 validators)": "11188139",
   "rebalance: release parked position (64 validators)": "10535894",

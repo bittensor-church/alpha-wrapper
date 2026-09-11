@@ -333,7 +333,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
     }
 
     function test_RevertWhen_RecoveringOnATokenWithNoSlots() public {
-        vault.createMailbox(NETUID1);
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey4, _subnetColdkey(NETUID1), NETUID1, 5 ether);
 
         vm.expectRevert(NothingToRecover.selector);
@@ -705,7 +705,7 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         (AlphaVault hourVault, AlphaVaultLens hourLens) = _deployVaultAndLens(address(registry), 1 hours);
         uint256 tokenId = hourVault.currentTokenId(NETUID1);
         vm.prank(alice);
-        (address mailbox,) = hourVault.createMailbox(NETUID1);
+        (address mailbox,) = hourVault.createMailbox(NETUID1, keccak256("fixture-creation"));
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _toSubstrate(mailbox), NETUID1, 10 ether);
         vm.prank(alice);
         hourVault.wrap(NETUID1, hotkey1, 0);
