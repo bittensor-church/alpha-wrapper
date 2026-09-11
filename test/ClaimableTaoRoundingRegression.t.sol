@@ -10,6 +10,9 @@ contract ClaimableTaoRoundingRegressionTest is AlphaVaultTestBase {
     ///      independent of handler seed mapping and future changes to fuzz bounds.
     function test_TinyTransfersAndNearFullExits_PreserveHistoricalClaims() public {
         address carol = makeAddr("carol");
+        // The replayed sales narrow slot balances to the chain's 64-bit amounts; ten slots keep
+        // each of these 1e18-scale deposits inside that range without touching the trace.
+        _setValidatorCount(NETUID1, 10);
         _depositAndWrap(alice, NETUID1, 50 ether);
         _depositAndWrap(bob, NETUID1, 50 ether);
         _depositAndWrap(carol, NETUID1, 50 ether);

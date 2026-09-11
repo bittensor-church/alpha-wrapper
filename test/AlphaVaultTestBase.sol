@@ -61,6 +61,9 @@ abstract contract AlphaVaultTestBase is AttestationHelper, IAlphaVaultAbi {
 
     uint256 internal constant DUST_THRESHOLD = CHAIN_NOMINATOR_MIN_STAKE;
 
+    /// @dev One alpha in RAO. Balances on the sale path must fit the chain's 64-bit stake amounts.
+    uint256 internal constant ALPHA = 1e9;
+
     uint256 public TOKEN1;
     uint256 public TOKEN2;
 

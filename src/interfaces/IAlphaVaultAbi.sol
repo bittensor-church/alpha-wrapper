@@ -13,10 +13,15 @@ interface IAlphaVaultAbi {
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
     event MailboxCreated(address indexed user, uint256 indexed netuid, address mailbox);
-    /// @dev Net of refunds; `taoOut` is EVM wei. A full burn's empty-vault refund rate can mint
-    ///      more shares than were burned, in which case the event's `shares` is zero.
+    /// @dev `sharesBurned` is the caller's burn and `sharesRefunded` the shares minted back for alpha the
+    ///      sale left unsold; a full burn's empty-vault refund rate can exceed the burn. `taoOut` is EVM wei.
     event UnwrappedForTao(
-        address indexed user, uint256 indexed tokenId, uint256 shares, uint256 alphaSold, uint256 taoOut
+        address indexed user,
+        uint256 indexed tokenId,
+        uint256 sharesBurned,
+        uint256 sharesRefunded,
+        uint256 alphaSold,
+        uint256 taoOut
     );
     event MailboxAlphaSoldForTao(
         address indexed user, uint256 indexed netuid, bytes32 indexed hotkey, uint256 alpha, uint256 taoOut

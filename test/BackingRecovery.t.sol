@@ -410,7 +410,11 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
     // --- Life on the parking hotkey --------------------------------------------------------------
 
     function _parkedPosition() private returns (uint256 shares) {
-        shares = _depositAndWrap(alice, NETUID1, 30 ether);
+        return _parkedPosition(30 ether);
+    }
+
+    function _parkedPosition(uint256 amount) private returns (uint256 shares) {
+        shares = _depositAndWrap(alice, NETUID1, amount);
         _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
         vault.syncBacking(TOKEN1);
         vault.recoverStray(TOKEN1, hotkey4);
@@ -444,15 +448,16 @@ contract BackingRecoveryTest is AlphaVaultTestBase {
         assertTrue(lens.awaitingAttestation(TOKEN1), "and the position still waiting");
     }
 
+    // A partial sale narrows the slot balance to the chain's 64-bit stake amounts, so this stays in RAO.
     function test_ParkedPosition_PaysTaoExitsFromTheParkingHotkey() public {
-        uint256 shares = _parkedPosition();
+        uint256 shares = _parkedPosition(30 * ALPHA);
         uint256 before = alice.balance;
 
         vm.prank(alice);
         vault.unwrapForTao(TOKEN1, shares / 2, 0);
 
-        assertEq(alice.balance - before, _expectedTaoFor(15 ether), "the sale pays out");
-        assertEq(_parkedStake(NETUID1), 15 ether, "from the parked balance");
+        assertEq(alice.balance - before, _expectedTaoFor(15 * ALPHA), "the sale pays out");
+        assertEq(_parkedStake(NETUID1), 15 * ALPHA, "from the parked balance");
         assertTrue(lens.awaitingAttestation(TOKEN1), "which stays parked");
     }
 

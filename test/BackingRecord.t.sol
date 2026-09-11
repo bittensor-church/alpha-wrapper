@@ -393,10 +393,11 @@ contract BackingRecordTest is AlphaVaultTestBase {
         assertGt(lens.totalStake(TOKEN1), 30 ether, "emission counted, no false trip");
     }
 
+    // The TAO exit narrows slot balances to the chain's 64-bit stake amounts, so this stays in RAO.
     function test_OperationSequence_NeverTrips() public {
-        uint256 aliceShares = _depositAndWrap(alice, NETUID1, 60 ether);
+        uint256 aliceShares = _depositAndWrap(alice, NETUID1, 60 * ALPHA);
         vault.rebalance(NETUID1);
-        _depositAndWrap(bob, NETUID1, 25 ether);
+        _depositAndWrap(bob, NETUID1, 25 * ALPHA);
         vm.prank(alice);
         vault.unwrap(TOKEN1, aliceShares / 3, _toSubstrate(alice), 0);
         vault.rebalance(NETUID1);
