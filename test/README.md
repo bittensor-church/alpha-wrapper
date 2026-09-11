@@ -50,7 +50,7 @@ requires withdrawals to succeed and closes every holder's position.
 - The staking mock controls observable precompile responses: balances, ownership,
   successors, quotes, rounding, partial fills, and failures. It is not a second
   implementation of the chain. Live scenarios cover actual precompile behavior.
-- Deposit helpers add to existing mailbox balances. A failed wrap must not make a
+- Deposit helpers explicitly create protected mailboxes before adding to existing balances. A failed wrap must not make a
   later simulated deposit erase the earlier one. Balance helpers whose names end
   in `AndWriteOffShortfalls` also synchronize and expire recovery; recovery tests
   should set the precompile response directly instead.
@@ -63,6 +63,12 @@ requires withdrawals to succeed and closes every holder's position.
   invariant campaigns run separately in CI. See the root README for regeneration.
 
 ## Public API coverage
+
+`LockedAlphaDepositTest` covers predeployment candidate rejection, UID retries,
+atomic rollback, shared-clone reuse, generation changes, postdeployment swap and
+locked-transfer refusal (including empty and TAO-only accounts), unexpected-lock
+failures and UID-bound candidate recovery. The mock separates conviction hotkeys
+from actual stake locations; the live scenario checks the chain's behavior.
 
 The public suites cover first deposits, zero deposits, share round trips,
 token generation, validator validation, successor recovery, dissolution phases,

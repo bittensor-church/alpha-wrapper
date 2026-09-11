@@ -28,6 +28,10 @@ library VaultReads {
         return exists && owner == coldkey;
     }
 
+    function lockedAlphaOf(bytes32 coldkey, uint16 netuid) internal view returns (uint256 lockedAlpha) {
+        (,, lockedAlpha,,) = IStaking(STAKING_PRECOMPILE).getColdkeyLock(coldkey, netuid);
+    }
+
     function resolveValidators(IValidatorRegistry registry, uint16 netuid)
         internal
         view

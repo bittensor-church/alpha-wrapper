@@ -3,17 +3,122 @@ pragma solidity ^0.8.20;
 
 import { VaultMath } from "./VaultMath.sol";
 import { VaultReads } from "./VaultReads.sol";
+import { IAlpha, ALPHA_PRECOMPILE } from "../interfaces/IAlpha.sol";
 import { IStaking, STAKING_PRECOMPILE } from "../interfaces/IStaking.sol";
 import { SubnetClone } from "../SubnetClone.sol";
 import { CloneBase } from "../CloneBase.sol";
 import { INeuron, NEURON_PRECOMPILE } from "../interfaces/INeuron.sol";
-import { ConsolidationBelowFloor, GatherBelowFloor, SwappedHotkeyStillAttested } from "../VaultErrors.sol";
+import {
+    ConsolidationBelowFloor,
+    GatherBelowFloor,
+    SwappedHotkeyStillAttested,
+    ZeroColdkey,
+    LockedDeposit,
+    ZeroAmount,
+    DepositTooSmall,
+    CloneProtectionFailed,
+    MailboxAlreadyPrepared
+} from "../VaultErrors.sol";
+import { CloneFactory } from "../CloneFactory.sol";
 
 /// @dev Deployed once and linked into the vault. Stake movement runs by delegatecall, so clones and
 ///      hotkey association still see the vault as caller and logs still originate from the vault.
-///      Callers retain the backing gates, reentrancy guard and accounting; this library writes no storage.
+///      Callers retain the backing gates, reentrancy guard and accounting; this library writes only the
+///      clone records handed to it by storage reference.
 library VaultAllocation {
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
+    event SubnetProxyCreated(uint256 indexed tokenId, address clone);
+    event MailboxCreated(address indexed user, uint256 indexed netuid, bytes32 uid, address mailbox);
+
+    /// @dev Delegatecall keeps the vault as the initializer and the depositor as msg.sender.
+    function prepareClones(
+        CloneFactory factory,
+        mapping(uint256 => address) storage subnetClone,
+        mapping(address => mapping(uint256 => address)) storage mailboxes,
+        mapping(address => bool) storage cloneDeployed,
+        uint256 tokenId,
+        uint256 netuid,
+        bytes32 uid
+    ) external returns (address mailbox, address clone) {
+        // forge-lint: disable-next-line(unsafe-typecast)
+        uint16 nid = uint16(netuid);
+        VaultReads.requireNotDissolving(nid);
+        clone = subnetClone[tokenId];
+        if (clone == address(0)) {
+            clone = factory.deploySubnetClone(tokenId, nid, uid);
+            _initializeClone(cloneDeployed, clone, true);
+            subnetClone[tokenId] = clone;
+            emit SubnetProxyCreated(tokenId, clone);
+        }
+        mailbox = mailboxes[msg.sender][netuid];
+        if (mailbox == address(0)) {
+            mailbox = factory.deployMailbox(msg.sender, nid, uid);
+            _initializeClone(cloneDeployed, mailbox, true);
+            mailboxes[msg.sender][netuid] = mailbox;
+            emit MailboxCreated(msg.sender, netuid, uid, mailbox);
+        }
+    }
+
+    function _initializeClone(mapping(address => bool) storage cloneDeployed, address clone, bool accepted) private {
+        CloneBase(payable(clone)).initialize(address(this));
+        // Accepted clones must already reject locks; recovery must tolerate inherited flags.
+        if (accepted && !IStaking(STAKING_PRECOMPILE).getRejectLockedAlpha(VaultReads.coldkeyOf(clone))) {
+            revert CloneProtectionFailed(clone);
+        }
+        cloneDeployed[clone] = true;
+    }
+
+    function admitDeposit(address userClone, bytes32 chosenHotkey, uint16 nid)
+        external
+        view
+        returns (uint256 totalDeposit, uint256 alphaPriceE18)
+    {
+        bytes32 mailboxColdkey = VaultReads.coldkeyOf(userClone);
+        totalDeposit = IStaking(STAKING_PRECOMPILE).getStake(chosenHotkey, mailboxColdkey, nid);
+        if (totalDeposit == 0) revert ZeroAmount();
+        alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
+        if (alphaPriceE18 != 0 && _taoValue(totalDeposit, alphaPriceE18) < _minStakeTao()) {
+            revert DepositTooSmall();
+        }
+        if (VaultReads.lockedAlphaOf(mailboxColdkey, nid) != 0) revert LockedDeposit();
+    }
+
+    /// @dev Delegatecall keeps the depositor as msg.sender and the vault as the clone's caller.
+    function reclaimCandidateFunds(
+        CloneFactory factory,
+        mapping(address => mapping(uint256 => address)) storage mailboxes,
+        mapping(address => bool) storage cloneDeployed,
+        uint256 netuid,
+        bytes32 uid,
+        bytes32 hotkey,
+        bytes32 destinationColdkey
+    ) external {
+        address mailbox = factory.predictMailbox(msg.sender, netuid, uid);
+        if (mailbox == mailboxes[msg.sender][netuid]) revert MailboxAlreadyPrepared();
+        if (!cloneDeployed[mailbox]) {
+            factory.deployRecoveryMailbox(msg.sender, netuid, uid);
+            _initializeClone(cloneDeployed, mailbox, false);
+        }
+        uint256 tao = mailbox.balance;
+        uint256 alpha;
+        if (hotkey != bytes32(0)) {
+            if (destinationColdkey == bytes32(0)) revert ZeroColdkey();
+            bytes32 coldkey = VaultReads.coldkeyOf(mailbox);
+            alpha = IStaking(STAKING_PRECOMPILE).getStake(hotkey, coldkey, netuid);
+            if (alpha != 0) {
+                // forge-lint: disable-next-line(unsafe-typecast)
+                uint16 nid = uint16(netuid);
+                VaultReads.requireTransfersEnabled(nid);
+                if (
+                    VaultReads.lockedAlphaOf(coldkey, nid) != 0
+                        && IStaking(STAKING_PRECOMPILE).getRejectLockedAlpha(destinationColdkey)
+                ) revert LockedDeposit();
+                _flush(mailbox, hotkey, destinationColdkey, nid, alpha);
+            }
+        }
+        if (alpha == 0 && tao == 0) revert ZeroAmount();
+        CloneBase(payable(mailbox)).unwrapTao(payable(msg.sender), tao);
+    }
 
     /// @dev Keep funded slots on resolved keys; empty slots need a usable receiving key. A key is usable
     ///      only under the coldkey that owned the attested name, so a vacated name claimed by anyone

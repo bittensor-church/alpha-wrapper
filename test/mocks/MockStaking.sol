@@ -48,7 +48,11 @@ contract MockStaking {
         revert(reason);
     }
 
+    /// @dev Alpha per (coldkey, netuid) across hotkeys, the total the chain's lock checks read.
+    mapping(bytes32 => mapping(uint256 => uint256)) public coldkeyAlpha;
+
     function setStake(bytes32 hotkey, bytes32 coldkey, uint256 netuid, uint256 amount) external {
+        coldkeyAlpha[coldkey][netuid] = coldkeyAlpha[coldkey][netuid] + amount - stakes[hotkey][coldkey][netuid];
         stakes[hotkey][coldkey][netuid] = amount;
     }
 
@@ -79,6 +83,55 @@ contract MockStaking {
         return _belowTaoValue(amount, netuid, _chainMinTransferTao);
     }
 
+    // --- Conviction locks -------------------------------------------------------------------------
+    // The chain keys a lock by hotkey as well; only the coldkey-wide locked mass matters to the vault.
+
+    /// @dev Locked mass per (coldkey, netuid) in alpha RAO, and the one hotkey the chain keys it to.
+    mapping(bytes32 => mapping(uint256 => uint256)) public lockedAlpha;
+    mapping(bytes32 => mapping(uint256 => bytes32)) public lockHotkey;
+    mapping(bytes32 => bool) private _acceptsLockedAlpha;
+    mapping(bytes32 => uint256) public rejectLockedAlphaCalls;
+
+    function setLockedAlpha(bytes32 coldkey, uint256 netuid, bytes32 hotkey, uint256 amount) external {
+        lockedAlpha[coldkey][netuid] = amount;
+        lockHotkey[coldkey][netuid] = amount == 0 ? bytes32(0) : hotkey;
+    }
+
+    /// @dev Models the flag a coldkey swap copies onto an account with no stake.
+    function setAcceptsLockedAlpha(bytes32 coldkey, bool accepts) external {
+        _acceptsLockedAlpha[coldkey] = accepts;
+    }
+
+    function getRejectLockedAlpha(bytes32 coldkey) external view returns (bool) {
+        return !_acceptsLockedAlpha[coldkey];
+    }
+
+    function getColdkeyLock(bytes32 coldkey, uint256 netuid)
+        external
+        view
+        returns (bool exists, bytes32 hotkey, uint256 locked, uint128 conviction, bool perpetual)
+    {
+        locked = lockedAlpha[coldkey][netuid];
+        return (locked != 0, lockHotkey[coldkey][netuid], locked, conviction, perpetual);
+    }
+
+    function setRejectLockedAlpha(bool enabled) external payable {
+        bytes32 coldkey = _senderColdkey();
+        _acceptsLockedAlpha[coldkey] = !enabled;
+        rejectLockedAlphaCalls[coldkey]++;
+    }
+
+    /// @dev Unlocked alpha leaves first; whatever a transfer takes beyond it carries the lock along.
+    function _carriedLock(bytes32 coldkey, uint256 netuid, uint256 amount) private view returns (uint256) {
+        uint256 locked = lockedAlpha[coldkey][netuid];
+        if (locked == 0) return 0;
+        uint256 total = coldkeyAlpha[coldkey][netuid];
+        uint256 available = total > locked ? total - locked : 0;
+        if (amount <= available) return 0;
+        uint256 excess = amount - available;
+        return excess > locked ? locked : excess;
+    }
+
     function transferStake(
         bytes32 destination_coldkey,
         bytes32 hotkey,
@@ -95,9 +148,24 @@ contract MockStaking {
         if (_belowMinTransfer(amount, origin_netuid)) {
             _fail("MockStaking: AmountTooLow");
         }
-        stakes[hotkey][_senderColdkey()][origin_netuid] -= amount;
+        bytes32 origin = _senderColdkey();
+        uint256 carriedLock = _carriedLock(origin, origin_netuid, amount);
+        if (carriedLock != 0) {
+            if (!_acceptsLockedAlpha[destination_coldkey]) {
+                _fail("MockStaking: AccountRejectsLockedAlpha");
+            }
+            lockedAlpha[origin][origin_netuid] -= carriedLock;
+            if (lockedAlpha[origin][origin_netuid] == 0) lockHotkey[origin][origin_netuid] = bytes32(0);
+            if (lockedAlpha[destination_coldkey][destination_netuid] == 0) {
+                lockHotkey[destination_coldkey][destination_netuid] = hotkey;
+            }
+            lockedAlpha[destination_coldkey][destination_netuid] += carriedLock;
+        }
+        stakes[hotkey][origin][origin_netuid] -= amount;
+        coldkeyAlpha[origin][origin_netuid] -= amount;
         uint256 credited = amount > transferStakeRoundingLoss ? amount - transferStakeRoundingLoss : 0;
         stakes[hotkey][destination_coldkey][destination_netuid] += credited;
+        coldkeyAlpha[destination_coldkey][destination_netuid] += credited;
     }
 
     function setTransferStakeRoundingLoss(uint256 loss) external {
@@ -137,7 +205,9 @@ contract MockStaking {
         }
         uint256 moved = amount > moveStakeResidual ? amount - moveStakeResidual : 0;
         stakes[origin_hotkey][_senderColdkey()][origin_netuid] -= moved;
+        coldkeyAlpha[_senderColdkey()][origin_netuid] -= moved;
         stakes[destination_hotkey][_senderColdkey()][destination_netuid] += moved - moveStakeRoundingLoss;
+        coldkeyAlpha[_senderColdkey()][destination_netuid] += moved - moveStakeRoundingLoss;
     }
 
     function getStake(bytes32 hotkey, bytes32 coldkey, uint256 netuid) external view returns (uint256) {
@@ -163,6 +233,7 @@ contract MockStaking {
     function setHotkeyOwner(bytes32 hotkey, bytes32 coldkey) external {
         _hotkeyOwned[hotkey] = true;
         _hotkeyOwner[hotkey] = coldkey;
+        _ownedHotkeys[coldkey].push(hotkey);
     }
 
     /// @dev The owner a hotkey answers with while it has one, ignoring a deleted record.
@@ -178,11 +249,52 @@ contract MockStaking {
         hotkeyDeleted[hotkey] = false;
         _hotkeyOwned[hotkey] = true;
         _hotkeyOwner[hotkey] = coldkey;
+        _ownedHotkeys[coldkey].push(hotkey);
     }
 
     function getHotkeyOwner(bytes32 hotkey) external view returns (bool, bytes32) {
         bool exists = _hotkeyOwned[hotkey] && !hotkeyDeleted[hotkey];
         return (exists, exists ? ownerOf(hotkey) : bytes32(0));
+    }
+
+    mapping(bytes32 => bytes32[]) private _ownedHotkeys;
+    mapping(bytes32 => bytes32) private _coldkeyRoot;
+
+    function getOwnedHotkeys(bytes32 coldkey) external view returns (bytes32[] memory) {
+        return _ownedHotkeys[coldkey];
+    }
+
+    function getColdkeyRoot(bytes32 coldkey) external view returns (bool, bytes32) {
+        return (_coldkeyRoot[coldkey] != bytes32(0), _coldkeyRoot[coldkey]);
+    }
+
+    function setColdkeyRoot(bytes32 coldkey, bytes32 root) external {
+        _coldkeyRoot[coldkey] = root;
+    }
+
+    /// @dev Scoped fixture for an incoming coldkey swap, with the runtime's destination gates.
+    function simulateColdkeySwap(bytes32 source, bytes32 destination, uint256 netuid, bytes32[] calldata hotkeys)
+        external
+    {
+        (bool isHotkey,) = this.getHotkeyOwner(destination);
+        require(!isHotkey, "MockStaking: NewColdKeyIsHotkey");
+        require(
+            coldkeyAlpha[destination][netuid] == 0 && _ownedHotkeys[destination].length == 0,
+            "MockStaking: ColdKeyAlreadyAssociated"
+        );
+        for (uint256 i; i < hotkeys.length; ++i) {
+            uint256 amount = stakes[hotkeys[i]][source][netuid];
+            stakes[hotkeys[i]][source][netuid] = 0;
+            stakes[hotkeys[i]][destination][netuid] += amount;
+            coldkeyAlpha[source][netuid] -= amount;
+            coldkeyAlpha[destination][netuid] += amount;
+        }
+        lockedAlpha[destination][netuid] = lockedAlpha[source][netuid];
+        lockHotkey[destination][netuid] = lockHotkey[source][netuid];
+        delete lockedAlpha[source][netuid];
+        delete lockHotkey[source][netuid];
+        _acceptsLockedAlpha[destination] = _acceptsLockedAlpha[source];
+        _coldkeyRoot[destination] = source;
     }
 
     mapping(bytes32 => mapping(uint256 => bytes32)) private _successor;
@@ -247,6 +359,11 @@ contract MockStaking {
             _fail("MockStaking: hotkey has no owner");
         }
         uint256 staked = stakes[hotkey][_senderColdkey()][netuid];
+        uint256 locked = lockedAlpha[_senderColdkey()][netuid];
+        uint256 total = coldkeyAlpha[_senderColdkey()][netuid];
+        if (alphaAmount > (total > locked ? total - locked : 0)) {
+            _fail("MockStaking: StakeUnavailable");
+        }
         // Legacy arithmetic fixtures credit one wei per TAO RAO. Native-unit campaigns enable 1e9 below.
         uint256 consumed = removeStakeCap != 0 && alphaAmount > removeStakeCap ? removeStakeCap : alphaAmount;
         uint256 taoOut = quoteTaoOut(consumed);
@@ -262,6 +379,7 @@ contract MockStaking {
                 remainder = 0;
             }
         }
+        coldkeyAlpha[_senderColdkey()][netuid] -= staked - remainder;
         stakes[hotkey][_senderColdkey()][netuid] = remainder;
         (bool ok,) = msg.sender.call{ value: nativeTaoUnits ? taoOut * VaultMath.TAO_NATIVE_QUANTUM : taoOut }("");
         require(ok, "MockStaking: TAO credit failed");

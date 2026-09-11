@@ -333,15 +333,6 @@ def _deploy_contracts(netuids: List[int], hotkey_pubkeys: List[str], *, recovery
               + ", ".join(f"{pubkey[:18]}..." for pubkey in subnet_pubkeys))
     registry_block_end = chain.cast_block_number()
 
-    for netuid in netuids:
-        receipt = chain.cast_send(
-            vault_address, "createSubnetProxy(uint256)", netuid,
-            private_key=config.DEPLOYER_PRIVATE_KEY, gas_limit=500_000,
-        )
-        if not chain.receipt_ok(receipt):
-            raise RuntimeError(f"createSubnetProxy failed for netuid {netuid}: {receipt}")
-        print(f"  Subnet proxy created for netuid {netuid}")
-
     contracts = DeployedContracts(
         vault_address=vault_address,
         lens_address=lens_address,
@@ -373,6 +364,16 @@ def build_environment(*, recovery_window: int = 3 * 60 * 60) -> Environment:
         "User account", config.WRAPPER_USER_ADDRESS, config.WRAPPER_USER_SS58,
         minimum_tao=5, transfer_tao=100,
     )
+
+    for netuid in netuids:
+        receipt = chain.cast_send(
+            contracts.vault_address, "createMailbox(uint256,bytes32)", netuid,
+            "0x" + secrets.token_hex(32),
+            private_key=config.WRAPPER_USER_PRIVATE_KEY, gas_limit=2_000_000,
+        )
+        if not chain.receipt_ok(receipt):
+            raise RuntimeError(f"createMailbox failed for netuid {netuid}: {receipt}")
+        print(f"  Protected mailbox and subnet clone prepared for netuid {netuid}")
 
     wrapper_substrate_coldkey = substrate.h160_to_substrate_b32(config.WRAPPER_USER_ADDRESS)
     print(f"  Wrapper substrate coldkey: {wrapper_substrate_coldkey}")

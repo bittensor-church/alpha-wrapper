@@ -215,9 +215,6 @@ def test_dissolution_refunds_holders_and_mailboxes_without_affecting_other_subne
     print("  get_volumes reports dissolved TAO separately from live alpha volume")
 
     # --- Phase 12: recover the never-wrapped mailbox as native TAO -----------------
-    assert chain.cast_code(parked_mailbox) == "0x", (
-        "mailbox clone was materialized before reclaim - lazy-deploy path not exercised"
-    )
     parked_mailbox_tao_before = chain.cast_balance_wei(parked_mailbox)
     user_tao_before = env.user_tao_wei()
     mailbox_receipt = env.vault_send(
@@ -225,9 +222,6 @@ def test_dissolution_refunds_holders_and_mailboxes_without_affecting_other_subne
         "reclaimTaoFromMailbox(uint256)", parked_netuid,
     )
 
-    assert chain.cast_code(parked_mailbox) != "0x", (
-        "reclaimTaoFromMailbox did not deploy the mailbox clone"
-    )
     assert chain.cast_balance_wei(parked_mailbox) == 0, (
         "mailbox not fully drained after reclaimTaoFromMailbox"
     )
@@ -236,7 +230,7 @@ def test_dissolution_refunds_holders_and_mailboxes_without_affecting_other_subne
     )
     assert gained == parked_mailbox_tao_before, "mailbox reclaim paid less than the drained balance"
     print(f"  Never-wrapped mailbox recovered ({parked_mailbox_tao_before} wei): "
-          f"clone deployed on demand, user net +{gained} wei, mailbox drained to 0")
+          f"user net +{gained} wei, mailbox drained to 0")
 
     # --- Phase 13: the untouched subnet still exits normally -----------------------
     surviving_alpha, _ = env.preview_unwrap(surviving_token_id, surviving_shares)

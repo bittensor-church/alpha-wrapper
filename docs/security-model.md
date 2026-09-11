@@ -15,6 +15,10 @@ merely because that exit exists.
 Holders rely on:
 
 - Subtensor and its precompiles for stake ownership, moves, accounting and refunds.
+  Creation requires `getHotkeyOwner`, `getOwnedHotkeys`, `getColdkeyRoot`,
+  `getColdkeyLock`, `getRejectLockedAlpha` and
+  `tryAssociateHotkey`. The lineage and ownership readers must reflect current
+  runtime storage; an unsupported runtime cannot prepare clones.
 - Registry governance and validator performance.
 - A funded, responsive watcher to repair unresolved swaps and park backing, and
   attesters who publish a new set to release a parked position. These
@@ -38,6 +42,31 @@ Holders rely on:
   a name claimed by anyone else receives nothing.
 - Alpha exits avoid pool trades. TAO exits are opt-in market sales with fees and
   price impact, including price impact borne by remaining holders.
+- Mailboxes and subnet clones are checked and guarded at creation, so locked
+  alpha never backs a share.
+
+## Why clone contamination matters
+
+A coldkey swap can plant locks, account settings and ownership roles on any
+account that stakes nothing, including a future mailbox or subnet clone, without
+its consent. A poisoned mailbox blocks its user's deposit. Locked alpha priced
+as backing would let an attacker mint shares and exit with honest holders'
+unlocked alpha, leaving them alpha that neither exit can move.
+
+- Creation checks every clone and guard candidate for code, ownership, swap
+  history and locks, then makes each clone a hotkey owned by an immutable guard.
+  The chain refuses coldkey swaps into existing hotkeys, so the protection holds
+  at zero stake. Creation also verifies that the clone rejects locked-alpha
+  transfers. One guard per clone keeps each owner's hotkey list short.
+- An unexpected lock fails closed: a locked mailbox cannot be wrapped, and a
+  locked subnet clone stops prices, deposits, alignment and exits until the lock
+  clears. Recovery reads and accrued TAO claims stay available.
+- Funds sent to a rejected candidate are returned without accepting it.
+
+The cost is one creation transaction per user, with guard deployments; the first
+user of a subnet generation also pays for the shared clone. A UID is public once
+submitted, so a front-run creation can fail and need a retry with a new UID.
+Ordinary unlocked-alpha and TAO donations remain allowed.
 
 ## Recovery-window tradeoff and late-recovery attack
 
@@ -111,6 +140,9 @@ them; accrued TAO survives either way.
   Any validator in the set can force a parking event by renaming its key and
   cutting the trail.
 - Signatures have no expiry; landing a replacement retires a competing old list.
+- Clone protection relies on the chain refusing coldkey swaps into existing
+  hotkeys and rejecting locked-alpha transfers by default. A public UID can be
+  front-run into a retry; a poisoned candidate never becomes backing.
 - A dissolved token can wait through a successor's late cleanup when the chain
   no longer distinguishes their registration state.
 

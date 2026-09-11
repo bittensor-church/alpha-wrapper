@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import { ERC1155 } from "@openzeppelin/contracts/token/ERC1155/ERC1155.sol";
 import { ERC1155Supply } from "@openzeppelin/contracts/token/ERC1155/extensions/ERC1155Supply.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
+import { CloneFactory } from "./CloneFactory.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { CloneBase } from "./CloneBase.sol";
 import { SubnetClone } from "./SubnetClone.sol";
@@ -22,8 +22,12 @@ import {
     BackingUnchanged,
     ChosenHotkeyNotInSet,
     ClaimBelowNativePrecision,
-    DepositTooSmall,
     InsufficientShares,
+    LockedDeposit,
+    LockedBacking,
+    MailboxNotPrepared,
+    MailboxAlreadyPrepared,
+    SubnetCloneNotPrepared,
     NetuidOutOfRange,
     NothingToRecover,
     NothingToUnwrap,
@@ -51,6 +55,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     // Keep errors bubbled by VaultAllocation in the vault ABI for callers and decoders.
     error ConsolidationBelowFloor();
     error GatherBelowFloor();
+    error DepositTooSmall();
+    error CloneProtectionFailed(address clone);
+    error CloneContaminated(address candidate);
 
     /// @dev One shortfall clock per token. A parked position rests on `parkingHotkey` until the
     ///      registry nonce moves past `parkedAtNonce`; zero means the position is not parked.
@@ -59,8 +66,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         uint256 parkedAtNonce;
     }
 
-    address public immutable mailboxLogic;
-    address public immutable subnetLogic;
+    CloneFactory public immutable cloneFactory;
     IValidatorRegistry public immutable validatorRegistry;
     /// @notice Seconds from a declared shortfall until `syncBacking` may write it off.
     uint256 public immutable recoveryWindow;
@@ -68,6 +74,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     bytes32 public immutable parkingHotkey;
 
     mapping(address => bool) public cloneDeployed;
+    mapping(address => mapping(uint256 => address)) private _mailboxes;
     mapping(uint256 => address) public subnetClone;
 
     mapping(uint256 => VaultReads.Slot[]) private _slots;
@@ -95,6 +102,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @dev Weight-alignment moves only; excludes consolidation and payout-gather hops.
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
+    event MailboxCreated(address indexed user, uint256 indexed netuid, bytes32 uid, address mailbox);
     /// @dev Net of refunds; `taoOut` is EVM wei. A full burn's empty-vault refund rate can mint
     ///      more shares than were burned, in which case the event's `shares` is zero.
     event UnwrappedForTao(
@@ -131,8 +139,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         if (!VaultReads.ownedBy(_parkingHotkey, VaultReads.coldkeyOf(address(this)))) {
             revert ParkingHotkeyUnavailable();
         }
-        mailboxLogic = _mailboxLogic;
-        subnetLogic = _subnetLogic;
+        cloneFactory = new CloneFactory(_mailboxLogic, _subnetLogic);
         validatorRegistry = IValidatorRegistry(_validatorRegistry);
         recoveryWindow = _recoveryWindow;
         parkingHotkey = _parkingHotkey;
@@ -148,16 +155,22 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         return uint256(nid) | (uint256(subnet.getRegisteredSubnetCounter(nid)) << VaultMath.NETUID_BITS);
     }
 
-    function createSubnetProxy(uint256 netuid) external {
-        uint256 tokenId = currentTokenId(netuid);
-        if (subnetClone[tokenId] != address(0)) return;
-        _deploySubnetClone(tokenId);
+    /// @notice Prepare a protected mailbox before sending alpha. The first caller also prepares
+    ///         the shared subnet clone. A fresh random UID lets a rejected candidate be retried.
+    function createMailbox(uint256 netuid, bytes32 deploymentUid)
+        external
+        nonReentrant
+        returns (address mailbox, address clone)
+    {
+        return VaultAllocation.prepareClones(
+            cloneFactory, subnetClone, _mailboxes, cloneDeployed, currentTokenId(netuid), netuid, deploymentUid
+        );
     }
 
+    /// @notice Zero until `createMailbox` succeeds.
     function getDepositAddress(address user, uint256 netuid) public view returns (address) {
         if (netuid > type(uint16).max) revert NetuidOutOfRange();
-        bytes32 salt = _cloneSalt(user, netuid);
-        return Clones.predictDeterministicAddress(mailboxLogic, salt, address(this));
+        return _mailboxes[user][netuid];
     }
 
     /// @notice Whether deposits and weight alignment wait for an attestation newer than the parking one.
@@ -169,6 +182,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @notice Collect the caller's mailbox stake under one currently attested hotkey and mint shares.
     /// @dev Consolidates dropped validators and aligns weights. Unresolved backing blocks collection;
     ///      use mailbox reclaim if a swap or registry update leaves the deposit under an unlisted key.
+    ///      A mailbox holding conviction-locked alpha is refused; reclaim it to a coldkey that accepts locks.
     function wrap(uint256 netuid, bytes32 chosenHotkey, uint256 minSharesOut) external nonReentrant {
         if (chosenHotkey == bytes32(0)) revert ZeroHotkey();
 
@@ -184,21 +198,14 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         if (chosenIndex == VaultMath.INDEX_NOT_FOUND) revert ChosenHotkeyNotInSet();
 
         address clone = subnetClone[tokenId];
-        if (clone == address(0)) clone = _deploySubnetClone(tokenId);
+        if (clone == address(0)) revert SubnetCloneNotPrepared();
 
-        address userClone = _ensureMailboxClone(msg.sender, netuid);
+        address userClone = _requireMailbox(msg.sender, netuid);
         bytes32 destColdkey = VaultReads.coldkeyOf(clone);
-
         (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _openBacking(tokenId, destColdkey, nid);
         bytes32[] memory actives = _assignFundableActives(slots, backing, hotkeys, owners, nid);
 
-        uint256 totalDeposit = _mailboxBalance(userClone, chosenHotkey, nid);
-        if (totalDeposit == 0) revert ZeroAmount();
-
-        uint256 alphaPriceE18 = IAlpha(ALPHA_PRECOMPILE).getAlphaPrice(nid);
-        if (_isBelowFloorAtReadPrice(totalDeposit, alphaPriceE18)) {
-            revert DepositTooSmall();
-        }
+        (uint256 totalDeposit, uint256 alphaPriceE18) = VaultAllocation.admitDeposit(userClone, chosenHotkey, nid);
 
         uint256 heldBefore = IStaking(STAKING_PRECOMPILE).getStake(chosenHotkey, destColdkey, nid);
         // A fresh deposit can carry rotated-out dust through above-floor consolidation hops.
@@ -441,16 +448,16 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         _settle(tokenId, coldkey, hotkeys, actives);
     }
 
-    /// @dev Deploys the mailbox lazily: refunds can arrive at its predicted address before deployment.
+    /// @notice Reclaim native TAO from the caller's prepared mailbox, including after dissolution.
     function reclaimTaoFromMailbox(uint256 netuid) external nonReentrant {
-        address predicted = getDepositAddress(msg.sender, netuid);
+        address predicted = _requireMailbox(msg.sender, netuid);
         uint256 amount = predicted.balance;
         if (amount == 0) revert ZeroAmount();
-        _ensureMailboxClone(msg.sender, netuid);
         DepositMailbox(payable(predicted)).unwrapTao(payable(msg.sender), amount);
     }
 
-    /// @dev Unlike wrapping, reclaim accepts hotkeys outside the current registry set.
+    /// @dev Unlike wrapping, reclaim accepts hotkeys outside the current registry set. A locked mailbox
+    ///      empties only into a coldkey that accepts locked alpha; the lock moves with the alpha.
     function reclaimAlphaFromMailbox(uint256 netuid, bytes32 hotkey, bytes32 destSubstrateColdkey)
         external
         nonReentrant
@@ -458,15 +465,19 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         if (hotkey == bytes32(0)) revert ZeroHotkey();
         if (destSubstrateColdkey == bytes32(0)) revert ZeroColdkey();
 
-        address predicted = getDepositAddress(msg.sender, netuid);
+        address predicted = _requireMailbox(msg.sender, netuid);
         bytes32 mailboxColdkey = VaultReads.coldkeyOf(predicted);
         uint256 amount = IStaking(STAKING_PRECOMPILE).getStake(hotkey, mailboxColdkey, netuid);
         if (amount == 0) revert ZeroAmount();
 
-        _ensureMailboxClone(msg.sender, netuid);
         // forge-lint: disable-next-line(unsafe-typecast)
         uint16 nid = uint16(netuid);
         VaultReads.requireTransfersEnabled(nid);
+        // The chain refuses a locked transfer into a rejecting coldkey and burns the forwarded gas.
+        if (
+            VaultReads.lockedAlphaOf(mailboxColdkey, nid) != 0
+                && IStaking(STAKING_PRECOMPILE).getRejectLockedAlpha(destSubstrateColdkey)
+        ) revert LockedDeposit();
         _flush(predicted, hotkey, destSubstrateColdkey, nid, amount);
     }
 
@@ -474,12 +485,14 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     function reclaimMailboxAlphaAsTao(uint256 netuid, bytes32 hotkey, uint256 minTaoOut) external nonReentrant {
         if (netuid > type(uint16).max) revert NetuidOutOfRange();
         if (hotkey == bytes32(0)) revert ZeroHotkey();
-        address predicted = getDepositAddress(msg.sender, netuid);
+        address predicted = _requireMailbox(msg.sender, netuid);
         bytes32 mailboxColdkey = VaultReads.coldkeyOf(predicted);
         uint256 amount = IStaking(STAKING_PRECOMPILE).getStake(hotkey, mailboxColdkey, netuid);
         if (amount == 0) revert ZeroAmount();
+        // Locked alpha cannot be sold; the chain would refuse and burn the forwarded gas.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        if (VaultReads.lockedAlphaOf(mailboxColdkey, uint16(netuid)) != 0) revert LockedDeposit();
 
-        _ensureMailboxClone(msg.sender, netuid);
         uint256 balanceBefore = predicted.balance;
         // forge-lint: disable-next-line(unsafe-typecast)
         _sell(predicted, hotkey, uint16(netuid), amount);
@@ -783,6 +796,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         returns (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing)
     {
         if (recovery[tokenId].shortSince != 0) revert ShortfallOnFile();
+        if (VaultReads.lockedAlphaOf(coldkey, netuid) != 0) revert LockedBacking();
         slots = _slots[tokenId];
         backing = VaultReads.resolveBacking(slots, coldkey, netuid);
         // Expiry permits a write-off; it does not authorize deposits or exits to book one implicitly.
@@ -892,29 +906,21 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         }
     }
 
-    function _mailboxBalance(address userClone, bytes32 chosenHotkey, uint16 netuid) private view returns (uint256) {
-        return IStaking(STAKING_PRECOMPILE).getStake(chosenHotkey, VaultReads.coldkeyOf(userClone), netuid);
+    function _requireMailbox(address user, uint256 netuid) private view returns (address mailbox) {
+        mailbox = getDepositAddress(user, netuid);
+        if (mailbox == address(0)) revert MailboxNotPrepared();
     }
 
-    function _ensureMailboxClone(address user, uint256 netuid) private returns (address userClone) {
-        bytes32 salt = _cloneSalt(user, netuid);
-        userClone = Clones.predictDeterministicAddress(mailboxLogic, salt, address(this));
-        if (!cloneDeployed[userClone]) {
-            Clones.cloneDeterministic(mailboxLogic, salt);
-            DepositMailbox(payable(userClone)).initialize(address(this));
-            cloneDeployed[userClone] = true;
-        }
-    }
-
-    function _cloneSalt(address user, uint256 netuid) private pure returns (bytes32) {
-        return keccak256(abi.encodePacked(user, netuid));
-    }
-
-    function _deploySubnetClone(uint256 tokenId) private returns (address clone) {
-        clone = Clones.clone(subnetLogic);
-        SubnetClone(payable(clone)).initialize(address(this));
-        subnetClone[tokenId] = clone;
-        emit SubnetProxyCreated(tokenId, clone);
+    /// @notice Recover funds sent to a rejected candidate. Zero hotkey reclaims TAO only.
+    /// @dev A candidate deployed for recovery can never become the accepted mailbox.
+    function reclaimUnpreparedMailbox(uint256 netuid, bytes32 uid, bytes32 hotkey, bytes32 destinationColdkey)
+        external
+        nonReentrant
+    {
+        if (netuid > type(uint16).max) revert NetuidOutOfRange();
+        VaultAllocation.reclaimCandidateFunds(
+            cloneFactory, _mailboxes, cloneDeployed, netuid, uid, hotkey, destinationColdkey
+        );
     }
 
     function _syncTao(uint256 tokenId) private {
