@@ -31,8 +31,8 @@ must also belong to the owner recorded when the validator was attested.
 ```text
 Missing backing -> syncBacking secures located backing -> fixed recovery window
                        |
-                       +-> recoverStray(source) -> collect into parking -> sync finalizes
-                       +-> full coverage -> recovery complete; parked
+                       +-> recoverStray(source) -> collect into parking; window stays open
+                       +-> full coverage + sync -> collect returns; recovery complete; parked
                        +-> expiry + sync -> collect returns; write off deficit; parked
 
 Parked -> newer registry attestation -> next wrap/rebalance/alpha exit can
