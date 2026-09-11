@@ -34,6 +34,29 @@ have taken. `unwrapForTao` and `reclaimMailboxAlphaAsTao` unstake instead, so
 this setting does not block them; ownership, backing, minimums and pool
 execution still can.
 
+## Locked alpha
+
+A coldkey can conviction-lock its alpha on a subnet. Locked alpha cannot be
+unstaked, and a same-subnet transfer carries the lock along once the sender's
+unlocked alpha is spent. Accounts refuse incoming locked alpha by default, but a
+coldkey swap into an account that stakes nothing copies the source's flag and
+locks onto it without that account's consent.
+
+Locked alpha never backs a share:
+
+- Mailboxes and subnet clones are created through `createMailbox` before they
+  are funded. Creation rejects candidates that carry a lock, swap history or
+  ownership roles (`CloneContaminated`; retry with a fresh UID), then has each
+  accepted clone claim its own account as a hotkey, because the chain refuses
+  coldkey swaps into existing hotkeys even at zero stake.
+- `wrap` reverts `LockedDeposit` while the caller's mailbox holds a lock.
+- Priced operations and quotes revert `LockedBacking` while the subnet clone
+  holds a lock. The conviction hotkey need not hold the locked stake, so a lock
+  is never apportioned to individual hotkeys.
+- `reclaimAlphaFromMailbox` refuses a locked mailbox when the destination
+  rejects locks; `reclaimMailboxAlphaAsTao` refuses any locked mailbox. Both fail
+  before the chain can refuse and burn the forwarded gas.
+
 ## Minimum stake size and rounding
 
 The chain uses TAO-denominated minimums: higher for partial unstakes, lower for

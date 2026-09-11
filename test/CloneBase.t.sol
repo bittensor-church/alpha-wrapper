@@ -7,6 +7,10 @@ import { CloneBase } from "src/CloneBase.sol";
 import { SubnetClone } from "src/SubnetClone.sol";
 import { CHAIN_MIN_STAKE, CHAIN_MIN_TRANSFER, MockStaking } from "./mocks/MockStaking.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
+import { ADDRESS_MAPPING_PRECOMPILE } from "src/interfaces/IAddressMapping.sol";
+import { NEURON_PRECOMPILE } from "src/interfaces/INeuron.sol";
+import { MockAddressMapping } from "./mocks/MockAddressMapping.sol";
+import { MockNeuron } from "./mocks/MockNeuron.sol";
 
 contract CloneBaseSellAlphaTest is Test {
     SubnetClone clone;
@@ -16,6 +20,8 @@ contract CloneBaseSellAlphaTest is Test {
 
     function setUp() public {
         vm.etch(STAKING_PRECOMPILE, address(new MockStaking()).code);
+        vm.etch(ADDRESS_MAPPING_PRECOMPILE, address(new MockAddressMapping()).code);
+        vm.etch(NEURON_PRECOMPILE, address(new MockNeuron()).code);
         vm.deal(STAKING_PRECOMPILE, 1000 ether);
         MockStaking(STAKING_PRECOMPILE).setRemoveStakeRate(1, 1);
         MockStaking(STAKING_PRECOMPILE).setChainMinStake(CHAIN_MIN_STAKE);

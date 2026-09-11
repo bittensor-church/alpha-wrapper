@@ -14,7 +14,7 @@ contract ReclaimMailboxAlphaAsTaoTest is AlphaVaultTestBase {
     );
 
     function _seedMailboxAlpha(address user, uint256 netuid, bytes32 hotkey, uint256 amount) internal {
-        address predicted = vault.getDepositAddress(user, netuid);
+        address predicted = _prepareMailbox(user, netuid);
         bytes32 ck = _toSubstrate(predicted);
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey, ck, netuid, amount);
     }
@@ -67,6 +67,7 @@ contract ReclaimMailboxAlphaAsTaoTest is AlphaVaultTestBase {
     }
 
     function test_RevertWhen_NoMailboxStakeForGivenHotkey() public {
+        _prepareMailbox(alice, NETUID1);
         vm.prank(alice);
         vm.expectRevert(ZeroAmount.selector);
         vault.reclaimMailboxAlphaAsTao(NETUID1, hotkey1, 0);

@@ -196,6 +196,23 @@ def event_word(receipt: dict, signature: str, index: int, message: str) -> int:
     raise AssertionError(f"{message}: no {signature} in the receipt's logs")
 
 
+def cast_keccak(data_hex: str) -> str:
+    return run(["cast", "keccak", data_hex]).stdout.strip()
+
+
+def cast_abi_encode(signature: str, *args) -> str:
+    return run(["cast", "abi-encode", signature, *map(str, args)]).stdout.strip()
+
+
+def create2_clone_address(deployer: str, implementation: str, salt: str) -> str:
+    """Address of an ERC-1167 minimal proxy deployed with CREATE2 from `deployer`."""
+    init_code = (
+        "0x3d602d80600a3d3981f3363d3d373d3d3d363d73" + implementation[2:].lower()
+        + "5af43d82803e903d91602b57fd5bf3"
+    )
+    return run(["cast", "create2", "--deployer", deployer, "--salt", salt, "--init-code", init_code]).stdout.strip()
+
+
 def cast_block_number(rpc: str = config.RPC_URL) -> int:
     return int(run(["cast", "block-number", "--rpc-url", rpc]).stdout.strip())
 

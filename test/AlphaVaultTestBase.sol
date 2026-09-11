@@ -214,10 +214,19 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
     }
 
     function _simulateAlphaDepositHotkey(address user, uint256 netuid, uint256 amount, bytes32 hotkey) internal {
-        address cloneAddr = vault.getDepositAddress(user, netuid);
-        bytes32 cloneColdkey = _toSubstrate(cloneAddr);
+        _prepareMailbox(user, netuid);
+        bytes32 mailboxColdkey = _mailboxColdkey(user, netuid);
         MockStaking mock = MockStaking(STAKING_PRECOMPILE);
-        mock.setStake(hotkey, cloneColdkey, netuid, mock.getStake(hotkey, cloneColdkey, netuid) + amount);
+        mock.setStake(hotkey, mailboxColdkey, netuid, mock.getStake(hotkey, mailboxColdkey, netuid) + amount);
+    }
+
+    function _prepareMailbox(address user, uint256 netuid) internal returns (address mailbox) {
+        vm.prank(user);
+        (mailbox,) = vault.createMailbox(netuid, keccak256(abi.encode(user, netuid)));
+    }
+
+    function _mailboxColdkey(address user, uint256 netuid) internal view returns (bytes32) {
+        return _toSubstrate(vault.getDepositAddress(user, netuid));
     }
 
     function _simulateEmissions(uint256 netuid, uint256 extraAlpha) internal {

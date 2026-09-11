@@ -25,6 +25,7 @@ import {
     WithdrawTooSmall,
     ZeroAddress,
     ZeroAmount,
+    MailboxNotPrepared,
     ZeroColdkey,
     ZeroHotkey
 } from "src/VaultErrors.sol";
@@ -106,7 +107,10 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(_getVaultStake(hotkey4, 99), 10 ether);
     }
 
-    function test_GetDepositAddress() public view {
+    function test_GetDepositAddress() public {
+        _prepareMailbox(alice, NETUID1);
+        _prepareMailbox(alice, NETUID2);
+        _prepareMailbox(bob, NETUID1);
         address a1 = vault.getDepositAddress(alice, NETUID1);
         address a2 = vault.getDepositAddress(alice, NETUID2);
         address b1 = vault.getDepositAddress(bob, NETUID1);
@@ -152,6 +156,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_RevertWhen_WrapZero() public {
+        _prepareMailbox(alice, NETUID1);
         vm.prank(alice);
         vm.expectRevert(ZeroAmount.selector);
         vault.wrap(NETUID1, hotkey1, 0);
@@ -451,7 +456,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_RevertWhen_SharePriceWhenSupplyIsZero() public {
-        vault.createSubnetProxy(NETUID1);
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
         uint256 tokenId = vault.currentTokenId(NETUID1);
         assertEq(vault.totalSupply(tokenId), 0);
         vm.expectRevert(NoSharesOutstanding.selector);
@@ -673,7 +678,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_SubnetCloneCanMoveStake() public {
-        vault.createSubnetProxy(NETUID1);
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
         uint256 tokenId = vault.currentTokenId(NETUID1);
         address clone = vault.subnetClone(tokenId);
         _plantVaultStake(hotkey1, NETUID1, 100 ether);
@@ -686,7 +691,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_SubnetCloneCanUnwrapTao() public {
-        vault.createSubnetProxy(NETUID1);
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
         address clone = vault.subnetClone(vault.currentTokenId(NETUID1));
         vm.deal(clone, 50 ether);
 
@@ -699,7 +704,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_OnlyWrapperCanCallMoveStake() public {
-        vault.createSubnetProxy(NETUID1);
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
         address clone = vault.subnetClone(vault.currentTokenId(NETUID1));
         vm.prank(alice);
         vm.expectRevert(CloneBase.NotWrapper.selector);
@@ -707,7 +712,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_OnlyWrapperCanCallUnwrapTao() public {
-        vault.createSubnetProxy(NETUID1);
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
         address clone = vault.subnetClone(vault.currentTokenId(NETUID1));
         vm.deal(clone, 50 ether);
         vm.prank(alice);
@@ -715,13 +720,13 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         SubnetClone(payable(clone)).unwrapTao(payable(alice), 50 ether);
     }
 
-    function test_ReclaimTaoFromMailboxSkipsDeployForNonExistentMailbox() public {
+    function test_ReclaimTaoFromMailboxRejectsUnpreparedMailbox() public {
         address predicted = vault.getDepositAddress(alice, NETUID1);
         assertEq(predicted.code.length, 0);
 
         uint256 gasBefore = gasleft();
         vm.prank(alice);
-        vm.expectRevert(ZeroAmount.selector);
+        vm.expectRevert(MailboxNotPrepared.selector);
         vault.reclaimTaoFromMailbox(NETUID1);
         uint256 gasUsed = gasBefore - gasleft();
 
@@ -740,6 +745,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_UserCanRetrieveTaoFromMailboxAfterDeregistration() public {
+        _prepareMailbox(alice, NETUID1);
         address userClone = vault.getDepositAddress(alice, NETUID1);
 
         MockStaking(STAKING_PRECOMPILE).setStake(hotkey1, _toSubstrate(userClone), NETUID1, 10 ether);
@@ -775,6 +781,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_RevertWhen_ReclaimAlphaFromMailboxNoStake() public {
+        _prepareMailbox(alice, NETUID1);
         bytes32 aliceSub = _toSubstrate(alice);
         vm.prank(alice);
         vm.expectRevert(ZeroAmount.selector);
@@ -955,36 +962,36 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertEq(lens.totalStake(TOKEN1), 9 ether, "and deposits still land on the same position");
     }
 
-    function test_RevertWhen_CreateSubnetProxySubnetNotRegistered() public {
+    function test_RevertWhen_CreateMailboxSubnetNotRegistered() public {
         vm.expectRevert(SubnetNotRegistered.selector);
-        vault.createSubnetProxy(42);
+        vault.createMailbox(42, keccak256("fixture-creation"));
     }
 
-    function test_CreateSubnetProxyDeploysClone() public {
+    function test_CreateMailboxDeploysClone() public {
         uint256 tokenId = vault.currentTokenId(NETUID1);
         assertEq(vault.subnetClone(tokenId), address(0));
 
         vm.expectEmit(true, false, false, false);
         emit SubnetProxyCreated(tokenId, address(0));
-        vault.createSubnetProxy(NETUID1);
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
 
         assertTrue(vault.subnetClone(tokenId) != address(0));
     }
 
-    function test_CreateSubnetProxyNoopForExistingClone() public {
-        vault.createSubnetProxy(NETUID1);
+    function test_CreateMailboxNoopForExistingClone() public {
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
         address first = vault.subnetClone(vault.currentTokenId(NETUID1));
-        vault.createSubnetProxy(NETUID1);
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
         assertEq(vault.subnetClone(vault.currentTokenId(NETUID1)), first);
     }
 
-    function test_CreateSubnetProxyDeploysNewCloneAfterRecycle() public {
-        vault.createSubnetProxy(NETUID1);
+    function test_CreateMailboxDeploysNewCloneAfterRecycle() public {
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
         uint256 oldTokenId = vault.currentTokenId(NETUID1);
 
         _reregisterSubnet(NETUID1);
         uint256 newTokenId = vault.currentTokenId(NETUID1);
-        vault.createSubnetProxy(NETUID1);
+        vault.createMailbox(NETUID1, keccak256("fixture-creation"));
 
         address oldClone = vault.subnetClone(oldTokenId);
         address newClone = vault.subnetClone(newTokenId);
@@ -993,7 +1000,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         assertTrue(oldClone != newClone);
     }
 
-    function test_WrapAutoDeploysClone() public {
+    function test_CreateMailboxPreparesCloneBeforeWrap() public {
         uint256 tokenId = vault.currentTokenId(NETUID1);
         assertEq(vault.subnetClone(tokenId), address(0));
 
@@ -2095,7 +2102,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     function test_EmptyVault_ViewsReturnZeroNotRevert() public {
         (AlphaVault fresh, AlphaVaultLens freshLens) = _deployVaultAndLens(address(registry));
-        fresh.createSubnetProxy(NETUID1);
+        fresh.createMailbox(NETUID1, keccak256("fixture-creation"));
         uint256 tokenId = fresh.currentTokenId(NETUID1);
 
         assertEq(freshLens.totalStake(tokenId), 0, "totalStake returns 0 for a vault with no stake");

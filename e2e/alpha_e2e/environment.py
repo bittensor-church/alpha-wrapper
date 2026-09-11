@@ -5,6 +5,7 @@ bootstrap.build_environment() with typed on-chain getters (stakes, shares,
 prices, quotes) and scenario actions (vault sends, deposits, share transfers,
 validator rotations, revert assertions).
 """
+import secrets
 import re
 import time
 from dataclasses import dataclass
@@ -148,8 +149,7 @@ class Environment:
         ))
 
     def mailbox_address(self, netuid: int, user: Optional[str] = None) -> str:
-        """Deterministic mailbox deposit address for `user` (default: the wrapper
-        user) on a subnet."""
+        """Accepted mailbox address for `user`; zero until explicit preparation."""
         return chain.cast_call(
             self.vault_address, "getDepositAddress(address,uint256)(address)",
             user or config.WRAPPER_USER_ADDRESS, netuid,
@@ -384,6 +384,15 @@ class Environment:
         `private_key` to run it for another holder. Returns the wrap receipt."""
         user = user or config.WRAPPER_USER_ADDRESS
         mailbox = self.mailbox_address(netuid, user)
+        clone = self.clone_address(self.current_token_id(netuid))
+        if int(mailbox, 16) == 0 or int(clone, 16) == 0:
+            self.vault_send(
+                2_000_000, "mailbox preparation failed", "createMailbox(uint256,bytes32)",
+                netuid, "0x" + secrets.token_hex(32),
+                private_key=private_key or config.WRAPPER_USER_PRIVATE_KEY,
+            )
+            mailbox = self.mailbox_address(netuid, user)
+            assert int(mailbox, 16) != 0, "preparation did not create the intended user's mailbox"
         print(f"  Transferring {amount_rao} RAO from Alice -> mailbox under {hotkey_pubkey[:18]}...")
         extrinsics.transfer_stake(
             substrate.h160_to_ss58(mailbox), hotkey_ss58, netuid, amount_rao,

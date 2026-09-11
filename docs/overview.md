@@ -14,13 +14,16 @@ transaction ordering, and the separate alpha and TAO accounting.
   admin; code, registry address, recovery window and parking hotkey are fixed
   at deployment. Its receiving-key rules, stake consolidation, payout gathering and
   weight alignment live in `VaultAllocation`, a library deployed once and linked into
-  the vault's bytecode. Share accounting and backing gates remain in the vault.
+  the vault's bytecode. The library also handles deposit admission and clone
+  creation. Share accounting and backing gates remain in the vault.
 - `AlphaVaultLens`: read-only backing and payout quotes. Use a trusted build paired
   with the vault; a quote does not guarantee transaction success.
 - `SubnetClone`: one vault-controlled coldkey per subnet registration, isolating
   that position's stake and TAO from other positions.
-- `DepositMailbox`: a deterministic address per user and netuid. The vault only
+- `DepositMailbox`: one accepted address per user and netuid. The vault only
   credits the caller's own mailbox.
+- `CloneFactory`: a vault-owned deployer that checks each candidate account
+  before deployment.
 - `ValidatorRegistry`: 1–64 target hotkeys and basis-point weights per subnet,
   chosen by a quorum of off-chain signers. Its admin manages signer membership.
 
@@ -29,8 +32,11 @@ number of times the chain has registered that netuid. Reusing a dissolved netuid
 steps it and creates a different token; old shares retain their old clone and
 refund. A chain migration that rewrites a subnet's registration block leaves its
 token unchanged.
-`currentTokenId(netuid)` identifies the live generation. The first wrap deploys
-its clone, or anyone can deploy it earlier with `createSubnetProxy(netuid)`.
+`currentTokenId(netuid)` identifies the live generation. Users first call
+`createMailbox(netuid, uid)` with a random 32-byte UID; the first call on a
+generation also creates its subnet clone, which later users share. A poisoned
+candidate is rejected and retried with another UID. Only the address the vault
+publishes receives deposits.
 
 ## Share value and allocation
 

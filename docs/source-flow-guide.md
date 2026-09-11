@@ -5,7 +5,7 @@ A short guide to the wrapper's control flow.
 ## What lives where
 
 ```text
-User's stake -> personal DepositMailbox -> pooled SubnetClone
+User's stake -> personal DepositMailbox -> shared SubnetClone
                          wrap                  |
                                               +-> alpha delegated to hotkeys
                                               +-> native TAO balance
@@ -54,8 +54,12 @@ cleanup, then old shares redeem the clone's unreserved TAO.
 
 ## Follow a transaction
 
-- **`wrap`:** check backing and receivers -> collect the caller's mailbox stake
-  at the chosen registry hotkey -> consolidate dropped keys -> align weights ->
+- **`createMailbox`:** resolve the live generation -> check the candidates -> deploy
+  any missing subnet clone and personal mailbox -> initialize as own hotkey owner
+  and verify locked-alpha rejection -> publish accepted addresses. All steps are atomic.
+- **`wrap`:** require prepared addresses -> check backing, receivers and that the mailbox holds no lock ->
+  collect the caller's mailbox stake at the chosen registry hotkey ->
+  consolidate dropped keys -> align weights ->
   record actual balances -> calculate and mint shares. Collecting first lets a
   fresh deposit help move old dust; pricing uses the balances after movement.
 - **Live `unwrap`:** check backing -> select destinations -> consolidate dropped

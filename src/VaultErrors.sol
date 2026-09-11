@@ -16,6 +16,13 @@ error NoSharesOutstanding();
 /// @dev Positive backing below share-price precision; use `previewUnwrap` for a larger burn.
 error SharePriceBelowPrecision();
 error DepositTooSmall();
+/// @dev The mailbox holds conviction-locked alpha; reclaim it to a coldkey that accepts locks.
+error LockedDeposit();
+error MailboxNotPrepared();
+error SubnetCloneNotPrepared();
+error LockedBacking();
+error CloneContaminated(address candidate);
+error CloneProtectionFailed(address clone);
 error WithdrawTooSmall();
 error ClaimBelowNativePrecision();
 error SupplyCapExceeded();

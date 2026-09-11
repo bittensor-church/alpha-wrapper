@@ -7,6 +7,7 @@ import { VaultMath } from "./libraries/VaultMath.sol";
 import { VaultReads } from "./libraries/VaultReads.sol";
 import {
     NetuidOutOfRange,
+    LockedBacking,
     NoSharesOutstanding,
     Parked,
     SharePriceBelowPrecision,
@@ -29,11 +30,17 @@ contract AlphaVaultLens {
     }
 
     /// @dev Rejects missing backing and a loss on file, as the vault's priced operations do, except
-    ///      during/after dissolution when alpha balances are in flux.
+    ///      during/after dissolution when alpha balances are in flux. Refuses unexpected conviction locks.
     function totalStake(uint256 tokenId) public view returns (uint256) {
         if (_shortSince(tokenId) != 0) revert ShortfallOnFile();
         (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _readBacking(tokenId);
-        VaultReads.requireIntact(slots, backing, VaultMath.netuidOf(tokenId));
+        uint16 netuid = VaultMath.netuidOf(tokenId);
+        VaultReads.requireIntact(slots, backing, netuid);
+        address clone = vault.subnetClone(tokenId);
+        if (clone == address(0) || VaultReads.isDissolvingOrDissolved(tokenId)) return backing.total;
+        if (VaultReads.lockedAlphaOf(VaultReads.coldkeyOf(clone), netuid) != 0) {
+            revert LockedBacking();
+        }
         return backing.total;
     }
 

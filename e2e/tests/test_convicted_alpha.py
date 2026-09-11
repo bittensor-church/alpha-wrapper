@@ -1,9 +1,8 @@
 """Scenario: convicted (conviction-locked) alpha.
 
 Conviction locks bind a coldkey's subnet-wide alpha, and contract-controlled
-coldkeys reject locked inflow (the accept-locked flag defaults OFF and no
-precompile can flip it). A deposit dipping into locked mass therefore reverts
-at the depositor's own transferStake, before the vault is involved; the free
+coldkeys reject locked inflow (creation verifies the chain's rejection default).
+A deposit dipping into locked mass therefore reverts at the depositor's own transferStake, before the vault is involved; the free
 portion wraps normally; and vault flows -- rebalance, unwrap (including to a
 coldkey that itself holds a lock), unwrapForTao -- never touch lock state.
 
