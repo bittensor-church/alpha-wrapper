@@ -329,7 +329,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard, IAlphaVaultAbi {
             actives = backing.keys;
         } else {
             set = VaultReads.resolveValidators(validatorRegistry, netuid);
-            (actives, retired) = VaultAllocation.assignActives(slots, backing, set, netuid);
+            (actives, retired) = _assignActives(slots, backing, set, netuid);
             // Conservatively block all dropped-stake consolidation if any receiving entry is unusable.
             if (retired != bytes32(0) && _holdsRotatedOutStake(backing, actives)) {
                 revert AttestedHotkeyRetired(retired);
@@ -771,8 +771,20 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard, IAlphaVaultAbi {
         uint16 netuid
     ) private view returns (bytes32[] memory actives) {
         bytes32 retired;
-        (actives, retired) = VaultAllocation.assignActives(slots, backing, set, netuid);
+        (actives, retired) = _assignActives(slots, backing, set, netuid);
         if (retired != bytes32(0)) revert AttestedHotkeyRetired(retired);
+    }
+
+    /// @dev The library takes flat arrays so the vault carries no struct encoders for this call.
+    function _assignActives(
+        VaultReads.Slot[] memory slots,
+        VaultReads.Backing memory backing,
+        VaultReads.ValidatorSet memory set,
+        uint16 netuid
+    ) private view returns (bytes32[] memory actives, bytes32 retired) {
+        return VaultAllocation.assignActives(
+            VaultReads.logicalsOf(slots), backing.keys, backing.balances, set.hotkeys, set.owners, netuid
+        );
     }
 
     /// @dev Replace the record with actual post-move balances; shortfalls were checked on entry.

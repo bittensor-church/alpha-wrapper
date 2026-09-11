@@ -63,23 +63,25 @@ library VaultAllocation {
     /// @dev Keep funded slots on resolved keys; empty slots need a usable receiving key. A key is usable
     ///      only under the coldkey that owned the attested name, so a vacated name claimed by anyone
     ///      else reports as retired. Keys remain exclusive even for empty slots.
+    ///      Flat arrays cross this boundary: each struct argument would add its own ABI encoder to the
+    ///      vault, which has no bytecode to spare. `logicals`, `keys` and `balances` are one record per
+    ///      slot; `currentSet` and `owners` are one entry per attested name.
     function assignActives(
-        VaultReads.Slot[] memory slots,
-        VaultReads.Backing memory backing,
-        VaultReads.ValidatorSet memory set,
+        bytes32[] memory logicals,
+        bytes32[] memory keys,
+        uint256[] memory balances,
+        bytes32[] memory currentSet,
+        bytes32[] memory owners,
         uint16 netuid
     ) external view returns (bytes32[] memory actives, bytes32 retired) {
-        bytes32[] memory logicals = VaultReads.logicalsOf(slots);
-        bytes32[] memory keys = backing.keys;
-        bytes32[] memory currentSet = set.hotkeys;
         actives = new bytes32[](currentSet.length);
         for (uint256 i; i < currentSet.length;) {
             bytes32 name = currentSet[i];
-            bytes32 owner = set.owners[i];
+            bytes32 owner = owners[i];
             uint256 at = VaultMath.indexOf(logicals, name);
             bytes32 key;
             bool live;
-            if (at != VaultMath.INDEX_NOT_FOUND && backing.balances[at] != 0) {
+            if (at != VaultMath.INDEX_NOT_FOUND && balances[at] != 0) {
                 key = keys[at];
                 live = VaultReads.ownedBy(key, owner);
             } else if (_keyHeldElsewhere(keys, logicals, currentSet, name, at)) {
