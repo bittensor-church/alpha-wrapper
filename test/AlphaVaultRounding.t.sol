@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity 0.8.36;
 
 import { CHAIN_MIN_STAKE } from "./mocks/MockStaking.sol";
 import { VaultMath } from "src/libraries/VaultMath.sol";

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity 0.8.36;
 
 /// @dev Registration block is zero when unregistered, including late dissolution cleanup.
 ///      A dissolving netuid cannot be re-registered until asynchronous cleanup completes.

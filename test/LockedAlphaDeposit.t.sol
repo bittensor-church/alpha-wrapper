@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity 0.8.36;
 
 import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";

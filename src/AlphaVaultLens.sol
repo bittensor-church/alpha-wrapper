@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity 0.8.36;
 
 import { AlphaVault } from "./AlphaVault.sol";
 import { IValidatorRegistry } from "./interfaces/IValidatorRegistry.sol";
