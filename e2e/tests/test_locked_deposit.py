@@ -56,7 +56,6 @@ def _protected(env, address: str) -> None:
     assert chain.cast_call(
         config.STAKING_PRECOMPILE, "getRejectLockedAlpha(bytes32)(bool)", coldkey,
     ) == "true"
-    assert env.stake(env.hotkey_pubkeys[0], coldkey, env.netuids[0]) == 0
 
 
 @pytest.mark.scenario
@@ -117,8 +116,9 @@ def test_locked_deposit(env, recovery_window):
     mailbox = env.mailbox_address(netuid)
     assert clone.lower() != poisoned_clone.lower()
     assert mailbox.lower() != poisoned_mailbox.lower()
-    _protected(env, clone)
-    _protected(env, mailbox)
+    for address in (clone, mailbox):
+        _protected(env, address)
+        assert env.stake(hotkey, h160_to_substrate_b32(address), netuid) == 0
     extrinsics.associate_hotkey(h160_to_ss58(clone), signer_uri=LOCKED_HOLDER)
     _protected(env, clone)
     print("  A stranger's association attempt leaves the self-owned clone untouched")
