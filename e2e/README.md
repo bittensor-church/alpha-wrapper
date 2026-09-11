@@ -9,6 +9,10 @@ Substrate extrinsics. Chainless unit tests cover the Python harness separately.
   keys in `alpha_e2e/config.py`.
 - `cast` and `forge` on PATH.
 - Python dependencies from `e2e/install-deps.sh`, including btcli.
+- Keys: the suite keeps its own wallets under `e2e/.wallets`, so btcli wallets
+  you already have stay untouched; `ALPHA_E2E_WALLET_PATH` moves that root.
+  Bootstrap generates the dev Alice wallet there when it is absent, and stops if
+  a different coldkey already holds that name.
 
 ## Run
 
@@ -68,6 +72,7 @@ recovery conditions, not an unconditional exit guarantee; see the
 [design](../docs/hotkey-swaps.md).
 
 Chainless harness tests are `test_substrate.py`, `test_chain_unit.py`,
-`test_checks_unit.py`, `test_environment_unit.py` and `test_plan_tao_exit_unit.py`.
+`test_checks_unit.py`, `test_environment_unit.py`, `test_plan_tao_exit_unit.py`
+and `test_common_unit.py`.
 Bootstrap creates three subnets, nine validators, the contracts and funded test
 accounts once per scenario process.

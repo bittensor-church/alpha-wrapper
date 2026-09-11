@@ -15,12 +15,11 @@ be deposited:
 
 btcli calls go through chain.btcli() (auto-appends --network) or
 chain.btcli_json() where the outcome is read back; wallet regen/creation calls
-go through chain.run(["btcli", ...]) directly because they touch only local key
-files and must not carry the --network flag.
+go through chain.btcli_local() because they touch only local key files and must
+not carry the --network flag. Keys live under config.WALLET_PATH.
 """
 import os
 import secrets
-import shutil
 import time
 from typing import List, NamedTuple, Tuple
 
@@ -67,10 +66,9 @@ def register_hotkey(netuid: int, hotkey_name: str) -> Tuple[str, str]:
     Returns the hotkey's (bytes32 pubkey, SS58 address)."""
     hotkey_file = substrate.hotkey_file_path(config.ALICE_WALLET, hotkey_name)
     if not os.path.isfile(hotkey_file):
-        chain.run(
-            ["btcli", "wallet", "new-hotkey", "--wallet", config.ALICE_WALLET,
+        chain.btcli_local(
+            ["wallet", "new-hotkey", "--wallet", config.ALICE_WALLET,
              "--wallet-hotkey", hotkey_name, "--n-words", "12"],
-            check=False,
         )
 
     pubkey = substrate.read_hotkey_pubkey(config.ALICE_WALLET, hotkey_name)
@@ -115,43 +113,37 @@ def _check_chain_reachable() -> None:
 
 
 def _ensure_alice_wallet() -> None:
-    """Make sure the local alice wallet is the dev Alice (regenerating it from
-    the dev seed if it is missing or a different key) and has a hotkey."""
-    wallet_dir = os.path.expanduser(f"~/.bittensor/wallets/{config.ALICE_WALLET}")
-    coldkey_file = os.path.join(wallet_dir, "coldkeypub.txt")
-    need_regen = False
+    """Make sure the suite's alice wallet is the dev Alice (generating it from the
+    dev seed when it is absent) and has a hotkey."""
+    coldkey_file = substrate.coldkeypub_file_path(config.ALICE_WALLET)
 
-    if not os.path.isdir(wallet_dir):
-        need_regen = True
-    elif os.path.isfile(coldkey_file):
+    if os.path.isfile(coldkey_file):
         with open(coldkey_file) as coldkey_pub_file:
             content = coldkey_pub_file.read()
+        # Keys here may be an operator's own, and a regeneration would overwrite
+        # them, so a foreign wallet stops the run instead.
         if config.ALICE_COLDKEY_SS58 not in content:
-            print("  WARNING: Existing alice wallet is NOT the dev Alice - regenerating from dev seed...")
-            shutil.rmtree(wallet_dir)
-            need_regen = True
+            raise RuntimeError(
+                f"{substrate.wallet_dir_path(config.ALICE_WALLET)} holds a coldkey that is not "
+                "the dev Alice. Move it aside, or point ALPHA_E2E_WALLET_PATH at another directory."
+            )
+        print("  Alice coldkey is the dev Alice")
     else:
-        need_regen = True
-
-    if need_regen:
         print("  Setting up dev Alice wallet from seed...")
-        chain.run(
-            ["btcli", "wallet", "regen-coldkey", "--wallet", config.ALICE_WALLET,
-             "--wallet-path", os.path.expanduser("~/.bittensor/wallets"),
+        chain.btcli_local(
+            ["wallet", "regen-coldkey", "--wallet", config.ALICE_WALLET,
              "--seed", config.ALICE_COLDKEY_SEED, "--no-password", "--overwrite"],
-            check=False,
         )
         if not os.path.isfile(coldkey_file):
-            raise RuntimeError("Failed to regenerate Alice coldkey")
+            raise RuntimeError(f"Failed to regenerate the Alice coldkey at {coldkey_file}")
         print("  Alice coldkey regenerated from dev seed (5Grwva...)")
 
     hotkey_file = substrate.hotkey_file_path(config.ALICE_WALLET, config.ALICE_HOTKEY_NAME)
     if not os.path.isfile(hotkey_file):
         print(f"  Creating hotkey '{config.ALICE_HOTKEY_NAME}' for wallet '{config.ALICE_WALLET}'...")
-        chain.run(
-            ["btcli", "wallet", "new-hotkey", "--wallet", config.ALICE_WALLET,
+        chain.btcli_local(
+            ["wallet", "new-hotkey", "--wallet", config.ALICE_WALLET,
              "--wallet-hotkey", config.ALICE_HOTKEY_NAME, "--n-words", "12"],
-            check=False,
         )
         print(f"  Created hotkey '{config.ALICE_HOTKEY_NAME}'")
     else:
@@ -258,7 +250,7 @@ def _deploy_contracts(netuids: List[int], hotkey_pubkeys: List[str], *, recovery
     observation_block_start = chain.cast_block_number()
     print(f"  Observability block range start: {observation_block_start}")
 
-    chain.run(["forge", "build", "--quiet"])
+    chain.forge_build()
     print("  Compiled")
 
     mailbox_implementation_address = chain.forge_create(

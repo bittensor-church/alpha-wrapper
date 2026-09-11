@@ -36,11 +36,8 @@ def test_holder_exits_after_attesters_replace_the_ownerless_name(env):
 
     successor_ss58 = extrinsics.keypair_ss58("//ParkedSuccessor")
     successor_pubkey = extrinsics.keypair_pubkey("//ParkedSuccessor")
-    # Skip only when the setup operation is unavailable; a failed operation must fail the test.
-    try:
-        extrinsics.swap_hotkey_keep_stake(hotkey_ss58, successor_ss58)
-    except AttributeError as error:
-        pytest.skip(f"the setup API cannot strand stake under an unowned hotkey: {error}")
+    # The pinned runtime keeps the stake behind, which is the state this scenario needs.
+    extrinsics.swap_hotkey_keep_stake(hotkey_ss58, successor_ss58)
 
     # The identity moved and the owner went with it; the alpha stayed put.
     assert extrinsics.hotkey_owner(hotkey_ss58) == "", "the swap left the hotkey owned"
