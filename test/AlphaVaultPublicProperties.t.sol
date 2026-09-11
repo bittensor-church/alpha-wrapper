@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity 0.8.36;
 
 import { MAX_VALIDATORS } from "src/ValidatorRegistry.sol";
 import { VaultMath } from "src/libraries/VaultMath.sol";

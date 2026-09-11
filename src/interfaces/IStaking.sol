@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity 0.8.36;
 
 /// @dev Coldkeys are Substrate public keys, not H160 addresses. Stake amounts and TAO thresholds use RAO.
 interface IStaking {
