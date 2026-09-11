@@ -17,6 +17,7 @@ from alpha_e2e.environment import largest_burn_leaving_alpha
 POOL_DEEPENING = 100
 # An owned hotkey with no subnet membership earns nothing, so the backing it holds is exact.
 LIVE_HOTKEY_URI = "//DustExitLive"
+REFUSED_HOTKEY_URI = "//DustExitRefused"
 LIVE_FUNDING_TAO_RAO = 3_000_000_000
 # The partial sale, half the live deposit, must clear the chain's stake floor with room.
 FLOOR_MARGIN = 10
@@ -42,7 +43,6 @@ def _leave_a_refused_leftover(env, netuid: int, token_id: int, hotkey: str, clon
 def test_tao_exit_sells_around_a_slot_the_pool_refuses(env):
     netuid = env.netuids[0]
     token_id = env.token_ids[0]
-    hotkeys = env.subnet_hotkey_pubkeys(0)
     clone_coldkey = env.clone_coldkey(token_id)
 
     deepened_alpha = env.alpha_in_pool(netuid) * POOL_DEEPENING
@@ -61,12 +61,20 @@ def test_tao_exit_sells_around_a_slot_the_pool_refuses(env):
         f"a live deposit of {live_deposit} RAO leaves the partial sale too close to the floor"
     )
 
-    env.set_validators(netuid, [hotkeys[0]], [10000])
+    # Both balances must stay free of emissions: a registered refused key can grow
+    # from one RAO to two between reads, invalidating exact exclusion assertions.
+    refused_pubkey = extrinsics.keypair_pubkey(REFUSED_HOTKEY_URI)
+    refused_ss58 = extrinsics.keypair_ss58(REFUSED_HOTKEY_URI)
+    extrinsics.associate_hotkey(refused_ss58)
+    extrinsics.add_stake(refused_ss58, netuid, LIVE_FUNDING_TAO_RAO)
+    assert not extrinsics.hotkey_is_registered(refused_ss58, netuid)
+    refused_deposit = env.stake(refused_pubkey, config.ALICE_COLDKEY_PUBKEY, netuid) // 2
+    env.set_validators(netuid, [refused_pubkey], [10000])
     env.deposit_and_wrap(
-        netuid, hotkeys[0], env.hotkey_ss58s[0],
-        config.PER_HOTKEY_TRANSFER_RAO, 1_500_000, "Dust exit: wrap failed",
+        netuid, refused_pubkey, refused_ss58,
+        refused_deposit, 1_500_000, "Dust exit: wrap failed",
     )
-    leftover = _leave_a_refused_leftover(env, netuid, token_id, hotkeys[0], clone_coldkey)
+    leftover = _leave_a_refused_leftover(env, netuid, token_id, refused_pubkey, clone_coldkey)
 
     stranded_shares = env.vault_shares(token_id)
     assert stranded_shares > 0, "the shaving burn should leave shares behind"
@@ -76,15 +84,15 @@ def test_tao_exit_sells_around_a_slot_the_pool_refuses(env):
     )
     checks.assert_gas_exceeds(burned, config.REVERT_GAS_BOUND, "the refused sale should have burned its gas")
 
-    env.set_validators(netuid, [live_pubkey, hotkeys[0]], [9999, 1])
+    env.set_validators(netuid, [live_pubkey, refused_pubkey], [9999, 1])
     env.deposit_and_wrap(
         netuid, live_pubkey, live_ss58, live_deposit, 1_500_000, "Dust exit: the live deposit failed",
     )
-    assert env.stake(hotkeys[0], clone_coldkey, netuid) == leftover, "the leftover should sit beside live backing"
+    assert env.stake(refused_pubkey, clone_coldkey, netuid) == leftover, "the leftover should sit beside live backing"
     assert env.stake(live_pubkey, clone_coldkey, netuid) >= live_deposit - config.ROUNDING_DUST_SLOT_RAO, (
         "the live deposit should have landed"
     )
-    exclude_leftover = 1 << env.recorded_slot_index(token_id, hotkeys[0])
+    exclude_leftover = 1 << env.recorded_slot_index(token_id, refused_pubkey)
 
     partial_shares = env.vault_shares(token_id) // 2
     quoted_alpha, _ = env.preview_unwrap(token_id, partial_shares)
@@ -102,7 +110,7 @@ def test_tao_exit_sells_around_a_slot_the_pool_refuses(env):
     )
     live_delta = live_before - env.stake(live_pubkey, clone_coldkey, netuid)
     assert abs(live_delta - sold) <= config.ROUNDING_DUST_SLOT_RAO, f"the live slot gave {live_delta}, sold {sold}"
-    assert env.stake(hotkeys[0], clone_coldkey, netuid) == leftover, "the excluded slot should be untouched"
+    assert env.stake(refused_pubkey, clone_coldkey, netuid) == leftover, "the excluded slot should be untouched"
 
     assert env.tao_quote(netuid, leftover) is None, "the pool should still refuse the excluded slot"
     live_before = env.stake(live_pubkey, clone_coldkey, netuid)
@@ -118,4 +126,4 @@ def test_tao_exit_sells_around_a_slot_the_pool_refuses(env):
     )
     assert env.vault_shares(token_id) == 0, "the full exit should burn every share"
     assert env.stake(live_pubkey, clone_coldkey, netuid) <= config.ROUNDING_DUST_SLOT_RAO, "and drain the live slot"
-    assert env.stake(hotkeys[0], clone_coldkey, netuid) == leftover, "while the refused slot stays where it is"
+    assert env.stake(refused_pubkey, clone_coldkey, netuid) == leftover, "while the refused slot stays where it is"

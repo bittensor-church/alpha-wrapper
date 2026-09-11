@@ -29,20 +29,23 @@ must also belong to the owner recorded when the validator was attested.
 ## The lifecycle
 
 ```text
-Missing backing -> syncBacking declares a shortfall
+Missing backing -> syncBacking secures located backing -> fixed recovery window
                        |
-                       +-> backing returns + syncBacking -> cleared
-                       +-> enough stake found + recoverStray -> parked
-                       +-> window expires + syncBacking -> write off; parked
+                       +-> recoverStray(source) -> collect into parking; window stays open
+                       +-> full coverage + sync -> collect returns; recovery complete; parked
+                       +-> expiry + sync -> collect returns; write off deficit; parked
 
 Parked -> newer registry attestation -> next wrap/rebalance/alpha exit can
                                        apply the set and clear parked state
 Parked -> live alpha or TAO exit leaves no shares -> parked state cleared
 ```
 
-A detected shortfall already blocks ordinary live deposits and exits. Declaring
-it starts the clock; time alone never clears it or executes a write-off. Recovery
-can also park a shortfall before declaration. Attestations do not move stake.
+A detected shortfall blocks ordinary live deposits and exits. Collection must
+succeed before the clock starts, except when every available pile is below the
+conservative floor. Such dust can remain outside parking and be written off;
+other move failures still revert. One pooled obligation replaces validator-specific
+expectations during recovery; partial finds never extend the deadline. Time alone
+never finalizes a write-off. Attestations do not move stake.
 
 Parking blocks deposits and rebalancing until a newer attestation. Exits can use
 parked backing, subject to execution checks. Transfers and accrued TAO claims

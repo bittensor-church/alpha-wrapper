@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import { VaultMath } from "src/libraries/VaultMath.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { ConsolidationBelowFloor, DepositTooSmall, GatherBelowFloor, WithdrawTooSmall } from "src/VaultErrors.sol";
 import { CHAIN_MIN_STAKE, CHAIN_MIN_TRANSFER, MockStaking } from "./mocks/MockStaking.sol";
@@ -291,9 +292,9 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         _wrapHotkey(alice, 99, hotkey4);
         uint256 tokenId = vault.currentTokenId(99);
         _plantVaultStake(hotkey4, 99, dust);
-        _setValidators(99, _hotkeys(hotkey1), _weights(10_000));
+        _setValidators(99, _hotkeys(hotkey1), _weights(VaultMath.BPS_BASE));
         _setAlphaPrice(99, chainPriceE18);
-        uint256 trueValue = (dust * chainPriceE18) / 1e18;
+        uint256 trueValue = (dust * chainPriceE18) / VaultMath.ALPHA_PRICE_SCALE;
         uint256 read = _alphaPriceRead(99);
 
         (bool ok, bytes memory ret) = address(vault).call(abi.encodeCall(vault.rebalance, (99)));
@@ -303,7 +304,11 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
             assertEq(lens.totalStake(tokenId), dust, "pile conserved onto the current set");
             assertGe(trueValue, CHAIN_MIN_TRANSFER, "the roll landed, so it cleared the chain's move bar");
         } else if (bytes4(ret) == ConsolidationBelowFloor.selector) {
-            assertLt((dust * (read + 1e9)) / 1e18, CHAIN_MIN_STAKE, "reject only fires on the provable bound");
+            assertLt(
+                (dust * (read + VaultMath.ALPHA_PRICE_QUANTUM_E18)) / VaultMath.ALPHA_PRICE_SCALE,
+                CHAIN_MIN_STAKE,
+                "reject only fires on the provable bound"
+            );
         } else {
             assertEq(
                 keccak256(ret),
@@ -311,7 +316,10 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
                 "fall-through surfaces the chain's own refusal"
             );
             assertTrue(
-                read == 0 || (dust * (read + 1e9)) / 1e18 >= CHAIN_MIN_STAKE, "fell through only when unprovable"
+                read == 0
+                    || (dust * (read + VaultMath.ALPHA_PRICE_QUANTUM_E18)) / VaultMath.ALPHA_PRICE_SCALE
+                        >= CHAIN_MIN_STAKE,
+                "fell through only when unprovable"
             );
             assertLt(trueValue, CHAIN_MIN_TRANSFER, "the chain refused because the roll is below its move bar");
         }
@@ -327,13 +335,13 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
         a = bound(a, 0, 1e16);
         b = bound(b, 0, 1e16);
         c = bound(c, 1e10, 1e16);
-        shareBps = bound(shareBps, 1, 10_000);
+        shareBps = bound(shareBps, 1, VaultMath.BPS_BASE);
         chainPriceE18 = bound(chainPriceE18, 1, 100e18);
         uint256 supply = _depositAndWrap(alice, NETUID1, 30 ether);
         _setAlphaPrice(NETUID1, chainPriceE18);
         uint256 total = _plantVaultStakes(NETUID1, a, b, c);
-        uint256 shares = (supply * shareBps) / 10_000;
-        uint256 expected = (shares * (total + 1)) / (supply + 1e9);
+        uint256 shares = (supply * shareBps) / VaultMath.BPS_BASE;
+        uint256 expected = (shares * (total + VaultMath.VIRTUAL_ASSETS)) / (supply + VaultMath.VIRTUAL_SHARES);
 
         vm.prank(alice);
         (bool ok, bytes memory ret) =
@@ -374,7 +382,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
         // Inside the oracle band: read value 1.5e6, true value 2.25e6, floor 2e6 TAO RAO.
         _plantVaultStake(hotkey4, 99, 1.5e15);
-        _setValidators(99, _hotkeys(hotkey1), _weights(10_000));
+        _setValidators(99, _hotkeys(hotkey1), _weights(VaultMath.BPS_BASE));
 
         vault.rebalance(99);
 
@@ -399,7 +407,7 @@ contract MinStakeFloorTest is AlphaVaultTestBase {
 
     function testFuzz_Unwrap_DeliversExactlyPreview(uint256 priceE18, uint256 deposit) public {
         priceE18 = bound(priceE18, 0.1e18, 100e18);
-        uint256 floorAlpha = (2e6 * 1e18) / priceE18 + 1;
+        uint256 floorAlpha = (CHAIN_MIN_STAKE * VaultMath.ALPHA_PRICE_SCALE) / priceE18 + 1;
         // Keep all weighted slots above the floor; this mock does not apply stake-share rounding.
         deposit = bound(deposit, 4 * floorAlpha, 1e15);
 

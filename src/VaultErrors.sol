@@ -26,7 +26,7 @@ error ConsolidationBelowFloor();
 error GatherBelowFloor();
 /// @dev Located backing falls short of the recorded expectation, allowing for accounting dust.
 error BackingShortfall(uint16 netuid, bytes32 hotkey, uint256 tracked);
-/// @dev A declared shortfall holds priced operations shut until `syncBacking` observes full coverage.
+/// @dev A declared shortfall holds priced operations shut until recovery completes or sync writes it off.
 error ShortfallOnFile();
 error BackingUnchanged();
 error NothingToRecover();
@@ -34,8 +34,8 @@ error NothingToRecover();
 error AlphaTransfersDisabled(uint16 netuid);
 /// @dev A bit of the exclusion mask names a slot the record does not have.
 error SlotMaskOutOfRange();
-/// @dev The located balances must cover the whole recorded expectation before the position parks.
-error RecoveryIncomplete();
+/// @dev Located backing remains exposed after collection; the recovery clock must not start.
+error BackingNotSecured();
 /// @dev The position rests on the parking hotkey until the registry publishes a newer set.
 error Parked();
 /// @dev The parking hotkey already belongs to another coldkey; deploy with an unused one.

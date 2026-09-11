@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import { VaultMath } from "src/libraries/VaultMath.sol";
+import { VaultReads } from "src/libraries/VaultReads.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
 import { AlphaVaultLens } from "src/AlphaVaultLens.sol";
@@ -33,10 +35,14 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
         _simulateEmissions(NETUID1, emissions);
 
         uint256 price = lens.sharePrice(TOKEN1);
-        (uint256 unitAlpha,) = lens.previewUnwrap(TOKEN1, 1e18);
+        (uint256 unitAlpha,) = lens.previewUnwrap(TOKEN1, VaultMath.SHARE_PRICE_SCALE);
         assertEq(price, unitAlpha, "one share unit");
         (uint256 alpha,) = lens.previewUnwrap(TOKEN1, shares);
-        assertLe((shares * price) / 1e18, alpha, "a balance valued at the price never overstates its exit");
+        assertLe(
+            (shares * price) / VaultMath.SHARE_PRICE_SCALE,
+            alpha,
+            "a balance valued at the price never overstates its exit"
+        );
     }
 
     function test_SharePrice_RefusesToQuoteBelowItsPrecision() public {
@@ -149,7 +155,9 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
     function test_ParkedToken_ReportsItsStateAndRefusesTheMintQuote() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
-        vault.recoverStray(TOKEN1, _hotkeys(hotkey4));
+        vault.syncBacking(TOKEN1);
+        vault.recoverStray(TOKEN1, hotkey4);
+        vault.syncBacking(TOKEN1);
 
         assertTrue(lens.awaitingAttestation(TOKEN1), "the lens reports the parked position");
         assertTrue(lens.isBackingIntact(TOKEN1), "parked backing is whole");
@@ -179,7 +187,7 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
     function test_DeclaredShortfall_ReadsAsNotIntactUntilSynced() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
-        assertEq(lens.frozenUntil(TOKEN1), type(uint256).max, "short and not yet declared");
+        assertEq(lens.frozenUntil(TOKEN1), VaultReads.UNDECLARED_SHORTFALL, "short and not yet declared");
         vault.syncBacking(TOKEN1);
         _simulateOffVaultSwap(NETUID1, hotkey4, hotkey1);
 

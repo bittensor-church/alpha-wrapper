@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import { VaultMath } from "src/libraries/VaultMath.sol";
 import { Vm } from "forge-std/Test.sol";
 import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
@@ -355,7 +356,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     function testFuzz_PreviewWrapScalesLinearlyOnEmptyVault(uint256 assets) public view {
         assets = bound(assets, 0, type(uint64).max);
-        assertEq(lens.previewWrap(TOKEN1, assets), assets * 1e9);
+        assertEq(lens.previewWrap(TOKEN1, assets), assets * VaultMath.VIRTUAL_SHARES);
     }
 
     function test_PreviewUnwrap() public {
@@ -444,7 +445,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_RevertWhen_SharePriceForUnregisteredSubnet() public {
-        uint256 tokenId = uint256(uint16(42)) | (uint256(100) << 16);
+        uint256 tokenId = uint256(uint16(42)) | (uint256(100) << VaultMath.NETUID_BITS);
         vm.expectRevert(SubnetDissolved.selector);
         lens.sharePrice(tokenId);
     }
@@ -604,7 +605,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_TotalStakeMatchesDepositAcrossValidatorSetSizes() public {
-        _setValidators(91, _hotkeys(hotkey4), _weights(10_000));
+        _setValidators(91, _hotkeys(hotkey4), _weights(VaultMath.BPS_BASE));
         _setRegBlock(91, 91);
         _simulateAlphaDepositHotkey(alice, 91, 30 ether, hotkey4);
         _wrap(alice, 91);
@@ -881,8 +882,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     function test_CurrentTokenIdReflectsRegistrationCounter() public {
         _setRegistrations(NETUID1, 3);
         _setRegistrations(NETUID2, 7);
-        assertEq(vault.currentTokenId(NETUID1), uint256(uint16(NETUID1)) | (uint256(3) << 16));
-        assertEq(vault.currentTokenId(NETUID2), uint256(uint16(NETUID2)) | (uint256(7) << 16));
+        assertEq(vault.currentTokenId(NETUID1), uint256(uint16(NETUID1)) | (uint256(3) << VaultMath.NETUID_BITS));
+        assertEq(vault.currentTokenId(NETUID2), uint256(uint16(NETUID2)) | (uint256(7) << VaultMath.NETUID_BITS));
     }
 
     function test_RevertWhen_CurrentTokenIdForUnregisteredNetuid() public {
@@ -901,7 +902,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _setRegistrations(netuid, registrations);
 
         uint256 tokenId = vault.currentTokenId(netuid);
-        assertEq(tokenId, uint256(netuid) | (uint256(registrations) << 16));
+        assertEq(tokenId, uint256(netuid) | (uint256(registrations) << VaultMath.NETUID_BITS));
         assertEq(lens.previewWrap(tokenId, 1e9), 1e18);
 
         _setRegBlock(netuid, regBlock == type(uint64).max ? 1 : type(uint64).max);
@@ -937,7 +938,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
         _reregisterSubnet(NETUID1);
         uint256 afterRecycle = vault.currentTokenId(NETUID1);
         assertTrue(before != afterRecycle);
-        assertEq(afterRecycle, uint256(uint16(NETUID1)) | (uint256(1) << 16));
+        assertEq(afterRecycle, uint256(uint16(NETUID1)) | (uint256(1) << VaultMath.NETUID_BITS));
     }
 
     /// @dev Chain migrations have rewritten live subnets' registration blocks; the token must not notice.
@@ -1450,7 +1451,7 @@ contract AlphaVaultTest is AlphaVaultTestBase {
     }
 
     function test_PreviewUnwrapSurvivesFullRegistryRotationWithoutRebalance() public {
-        _setValidators(NETUID1, _hotkeys(hotkey4), _weights(10_000));
+        _setValidators(NETUID1, _hotkeys(hotkey4), _weights(VaultMath.BPS_BASE));
         _simulateAlphaDepositHotkey(alice, NETUID1, 30 ether, hotkey4);
         _wrapHotkey(alice, NETUID1, hotkey4);
 
@@ -1875,10 +1876,10 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
     function testFuzz_WrapMintsAtLeastMinSharesOut(uint256 depositAlpha, uint256 boundBps) public {
         depositAlpha = bound(depositAlpha, CHAIN_MIN_STAKE, 1_000 ether);
-        boundBps = bound(boundBps, 0, 10_000);
+        boundBps = bound(boundBps, 0, VaultMath.BPS_BASE);
         _simulateAlphaDepositHotkey(alice, NETUID1, depositAlpha, hotkey1);
         uint256 quoted = lens.previewWrap(TOKEN1, depositAlpha);
-        uint256 minSharesOut = (quoted * boundBps) / 10_000;
+        uint256 minSharesOut = (quoted * boundBps) / VaultMath.BPS_BASE;
 
         vm.prank(alice);
         vault.wrap(NETUID1, hotkey1, minSharesOut);
@@ -2099,12 +2100,14 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         assertEq(freshLens.totalStake(tokenId), 0, "totalStake returns 0 for a vault with no stake");
         assertEq(
-            freshLens.previewWrap(tokenId, 1 ether), 1 ether * 1e9, "previewWrap returns the empty-vault initial rate"
+            freshLens.previewWrap(tokenId, 1 ether),
+            1 ether * VaultMath.VIRTUAL_SHARES,
+            "previewWrap returns the empty-vault initial rate"
         );
     }
 
     function test_Rebalance_SingleValidatorSet() public {
-        _setValidators(NETUID1, _hotkeys(hotkey1), _weights(10_000));
+        _setValidators(NETUID1, _hotkeys(hotkey1), _weights(VaultMath.BPS_BASE));
 
         _simulateAlphaDeposit(alice, NETUID1, 30 ether);
         _wrap(alice, NETUID1);
@@ -2200,7 +2203,8 @@ contract AlphaVaultTest is AlphaVaultTestBase {
 
         uint256 supply = vault.totalSupply(TOKEN1);
         uint256 burnShares = vault.balanceOf(alice, TOKEN1) * burnPct / 100;
-        uint256 expectedAssets = (burnShares * ((b1 + b2 + b3) + 1)) / (supply + 1e9);
+        uint256 expectedAssets =
+            (burnShares * ((b1 + b2 + b3) + VaultMath.VIRTUAL_ASSETS)) / (supply + VaultMath.VIRTUAL_SHARES);
 
         bytes32 aliceSub = _toSubstrate(alice);
 

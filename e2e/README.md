@@ -45,6 +45,11 @@ Scenario files in `tests/` cover:
   for the attesters to replace the name, then the vault claims the key itself.
 - `test_parked_recovery.py`: a stranger cuts the trail behind a rename; the watcher
   parks the position, exits pay from the parking hotkey, a new attestation releases.
+- `test_concurrent_swap_recovery.py`: two unequal swaps precede recovery; supplying
+  only the larger balance cannot change the record, and joint recovery permits a full exit.
+- `test_shared_recovery_deadline.py`: a second loss seen at the old deadline gets
+  a full new window before write-off. Uses a three-minute constructor window and
+  real chain timestamps, including when the first balance returns before expiry.
 - `test_parking_isolation.py`: two subnets park on the one parking hotkey; each keeps
   its own balance, the other keeps trading, and each releases on its own attestation.
 - `test_subnet_generation.py`: a rewritten registration block leaves the token and its

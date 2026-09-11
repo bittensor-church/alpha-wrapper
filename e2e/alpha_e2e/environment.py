@@ -14,9 +14,8 @@ from . import chain, config, extrinsics, substrate, validators
 
 
 def largest_burn_leaving_alpha(total: int, supply: int) -> int:
-    """The most shares whose alpha payout, `shares * (total + 1) // (supply + 1e9)`, stays below
-    `total`, and never the whole supply, so the position outlives the burn."""
-    return min(supply - 1, (total * (supply + 10**9) - 1) // (total + 1))
+    """Largest burn that leaves both alpha and shares in the position."""
+    return min(supply - 1, (total * (supply + config.VIRTUAL_SHARES) - 1) // (total + config.VIRTUAL_ASSETS))
 
 
 def alpha_to_tao_quote(netuid: int, alpha_rao: int, block: Optional[int] = None) -> int:
@@ -121,18 +120,15 @@ class Environment:
         ))
 
     def sync_backing(self, token_id: int, label: Optional[str] = None) -> None:
-        """Put `token_id`'s unaccounted loss on file, starting the window after which the
-        record gives up on it. Anyone may call it."""
+        """Secure located backing and start, collect into, or finalize a fixed recovery window."""
         self.vault_send(
-            1_500_000, "syncBacking failed", "syncBacking(uint256)", token_id, label=label,
+            4_000_000, "syncBacking failed", "syncBacking(uint256)", token_id, label=label,
         )
 
-    def recover_stray(self, token_id: int, source_pubkeys: List[str], message: str) -> dict:
-        """Park everything the vault can locate, including the alpha under `source_pubkeys`,
-        on the vault's own hotkey. Anyone may call it."""
-        sources = "[" + ",".join(source_pubkeys) + "]"
+    def recover_stray(self, token_id: int, source_pubkey: str, message: str) -> dict:
+        """Collect one source; sync must declare any shortfall first."""
         return self.vault_send(
-            4_000_000, message, "recoverStray(uint256,bytes32[])", token_id, sources,
+            4_000_000, message, "recoverStray(uint256,bytes32)", token_id, source_pubkey,
             label="recoverStray",
         )
 
@@ -260,14 +256,14 @@ class Environment:
 
     def alpha_value_tao(self, netuid: int, alpha_rao: int) -> int:
         """Spot TAO value (RAO) of an alpha amount at the current oracle price."""
-        return alpha_rao * self.alpha_price(netuid) // 10**18
+        return alpha_rao * self.alpha_price(netuid) // config.ALPHA_PRICE_SCALE
 
     def floor_boundary(self, netuid: int, floor_rao: int) -> Tuple[int, int]:
         """(alpha price, boundary): the smallest alpha-RAO deposit whose TAO value
         clears `floor_rao` at the current price."""
         price = self.alpha_price(netuid)
         assert price != 0, f"netuid {netuid}: alpha price reads 0 (oracle unavailable)"
-        boundary = (floor_rao * 10**18 + price - 1) // price
+        boundary = (floor_rao * config.ALPHA_PRICE_SCALE + price - 1) // price
         return price, boundary
 
     def alpha_to_tao_quote(self, netuid: int, alpha_rao: int) -> int:

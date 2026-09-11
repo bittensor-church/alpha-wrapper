@@ -1,20 +1,22 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import { CHAIN_MIN_STAKE } from "./mocks/MockStaking.sol";
+import { VaultMath } from "src/libraries/VaultMath.sol";
 import { ClaimBelowNativePrecision, NothingToUnwrap, ZeroAmount } from "src/VaultErrors.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 
 contract AlphaVaultRoundingTest is AlphaVaultTestBase {
     // Emissions put the zero-share rounding boundary (~5e6 assets) above the 2e6 stake floor.
     function _inflatedPool() private {
-        _simulateAlphaDeposit(alice, NETUID1, 2e6);
+        _simulateAlphaDeposit(alice, NETUID1, CHAIN_MIN_STAKE);
         _wrap(alice, NETUID1);
         _simulateEmissions(NETUID1, 1e22);
     }
 
     function testFuzz_WrapRevertsWhenDepositRoundsToZeroShares(uint256 dust) public {
         _inflatedPool();
-        dust = bound(dust, 2e6, 4e6);
+        dust = bound(dust, CHAIN_MIN_STAKE, 2 * CHAIN_MIN_STAKE);
 
         _simulateAlphaDeposit(bob, NETUID1, dust);
         vm.prank(bob);
@@ -84,7 +86,7 @@ contract AlphaVaultRoundingTest is AlphaVaultTestBase {
         assertEq(bob.balance - bobBefore, bobExpected);
 
         assertEq(clone.balance, pot - aliceExpected - bobExpected, "every wei is paid out or still in the pot");
-        assertLt(clone.balance, 2e9, "at most one sub-RAO tail per exit stays behind");
+        assertLt(clone.balance, 2 * VaultMath.TAO_NATIVE_QUANTUM, "at most one sub-RAO tail per exit stays behind");
     }
 
     function testFuzz_PreviewUnwrapMatchesDissolvedPayout(uint256 deposit, uint256 pot, uint256 shares) public {

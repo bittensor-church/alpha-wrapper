@@ -111,7 +111,7 @@ def test_min_stake_floor(env):
         dust_token_id, dust_burn, env.wrapper_substrate_coldkey, 1,
     )
     dust_residue = env.stake(dust_hotkey_pubkey, dust_clone_coldkey, dust_netuid)
-    assert dust_residue * dust_price // 10**18 < chain_min_stake, (
+    assert dust_residue * dust_price // config.ALPHA_PRICE_SCALE < chain_min_stake, (
         f"Dust consolidation: residual {dust_residue} is not sub-floor (price {dust_price})"
     )
     print(f"  Left sub-floor dust of {dust_residue} alpha RAO under the "

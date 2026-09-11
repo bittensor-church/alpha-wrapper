@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import { VaultMath } from "src/libraries/VaultMath.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { ConsolidationBelowFloor } from "src/VaultErrors.sol";
 import { CHAIN_MIN_STAKE, MockStaking } from "./mocks/MockStaking.sol";
@@ -15,7 +16,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         _wrapHotkey(alice, 99, hotkey4);
         tokenId = vault.currentTokenId(99);
         _plantVaultStake(hotkey4, 99, CHAIN_MIN_STAKE - 1);
-        _setValidators(99, _hotkeys(hotkey1), _weights(10_000));
+        _setValidators(99, _hotkeys(hotkey1), _weights(VaultMath.BPS_BASE));
     }
 
     function test_Rebalance_ConsolidatesMultipleRotatedOutSlots() public {
@@ -57,7 +58,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         _depositAndWrap(alice, NETUID1, 10 ether);
         uint256 totalBefore = lens.totalStake(TOKEN1);
 
-        _setValidators(NETUID1, _hotkeys(hotkey4), _weights(10_000));
+        _setValidators(NETUID1, _hotkeys(hotkey4), _weights(VaultMath.BPS_BASE));
         vm.recordLogs();
         vault.rebalance(NETUID1);
 
@@ -95,7 +96,7 @@ contract RollerConsolidationTest is AlphaVaultTestBase {
         uint256 dust = CHAIN_MIN_STAKE - 1;
         _plantVaultStake(hotkey1, 99, 30 ether);
         _plantVaultStake(hotkey2, 99, dust);
-        _setValidators(99, _hotkeys(hotkey4), _weights(10_000));
+        _setValidators(99, _hotkeys(hotkey4), _weights(VaultMath.BPS_BASE));
         MockStaking(STAKING_PRECOMPILE).setMoveStakeRoundingLoss(1);
 
         vault.rebalance(99);

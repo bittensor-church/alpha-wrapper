@@ -36,7 +36,7 @@ def set_validators(
 
     if len(hotkeys) != len(weights):
         raise ValidatorUpdateError("hotkeys/weights length mismatch")
-    if sum(weights) != 10_000:
+    if sum(weights) != config.BPS_BASE:
         raise ValidatorUpdateError(f"weights must sum to 10000, got {sum(weights)}")
 
     w3 = get_web3_connection(rpc_url)

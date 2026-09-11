@@ -13,10 +13,6 @@ import { ConsolidationBelowFloor, GatherBelowFloor, SwappedHotkeyStillAttested }
 ///      hotkey association still see the vault as caller and logs still originate from the vault.
 ///      Callers retain the backing gates, reentrancy guard and accounting; this library writes no storage.
 library VaultAllocation {
-    uint16 private constant BPS_BASE = 10_000;
-    /// @dev The true price is below the rounded-down read plus this quantum.
-    uint256 private constant ALPHA_PRICE_QUANTUM_E18 = 1e9;
-
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
 
     /// @dev Keep funded slots on resolved keys; empty slots need a usable receiving key. A key is usable
@@ -37,11 +33,11 @@ library VaultAllocation {
             uint256 at = VaultMath.indexOf(logicals, name);
             bytes32 key;
             bool live;
-            if (at != type(uint256).max && balances[at] != 0) {
+            if (at != VaultMath.INDEX_NOT_FOUND && balances[at] != 0) {
                 key = keys[at];
                 live = VaultReads.ownedBy(key, owner);
             } else if (_keyHeldElsewhere(keys, logicals, currentSet, name, at)) {
-                if (at == type(uint256).max) revert SwappedHotkeyStillAttested();
+                if (at == VaultMath.INDEX_NOT_FOUND) revert SwappedHotkeyStillAttested();
                 key = keys[at];
                 live = VaultReads.ownedBy(key, owner);
             } else {
@@ -104,25 +100,23 @@ library VaultAllocation {
         }
     }
 
-    /// @dev Sources the record already lists, and repeats, leave an empty entry that holds nothing;
-    ///      `found` is what the rest hold under `coldkey`.
-    function novelSources(bytes32[] memory keys, bytes32[] memory sources, bytes32 coldkey, uint16 netuid)
+    /// @dev Unique nonzero sources absent from the record, without balance reads.
+    function novelSources(bytes32[] memory keys, bytes32[] memory sources)
         external
-        view
-        returns (bytes32[] memory strays, uint256 found)
+        pure
+        returns (bytes32[] memory strays)
     {
-        strays = new bytes32[](sources.length);
-        for (uint256 i; i < sources.length;) {
+        bytes32[] memory unique = new bytes32[](sources.length);
+        uint256 count;
+        for (uint256 i; i < sources.length; ++i) {
             bytes32 source = sources[i];
-            bool novel =
-                source != bytes32(0) && !VaultMath.contains(keys, source) && !VaultMath.contains(strays, source);
-            if (novel) {
-                strays[i] = source;
-                found += IStaking(STAKING_PRECOMPILE).getStake(source, coldkey, netuid);
+            if (source != bytes32(0) && !VaultMath.contains(keys, source) && !VaultMath.contains(unique, source)) {
+                unique[count++] = source;
             }
-            unchecked {
-                ++i;
-            }
+        }
+        strays = new bytes32[](count);
+        for (uint256 i; i < count; ++i) {
+            strays[i] = unique[i];
         }
     }
 
@@ -135,7 +129,7 @@ library VaultAllocation {
         uint256 ownSlot
     ) private pure returns (bool) {
         uint256 holder = VaultMath.indexOf(keys, key);
-        if (holder == type(uint256).max || holder == ownSlot) return false;
+        if (holder == VaultMath.INDEX_NOT_FOUND || holder == ownSlot) return false;
         return VaultMath.contains(currentSet, logicals[holder]);
     }
 
@@ -153,7 +147,7 @@ library VaultAllocation {
     ) private view returns (bytes32 key, bool live) {
         if (VaultReads.ownedBy(name, owner)) return (name, true);
 
-        key = ownSlot == type(uint256).max ? name : keys[ownSlot];
+        key = ownSlot == VaultMath.INDEX_NOT_FOUND ? name : keys[ownSlot];
         live = key != name && VaultReads.ownedBy(key, owner);
         if (!live) {
             bytes32 successor = VaultReads.hotkeySuccessor(key, netuid);
@@ -187,7 +181,7 @@ library VaultAllocation {
         {
             uint256 assigned;
             for (uint256 i; i < lastIndex;) {
-                targets[i] = (total * weights[i]) / BPS_BASE;
+                targets[i] = (total * weights[i]) / VaultMath.BPS_BASE;
                 assigned += targets[i];
                 unchecked {
                     ++i;
@@ -251,7 +245,8 @@ library VaultAllocation {
     }
 
     /// @dev Move all dropped-key backing onto tracked destinations before rewriting the record.
-    ///      A write-off leaves an unmovable pile where it is; every other caller refuses it.
+    ///      Recovery may leave a below-floor pile in place; other callers refuse it.
+    /// @return leftBelowFloor True only when the richest source/destination is below the conservative floor.
     function consolidateRotatedStake(
         address clone,
         bytes32 coldkey,
@@ -260,17 +255,18 @@ library VaultAllocation {
         bytes32[] memory currentSet,
         uint256 alphaPriceE18,
         bool leaveUnmovable
-    ) external {
-        if (!_anyRotatedOut(sourceKeys, currentSet)) return;
+    ) external returns (bool leftBelowFloor) {
+        if (!_anyRotatedOut(sourceKeys, currentSet)) return false;
         (bytes32 rollerHotkey, uint256 richestBalance, uint256[] memory sourceBalances, bool hasRotatedOutBalance) =
             chooseRichestSlot(sourceKeys, currentSet, coldkey, netuid);
-        if (!hasRotatedOutBalance) return;
+        if (!hasRotatedOutBalance) return false;
         // The pile starts at the largest balance, then only grows; its starting size bounds every hop.
         if (_isBelowFloorAtAnyPrice(richestBalance, alphaPriceE18)) {
-            if (leaveUnmovable) return;
+            if (leaveUnmovable) return true;
             revert ConsolidationBelowFloor();
         }
         _rollRotatedStake(clone, coldkey, netuid, sourceKeys, currentSet, rollerHotkey, sourceBalances);
+        return false;
     }
 
     /// @dev Never revisit the starting key: its cached balance is stale once the pile leaves.
@@ -388,11 +384,12 @@ library VaultAllocation {
 
     /// @dev Reject only if the amount is below the floor even at the upper bound hidden by price rounding.
     function _isBelowFloorAtAnyPrice(uint256 alphaAmount, uint256 alphaPriceE18) private view returns (bool) {
-        return alphaPriceE18 != 0 && _taoValue(alphaAmount, alphaPriceE18 + ALPHA_PRICE_QUANTUM_E18) < _minStakeTao();
+        return alphaPriceE18 != 0
+            && _taoValue(alphaAmount, alphaPriceE18 + VaultMath.ALPHA_PRICE_QUANTUM_E18) < _minStakeTao();
     }
 
     function _taoValue(uint256 alphaAmount, uint256 alphaPriceE18) private pure returns (uint256) {
-        return (alphaAmount * alphaPriceE18) / 1e18;
+        return (alphaAmount * alphaPriceE18) / VaultMath.ALPHA_PRICE_SCALE;
     }
 
     /// @dev The only exposed minimum is for unstakes; using it for transfers/moves is conservative.

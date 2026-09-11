@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import { VaultMath } from "src/libraries/VaultMath.sol";
 import { Test } from "forge-std/Test.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { AlphaVault } from "src/AlphaVault.sol";
@@ -78,7 +79,7 @@ contract AlphaAccountingHandler is Test {
             vault.unwrapForTao(tokenId, shares, 0);
             uint256 sold = backingBefore - harness.chainBacking();
             uint256 paid = actor.balance - balanceBefore;
-            assertEq(paid, sold * 1e9, "TAO sale pays the precompile quote in native units");
+            assertEq(paid, sold * VaultMath.TAO_NATIVE_QUANTUM, "TAO sale pays the precompile quote in native units");
             alphaSold += sold;
             taoPaid += paid;
         } else {
@@ -107,7 +108,7 @@ contract AlphaAccountingInvariantTest is AlphaVaultTestBase {
 
     function setUp() public override {
         super.setUp();
-        _setValidators(NETUID1, _hotkeys(hotkey1), _weights(10_000));
+        _setValidators(NETUID1, _hotkeys(hotkey1), _weights(VaultMath.BPS_BASE));
         _setDustThreshold(0);
         MockStaking(STAKING_PRECOMPILE).setNativeTaoUnits(true);
         handler = new AlphaAccountingHandler(this, vault, lens, TOKEN1, [alice, bob, makeAddr("carol")]);
@@ -136,7 +137,7 @@ contract AlphaAccountingInvariantTest is AlphaVaultTestBase {
 
     function invariant_EveryDepositedAlphaIsHeldDeliveredOrSold() public view {
         assertEq(chainBacking() + handler.alphaDelivered() + handler.alphaSold(), handler.deposited());
-        assertEq(handler.taoPaid(), handler.alphaSold() * 1e9);
+        assertEq(handler.taoPaid(), handler.alphaSold() * VaultMath.TAO_NATIVE_QUANTUM);
     }
 
     function invariant_AllSharesBelongToTheKnownHolders() public view {

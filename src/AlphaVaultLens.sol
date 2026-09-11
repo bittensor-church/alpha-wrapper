@@ -43,6 +43,17 @@ contract AlphaVaultLens {
         return backing.total;
     }
 
+    /// @notice Unlocated alpha relative to the recorded obligation.
+    /// @dev Dust at recorded keys reduces this amount, even if it cannot be parked and is later written off.
+    function missingStake(uint256 tokenId) external view returns (uint256) {
+        (VaultReads.Slot[] memory slots, VaultReads.Backing memory backing) = _readBacking(tokenId);
+        uint256 expected;
+        for (uint256 i; i < slots.length; ++i) {
+            expected += slots[i].tracked;
+        }
+        return expected > backing.total ? expected - backing.total : 0;
+    }
+
     /// @notice Recorded active keys, before resolving any new swap.
     function lastSeenHotkeys(uint256 tokenId) external view returns (bytes32[] memory) {
         return VaultReads.activesOf(vault.recordedSlots(tokenId));
@@ -53,17 +64,19 @@ contract AlphaVaultLens {
     function isBackingIntact(uint256 tokenId) external view returns (bool) {
         if (_shortSince(tokenId) != 0) return false;
         (, VaultReads.Backing memory backing) = _readBacking(tokenId);
-        return VaultReads.firstShortOf(backing.short) == type(uint256).max;
+        return VaultReads.firstShortOf(backing.short) == VaultReads.NO_SHORT_SLOT;
     }
 
-    /// @return deadline When `syncBacking` may write the declared shortfall down; zero while the position
-    ///         accounts for itself, max uint256 while a shortfall is still undeclared.
-    /// @dev Expiry only permits the write-off; only `syncBacking` clears or finalizes a shortfall.
+    /// @return deadline Write-off time, zero if intact, or VaultReads.UNDECLARED_SHORTFALL.
+    /// @dev Collection starts a fixed window; below-floor piles may stay behind.
+    ///      Expiry permits a write-off by syncBacking; it does not finalize recovery.
     function frozenUntil(uint256 tokenId) external view returns (uint256 deadline) {
         uint64 shortSince = _shortSince(tokenId);
         if (shortSince != 0) return shortSince + vault.recoveryWindow();
         (, VaultReads.Backing memory backing) = _readBacking(tokenId);
-        if (VaultReads.firstShortOf(backing.short) != type(uint256).max) deadline = type(uint256).max;
+        if (VaultReads.firstShortOf(backing.short) != VaultReads.NO_SHORT_SLOT) {
+            deadline = VaultReads.UNDECLARED_SHORTFALL;
+        }
     }
 
     /// @notice Whether the position rests on the vault's parking hotkey with deposits and alignment shut.
@@ -100,7 +113,7 @@ contract AlphaVaultLens {
         uint256 stake = totalStake(tokenId);
         // Do not let the virtual asset imply value after a complete write-off.
         if (stake == 0) return 0;
-        uint256 price = VaultMath.assetsFor(stake, supply, 1e18);
+        uint256 price = VaultMath.assetsFor(stake, supply, VaultMath.SHARE_PRICE_SCALE);
         if (price == 0) revert SharePriceBelowPrecision();
         return price;
     }

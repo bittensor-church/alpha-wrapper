@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import { VaultMath } from "src/libraries/VaultMath.sol";
 import { MockAlpha } from "./MockAlpha.sol";
 import { ALPHA_PRECOMPILE } from "src/interfaces/IAlpha.sol";
 
@@ -15,6 +16,7 @@ uint256 constant CHAIN_NOMINATOR_MIN_STAKE = 20e6;
 contract MockStaking {
     mapping(bytes32 => mapping(bytes32 => mapping(uint256 => uint256))) public stakes;
     uint256 public moveStakeRoundingLoss;
+    uint256 public moveStakeResidual;
     uint256 public transferStakeRoundingLoss;
     bool public transferStakeReverts;
     bool public consumeAllGasOnFailure;
@@ -58,7 +60,7 @@ contract MockStaking {
     function _belowTaoValue(uint256 amount, uint256 netuid, uint256 thresholdTao) private view returns (bool) {
         // forge-lint: disable-next-line(unsafe-typecast)
         uint256 alphaPriceE18 = MockAlpha(ALPHA_PRECOMPILE).chainAlphaPrice(uint16(netuid));
-        return (amount * alphaPriceE18) / 1e18 < thresholdTao;
+        return (amount * alphaPriceE18) / VaultMath.ALPHA_PRICE_SCALE < thresholdTao;
     }
 
     function setChainMinStake(uint256 minStakeTao) external {
@@ -106,6 +108,11 @@ contract MockStaking {
         moveStakeRoundingLoss = loss;
     }
 
+    /// @dev Fault injection: leave alpha at the source despite a successful move call.
+    function setMoveStakeResidual(uint256 residual) external {
+        moveStakeResidual = residual;
+    }
+
     bool public moveStakeReverts;
 
     function setMoveStakeReverts(bool v) external {
@@ -128,8 +135,9 @@ contract MockStaking {
         if (_belowMinTransfer(amount, origin_netuid)) {
             _fail("MockStaking: AmountTooLow");
         }
-        stakes[origin_hotkey][_senderColdkey()][origin_netuid] -= amount;
-        stakes[destination_hotkey][_senderColdkey()][destination_netuid] += amount - moveStakeRoundingLoss;
+        uint256 moved = amount > moveStakeResidual ? amount - moveStakeResidual : 0;
+        stakes[origin_hotkey][_senderColdkey()][origin_netuid] -= moved;
+        stakes[destination_hotkey][_senderColdkey()][destination_netuid] += moved - moveStakeRoundingLoss;
     }
 
     function getStake(bytes32 hotkey, bytes32 coldkey, uint256 netuid) external view returns (uint256) {
@@ -255,7 +263,7 @@ contract MockStaking {
             }
         }
         stakes[hotkey][_senderColdkey()][netuid] = remainder;
-        (bool ok,) = msg.sender.call{ value: nativeTaoUnits ? taoOut * 1e9 : taoOut }("");
+        (bool ok,) = msg.sender.call{ value: nativeTaoUnits ? taoOut * VaultMath.TAO_NATIVE_QUANTUM : taoOut }("");
         require(ok, "MockStaking: TAO credit failed");
     }
 }

@@ -1,10 +1,10 @@
 {
   "getValidators": "24333",
   "getValidators (64 validators)": "317577",
-  "updateValidators: first commit": "329497",
-  "updateValidators: first commit (64 validators)": "4417986",
-  "updateValidators: full rotation": "131581",
-  "updateValidators: full rotation (64 validators)": "2092756",
-  "updateValidatorsBatch: three subnets": "930755",
-  "updateValidatorsBatch: three subnets (64 validators)": "13196870"
+  "updateValidators: first commit": "329629",
+  "updateValidators: first commit (64 validators)": "4420802",
+  "updateValidators: full rotation": "131713",
+  "updateValidators: full rotation (64 validators)": "2095572",
+  "updateValidatorsBatch: three subnets": "931151",
+  "updateValidatorsBatch: three subnets (64 validators)": "13205318"
 }

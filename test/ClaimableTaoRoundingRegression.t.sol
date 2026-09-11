@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import { VaultMath } from "src/libraries/VaultMath.sol";
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
 import { ZeroAmount } from "src/VaultErrors.sol";
 
@@ -38,7 +39,9 @@ contract ClaimableTaoRoundingRegressionTest is AlphaVaultTestBase {
         // second large gift. Bound the later small gifts by their entire value, without replaying
         // the production index arithmetic.
         uint256 earlyGifts = 813_676_692_912_666_046_992 + 102_142_341_534_152;
-        assertApproxEqAbs(paid, earlyGifts / 3, 1e9 + 96_059_874 + 4359, "Alice keeps her historical third");
+        assertApproxEqAbs(
+            paid, earlyGifts / 3, VaultMath.TAO_NATIVE_QUANTUM + 96_059_874 + 4359, "Alice keeps her historical third"
+        );
         assertGe(clone.balance, vault.taoLiability(TOKEN1));
     }
 

@@ -6,8 +6,8 @@ stranger renames a junk key onto the vacated name: the chain lets anyone claim a
 with no owner, and the rename erases the name's own edge. The vault can no longer find
 the alpha and refuses every priced operation.
 
-The watcher points `recoverStray` at the successor. The vault rolls everything it can
-locate onto its own parking hotkey, where nobody else can rename or claim it, and holds
+The watcher calls `syncBacking`, recovers the successor with `recoverStray`, and syncs
+again. Backing rests on the vault's parking hotkey, and the vault holds
 deposits and weight alignment shut until the attesters publish a set without the
 vacated name. Exits keep working from the parking hotkey throughout.
 """
@@ -39,7 +39,7 @@ def test_watcher_parks_a_position_whose_trail_a_stranger_cut(env):
         "rebalance(uint256)", netuid,
     )
 
-    # The watcher names the successor; the vault parks everything it can locate.
+    # Sync declares the loss, recovery collects the successor, and a final sync clears it.
     parked = incidents.park(env, token_id, stranding, "Parked recovery")
     assert env.total_stake_across(clone_coldkey, netuid, hotkeys + [successor_pubkey]) <= (
         config.ROUNDING_DUST_TOTAL_RAO

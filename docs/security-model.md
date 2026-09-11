@@ -43,11 +43,32 @@ Holders rely on:
 
 The [hotkey-swap runbook](hotkey-swaps.md) separates two failures: names that
 answer to the wrong coldkey and unlocated alpha. Attestation repairs the first.
-`syncBacking` handles the second: it puts a shortfall on file, holds the token
-shut until a later call observes full coverage, and after the immutable
-recovery window parks what is located and writes off the rest. Parking moves
-the alpha onto a hotkey only the vault's coldkey controls, so a repaired
-position cannot be captured again by whoever claims a vacated name.
+`syncBacking` handles the second: it moves all located backing onto the vault's
+parking hotkey before starting one fixed recovery window, with a dust exception:
+if even the richest source or parking balance is below the conservative movement
+floor, collection leaves those balances in place without delaying the window.
+Every sync retries collection before write-off, so a larger return or price rise
+can bring the dust home. Other collection failures revert without changing the
+clock or obligation; persistent chain restrictions can still delay recovery.
+A native precompile refusal consumes forwarded gas, even though state rolls back.
+
+The conservative floor uses `DefaultMinStake`: 0.002 TAO in [Subtensor `14cde6410`](https://github.com/opentensor/subtensor/blob/14cde6410fe8ec81a940e290c56f94a632a0988d/runtime/src/lib.rs#L841),
+20 times its 0.0001 TAO same-subnet transfer minimum. Thus some chain-movable
+balances can be skipped and written off. Ten skipped locations expose less than
+0.02 TAO at the floor check's price, not at a future price. Using the lower
+transfer minimum is a separate compatibility change.
+
+Recovery counts one expected total and one pool of located alpha, without assigning
+finds to validators. After sync declares a loss, `recoverStray(tokenId, source)`
+parks one source per call. Only sync finalizes recovery, collecting returns at
+recorded locations first. Neither call extends the clock.
+Validator swaps cannot move the secured balance off the vault-owned parking hotkey.
+At expiry, sync collects returns before writing off the remaining deficit,
+including any dust still outside parking. The dust exposure is per skipped
+location, valued at the floor check's price; it is not a bound on future alpha
+value. A movable pile gathers smaller balances too. Late dust recovery requires
+explicit source keys and belongs to holders at that later time.
+Full recovery or write-off leaves the position parked pending a newer attestation.
 
 Write-off chooses repricing over indefinite waiting for missing alpha. It is a
 real loss of accounted backing for holders at finalization, not proof the alpha

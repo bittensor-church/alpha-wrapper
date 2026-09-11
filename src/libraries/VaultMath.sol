@@ -4,6 +4,15 @@ pragma solidity ^0.8.20;
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 
 library VaultMath {
+    uint256 internal constant INDEX_NOT_FOUND = type(uint256).max;
+    uint256 internal constant NETUID_BITS = 16;
+    uint256 internal constant NETUID_MASK = type(uint16).max;
+    uint16 internal constant BPS_BASE = 10_000;
+    uint256 internal constant ALPHA_PRICE_SCALE = 1e18;
+    uint256 internal constant SHARE_PRICE_SCALE = 1e18;
+    /// @dev The true alpha price is below the rounded-down read plus this quantum.
+    uint256 internal constant ALPHA_PRICE_QUANTUM_E18 = 1e9;
+
     /// @dev Virtual offsets limit first-depositor inflation.
     uint256 internal constant VIRTUAL_SHARES = 1e9;
     uint256 internal constant VIRTUAL_ASSETS = 1;
@@ -61,17 +70,17 @@ library VaultMath {
                 ++i;
             }
         }
-        return type(uint256).max;
+        return INDEX_NOT_FOUND;
     }
 
     function netuidOf(uint256 tokenId) internal pure returns (uint16) {
         // forge-lint: disable-next-line(unsafe-typecast)
-        return uint16(tokenId & 0xFFFF);
+        return uint16(tokenId & NETUID_MASK);
     }
 
     function generationOf(uint256 tokenId) internal pure returns (uint64) {
         // forge-lint: disable-next-line(unsafe-typecast)
-        return uint64(tokenId >> 16);
+        return uint64(tokenId >> NETUID_BITS);
     }
 
     function unreservedTao(uint256 balance, uint256 reserved) internal pure returns (uint256) {

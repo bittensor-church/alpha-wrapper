@@ -61,11 +61,11 @@ again.
 ## The parking hotkey
 
 At deployment the vault claims one hotkey for its own coldkey, the parking
-hotkey. Nobody else can rename it, rename into it, or claim it. Every recovery
-and every write-off rolls what the vault can locate onto that hotkey and
-collapses the token's record to that single slot. A write-off keeps a slot for
-any remainder the chain would not let it move, and the next deposit or release
-carries that remainder along. The position is then parked:
+hotkey. Nobody else can rename it, rename into it, or claim it. Sync gathers
+located backing onto that hotkey when a balance clears the conservative movement
+floor. Otherwise sub-floor balances may stay behind without delaying the fixed window. Completion collapses the record to
+parking; abandoned dust needs explicit `recoverStray` sources later. The position
+is then parked:
 
 - Deposits and weight alignment wait for an attestation newer than the one in
   force when the position parked.
@@ -100,25 +100,35 @@ any shortfall or recovery clock.
 1. Monitor current registry entries, recorded/resolved stake keys, backing
    status and `awaitingAttestation`. Include empty entries and newly attested
    keys with no recorded slot.
-2. For missing backing, call `syncBacking(tokenId)` to put the loss on file and
-   locate the stake under the clone's coldkey using chain history. Call
-   `recoverStray(tokenId, sources)` with every key holding it. The located
-   balances together must cover the whole record. Recovery works before the
-   clock starts as well.
-3. While a loss is on file, every priced operation refuses, even if the alpha
-   comes back on its own. A further `syncBacking` that observes full coverage
-   takes the loss off file and reopens the token.
-4. If backing remains missing, a further `syncBacking` after `recoveryWindow`
-   parks what is located and writes the rest off. Time passing alone does
-   nothing. Alpha found later joins the position through `recoverStray` and
+2. For missing backing, call `syncBacking(tokenId)`. It secures all located
+   backing on `parkingHotkey` before starting one fixed recovery window, except
+   below-floor piles. Other collection failures revert without changing the clock
+   or obligation.
+3. Locate more alpha under the clone's coldkey and call
+   `recoverStray(tokenId, source)` once per hotkey, after sync declares the loss.
+   Finds reduce the pooled deficit without validator attribution. If parking is
+   empty, collect a movable source first so it can carry smaller sources home.
+   `missingStake(tokenId)` reports unlocated alpha;
+   dust at recorded keys reduces that amount but can still be written off if it cannot be parked.
+4. While recovery is open, priced operations refuse. Further syncs collect
+   returns at recorded locations. Partial recovery never extends the deadline.
+   At expiry, sync collects returns before writing off the remaining deficit.
+   After collecting full coverage, call sync again to finalize recovery.
+   Full recovery or write-off leaves the position parked. Alpha recovered later
    belongs to the holders at that time.
-5. Attesters publish a set without the lost or captured name, naming the
-   intended successor. The next wrap or `rebalance(netuid)` releases the
-   parked position onto it.
+5. After completion, attesters publish a newer set even if all backing returned.
+   Remove any lost or captured name, naming the intended successor. The next wrap
+   or `rebalance(netuid)` releases the parked position onto it.
 
 `recoverStray` never edits the registry and cannot pay the caller from vault
-funds. Recovery emits `BackingParked`; a write-off emits `BackingWrittenOff`
-before it. Both calls are permissionless.
+funds. Collection emits `BackingRecovered`; sync finalization emits
+`BackingParked`. A write-off emits `BackingWrittenOff` before it. Both calls
+are permissionless.
+
+Declaration cost grows with the number of located keys. The E2E scenarios allow
+4M gas per sync for small sets. For large sets (up to 64 validators), simulate the
+actual chain call and budget above that estimate; mock snapshots do not include
+native dispatch costs. Keep funds for retries when a chain restriction blocks collection.
 
 ## Exit behavior and accepted tradeoffs
 

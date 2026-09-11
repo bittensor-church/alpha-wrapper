@@ -239,7 +239,7 @@ def _stake_validators(
             flat_index = subnet_index * config.VALIDATORS_PER_SUBNET + validator_index
             hotkey_name = hotkey_names[flat_index]
 
-            extrinsics.add_stake(hotkey_ss58s[flat_index], netuid, amount_tao * 10**9)
+            extrinsics.add_stake(hotkey_ss58s[flat_index], netuid, amount_tao * config.RAO_PER_TAO)
             stake = read_stake(hotkey_pubkeys[flat_index], config.ALICE_COLDKEY_PUBKEY, netuid)
             if stake == 0:
                 raise RuntimeError(
@@ -250,7 +250,7 @@ def _stake_validators(
 
 # --- Phase 4: deploy contracts -------------------------------------------------------
 
-def _deploy_contracts(netuids: List[int], hotkey_pubkeys: List[str]):
+def _deploy_contracts(netuids: List[int], hotkey_pubkeys: List[str], *, recovery_window: int):
     _log("Phase 4: Deploy")
 
     # Capture the deploy block so a downstream observability phase can scope its
@@ -297,7 +297,7 @@ def _deploy_contracts(netuids: List[int], hotkey_pubkeys: List[str]):
         constructor_args=[
             "https://api.tao20.io/{id}.json", mailbox_implementation_address,
             subnet_clone_implementation_address, validator_registry_address,
-            str(3 * 60 * 60), parking_hotkey,
+            str(recovery_window), parking_hotkey,
         ],
     )
     print(f"  AlphaVault: {vault_address}")
@@ -354,7 +354,7 @@ def _deploy_contracts(netuids: List[int], hotkey_pubkeys: List[str]):
 
 # --- Composition -------------------------------------------------------------------------
 
-def build_environment() -> Environment:
+def build_environment(*, recovery_window: int = 3 * 60 * 60) -> Environment:
     _check_repo_root()
     _check_chain_reachable()
     _ensure_alice_wallet()
@@ -367,7 +367,7 @@ def build_environment() -> Environment:
     hotkey_names, hotkey_pubkeys, hotkey_ss58s = _register_validators(netuids)
     _stake_validators(netuids, hotkey_names, hotkey_pubkeys, hotkey_ss58s)
     (observation_block_start, registry_block_start, registry_block_end,
-     contracts, token_ids) = _deploy_contracts(netuids, hotkey_pubkeys)
+     contracts, token_ids) = _deploy_contracts(netuids, hotkey_pubkeys, recovery_window=recovery_window)
     _log("Phase 5: Fund user account")
     _ensure_evm_account_funded(
         "User account", config.WRAPPER_USER_ADDRESS, config.WRAPPER_USER_SS58,

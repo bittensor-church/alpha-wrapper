@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import { VaultMath } from "./libraries/VaultMath.sol";
 import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol";
 import { EIP712 } from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import { ECDSA } from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
@@ -9,15 +10,15 @@ import { IStaking, STAKING_PRECOMPILE } from "./interfaces/IStaking.sol";
 
 /// @dev Bounds per-validator reads and storage writes on vault operations.
 uint256 constant MAX_VALIDATORS = 64;
+/// @dev Bounds signer-rotation work even if the admin is compromised.
+uint8 constant MAX_SIGNERS = 16;
 
 /// @notice Quorum-signed EIP-712 validator weights; hotkey ownership is checked at submission only.
 contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
     bytes32 public constant ATTESTATION_TYPEHASH =
         keccak256("WeightAttestation(uint256 netuid,bytes32[] hotkeys,uint256[] weights,uint256 nonce)");
 
-    uint16 private constant BPS_BASE = 10_000;
-    /// @dev Bounds signer-rotation work even if the admin is compromised.
-    uint8 private constant MAX_SIGNERS = 16;
+    uint256 private constant MIN_QUORUM = 2;
 
     struct WeightAttestation {
         uint256 netuid;
@@ -108,9 +109,9 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
 
     function _setSigners(address[] memory newSigners, uint8 newThreshold) private {
         uint256 newSignerCount = newSigners.length;
-        if (newSignerCount < 2) revert InsufficientSigners();
+        if (newSignerCount < MIN_QUORUM) revert InsufficientSigners();
         if (newSignerCount > MAX_SIGNERS) revert TooManySigners();
-        if (newThreshold < 2) revert ThresholdTooLow();
+        if (newThreshold < MIN_QUORUM) revert ThresholdTooLow();
         if (newThreshold > newSignerCount) revert ThresholdExceedsSigners();
 
         address[] memory oldSigners = signers;
@@ -167,7 +168,7 @@ contract ValidatorRegistry is IValidatorRegistry, EIP712, AccessControl {
                 ++i;
             }
         }
-        if (sum != BPS_BASE) revert WeightsMustSum10000();
+        if (sum != VaultMath.BPS_BASE) revert WeightsMustSum10000();
     }
 
     /// @dev Signatures have no expiry; landing any update invalidates competing payloads at its nonce.
