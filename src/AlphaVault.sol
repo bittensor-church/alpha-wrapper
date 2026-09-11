@@ -111,7 +111,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     );
     /// @dev `amount` is native TAO in EVM wei.
     event TaoClaimed(address indexed user, uint256 indexed tokenId, address recipient, uint256 amount);
-    /// @dev The fixed window starts only after located backing has been secured on parking.
+    /// @dev The window starts once located backing above the floor sits on parking; smaller piles can stay behind.
     event BackingShortfallDeclared(uint256 indexed tokenId, uint256 expected, uint256 located);
     event BackingShortfallCleared(uint256 indexed tokenId);
     /// @dev Loss falls on holders at write-off; later recovery belongs to holders at recovery time.

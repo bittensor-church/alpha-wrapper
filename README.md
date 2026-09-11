@@ -11,6 +11,7 @@ ERC-1155 shares of Bittensor staked alpha, with alpha and native-TAO exits.
 - [Attester guide](docs/attester-guide.md): signed validator weights.
 - [Edge cases](docs/edge-cases.md): dissolution, minimums, disabled transfers and dust.
 - [Security model](docs/security-model.md): authority, liveness dependencies and loss policy.
+- [Deployment](docs/deployment.md): deploying the registry and vault set, and runtime compatibility.
 
 ## Layout
 

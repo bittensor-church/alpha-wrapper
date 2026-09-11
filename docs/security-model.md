@@ -143,7 +143,5 @@ them; accrued TAO survives either way.
 - Clone protection relies on the chain refusing coldkey swaps into existing
   hotkeys and rejecting locked-alpha transfers by default. A public UID can be
   front-run into a retry; a poisoned candidate never becomes backing.
-- A dissolved token can wait through a successor's late cleanup when the chain
-  no longer distinguishes their registration state.
 
 See [edge cases](edge-cases.md) for dissolution, transfer restrictions and minimums.

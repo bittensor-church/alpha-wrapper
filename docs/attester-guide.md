@@ -77,7 +77,8 @@ and leaves out the lost or captured name. The registry records whoever owns
 each name at that moment as its attested owner, so re-publishing a captured
 name hands its allocation to the stranger holding it. Re-publishing an
 unchanged set under a new nonce releases a position parked for any other
-reason. The next wrap or `rebalance(netuid)` moves the parked alpha onto the set.
+reason. The next wrap, `rebalance(netuid)` or alpha exit moves the parked alpha
+onto the set.
 
 A validator that swaps its coldkey needs a re-attestation as well: its names
 answer to the new coldkey only once a set records it, and until then they

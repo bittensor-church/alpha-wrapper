@@ -114,8 +114,9 @@ class Environment:
         ).strip() == "true"
 
     def frozen_until(self, token_id: int) -> int:
-        """Unix time at which the losses on file stop holding the token shut; 0 when none
-        is on file."""
+        """Write-off deadline of a declared shortfall; max uint256 while a shortfall is
+        undeclared, 0 while backing is intact. Expiry lets syncBacking write the deficit
+        off; it does not reopen the token by itself."""
         return int(chain.cast_call(
             self.lens_address, "frozenUntil(uint256)(uint256)", token_id,
         ))

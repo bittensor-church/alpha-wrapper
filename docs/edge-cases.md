@@ -94,8 +94,10 @@ rest as shares; the user guide describes the pre-flight that finds such slots.
 
 The chain's root can raise the minimum a nominator may hold and sweep every
 smaller position into TAO. A vault slot swept that way arrives as TAO on the
-clone, claimable by holders, while the record reads short: the shortfall clock
-starts and the position parks after the window.
+clone, claimable by holders, while the record reads short and the lens reports
+the undeclared-shortfall sentinel. A watcher calls `syncBacking(tokenId)` to
+declare the loss and start the window; a further `syncBacking` after the window
+writes the deficit off and parks the position.
 
 ## Stray TAO and alpha
 

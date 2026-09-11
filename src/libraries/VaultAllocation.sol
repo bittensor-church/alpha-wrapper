@@ -254,7 +254,8 @@ library VaultAllocation {
             targets[lastIndex] = total - assigned;
         }
 
-        // Each step settles a slot; after N-1 steps the last follows from conservation.
+        // Each step settles one cached target, so N-1 steps bound the loop.
+        // Settlement rereads actual chain balances afterwards.
         uint256 minStakeTao = _minStakeTao();
         for (uint256 round; round < lastIndex;) {
             if (!_rebalanceStep(tokenId, clone, hotkeys, balances, targets, alphaPriceE18, minStakeTao)) break;
@@ -324,7 +325,8 @@ library VaultAllocation {
         (bytes32 rollerHotkey, uint256 richestBalance, uint256[] memory sourceBalances, bool hasRotatedOutBalance) =
             chooseRichestSlot(sourceKeys, currentSet, coldkey, netuid);
         if (!hasRotatedOutBalance) return false;
-        // The pile starts at the largest balance, then only grows; its starting size bounds every hop.
+        // The pile starts at the largest balance and only grows, up to rounding on each move,
+        // so its starting size bounds every hop to within that rounding.
         if (_isBelowFloorAtAnyPrice(richestBalance, alphaPriceE18)) {
             if (leaveUnmovable) return true;
             revert ConsolidationBelowFloor();

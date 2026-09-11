@@ -118,15 +118,17 @@ The lens exposes:
 - `frozenUntil(tokenId)`: zero while the position accounts for itself, the
   maximum value while a shortfall is still undeclared, otherwise the deadline
   at which `syncBacking` can write the loss off.
-- `awaitingAttestation(tokenId)`: whether the position rests on the vault's
-  parking hotkey.
+- `awaitingAttestation(tokenId)`: whether the position still waits for an
+  attestation newer than the one it parked under. It turns false the moment a
+  newer set is published, while the alpha keeps sitting on the parking hotkey,
+  earning nothing, until the first wrap, rebalance or alpha exit moves it.
 
 A parked position pays alpha exits from the parking hotkey: the alpha arrives
 delegated to that hotkey and earns nothing until you move it to a validator
 with your own `moveStake`. TAO exits, transfers and claims work as usual.
 Deposits (`Parked`) and weight alignment wait for the attesters to publish a
-new validator set; the first wrap or rebalance after that lands the parked alpha
-on the new set.
+new validator set; the first wrap, rebalance or alpha exit after that lands the
+parked alpha on the new set.
 
 `syncBacking` parks located backing before starting one fixed window.
 `recoverStray(tokenId, source)` then collects one hotkey per call without changing
