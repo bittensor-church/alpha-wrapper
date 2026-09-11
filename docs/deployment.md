@@ -56,6 +56,8 @@ The broadcast deploys the `DepositMailbox` logic, the `SubnetClone` logic, the
 links its address into the vault bytecode, so each vault is bound to one library
 deployment. Deploying by hand needs the same link, passed as
 `--libraries src/libraries/VaultAllocation.sol:VaultAllocation:<address>`.
+`VaultAllocation` is the only linked library; the other libraries under
+`src/libraries/` compile into the contracts that use them and need no address.
 
 Every vault parameter is immutable: `validatorRegistry`, `recoveryWindow`,
 `parkingHotkey` and `cloneFactory` are fixed at deployment and the vault has no

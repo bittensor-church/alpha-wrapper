@@ -47,6 +47,26 @@ library VaultMath {
         return false;
     }
 
+    /// @dev Unique nonzero sources absent from the record, without balance reads.
+    function novelSources(bytes32[] memory keys, bytes32[] memory sources)
+        internal
+        pure
+        returns (bytes32[] memory strays)
+    {
+        bytes32[] memory unique = new bytes32[](sources.length);
+        uint256 count;
+        for (uint256 i; i < sources.length; ++i) {
+            bytes32 source = sources[i];
+            if (source != bytes32(0) && !contains(keys, source) && !contains(unique, source)) {
+                unique[count++] = source;
+            }
+        }
+        strays = new bytes32[](count);
+        for (uint256 i; i < count; ++i) {
+            strays[i] = unique[i];
+        }
+    }
+
     function concat(bytes32[] memory head, bytes32[] memory tail) internal pure returns (bytes32[] memory joined) {
         joined = new bytes32[](head.length + tail.length);
         for (uint256 i; i < head.length;) {

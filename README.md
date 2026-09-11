@@ -15,10 +15,10 @@ ERC-1155 shares of Bittensor staked alpha, with alpha and native-TAO exits.
 
 ## Layout
 
-- `src/`: vault, read-only lens, clones, registry, shared math and precompile interfaces.
-  The vault links `VaultAllocation`, a deployed library holding its receiving-key rules,
-  stake consolidation, payout gathering, weight alignment, deposit admission and
-  clone initialization/recovery.
+- `src/`: vault, read-only lens, clones, registry, shared stake operations, math
+  and precompile interfaces. The vault links `VaultAllocation`, a deployed library
+  holding its receiving-key rules, stake consolidation, payout gathering, weight
+  alignment, deposit admission and clone initialization/recovery.
 - `test/`: Foundry tests and chain mocks.
 - `script/DeployAlpha.s.sol`: deployment; configure the registry separately first
   and pass `PARKING_HOTKEY`, an unused 32-byte account id the vault claims for
