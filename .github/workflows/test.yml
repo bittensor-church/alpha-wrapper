@@ -50,23 +50,19 @@ jobs:
           forge build --sizes | tee -a "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Regenerate gas snapshots in CI
-        run: forge snapshot --gas-snapshot-check false --gas-snapshot-emit true --no-match-contract Invariant --no-match-test testFuzz --threads 4 -vvv
-
-      - name: Export regenerated gas snapshots
-        uses: actions/upload-artifact@v4
-        with:
-          name: review-gas-snapshots
-          include-hidden-files: true
-          path: |
-            .gas-snapshot
-            snapshots/
+      - name: Run tests and check gas snapshot
+        # Snapshot deterministic cases; sampled fuzz/invariant gas varies with the inputs.
+        # Both randomized suites still run in their dedicated steps below.
+        run: forge snapshot --check --tolerance 1 --no-match-contract Invariant --no-match-test testFuzz --threads 4 -vvv
 
       - name: Run fuzz tests
         run: forge test --match-test testFuzz --no-match-contract Invariant -vvv
 
       - name: Run invariant tests
         run: forge test --match-contract Invariant -vvv
+
+      - name: Check per-call gas snapshots have not drifted
+        run: git diff --exit-code snapshots/
 
       - name: Set up Python
         uses: actions/setup-python@v7
