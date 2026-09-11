@@ -115,9 +115,10 @@ Deposits (`Parked`) and weight alignment wait for the attesters to publish a
 new validator set; the first wrap or rebalance after that lands the parked alpha
 on the new set.
 
-`syncBacking` parks located backing before starting one fixed window. Partial
-`recoverStray` calls secure additional funds without extending it. At expiry,
-a further sync collects returns before writing off the remaining deficit.
+`syncBacking` parks located backing before starting one fixed window.
+`recoverStray(tokenId, source)` then collects one hotkey per call without changing
+the deadline. Call sync again after full recovery to clear the freeze. At expiry,
+sync collects returns before writing off the remaining deficit.
 Below-floor piles may remain outside parking and be written off without delaying
 the window. A larger return can collect that dust; after write-off its location
 must be supplied explicitly to `recoverStray`. Other collection failures revert

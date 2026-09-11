@@ -590,40 +590,29 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
         return false;
     }
 
-    /// @notice Bring the vault's own alpha home from caller-supplied locations.
-    /// @dev Partial recovery preserves the pooled obligation and deadline. With no shortfall,
-    ///      strays join live backing. Recovery never pays the caller.
-    function recoverStray(uint256 tokenId, bytes32[] calldata sources) external nonReentrant {
+    /// @notice Collect the vault's alpha from one caller-supplied hotkey.
+    /// @dev Sync declares and finalizes recovery; collection preserves its obligation and deadline.
+    ///      With no shortfall, recovered alpha joins live backing, including after write-off.
+    function recoverStray(uint256 tokenId, bytes32 source) external nonReentrant {
         address clone = subnetClone[tokenId];
         if (clone == address(0)) revert NothingToUnwrap();
         uint16 netuid = VaultMath.netuidOf(tokenId);
         if (VaultReads.isDissolved(tokenId)) revert NothingToRecover();
-        VaultReads.Slot[] memory slots = _slots[tokenId];
-        if (slots.length == 0) revert NothingToRecover();
+        if (_slots[tokenId].length == 0 || source == bytes32(0)) revert NothingToRecover();
         bytes32 coldkey = VaultReads.coldkeyOf(clone);
-        bool recovering = recovery[tokenId].shortSince != 0;
-        bytes32[] memory keys = VaultReads.activesOf(slots);
-        if (!recovering) {
-            VaultReads.Backing memory backing = VaultReads.resolveBacking(slots, coldkey, netuid);
-            if (VaultReads.firstShortOf(backing.short) == VaultReads.NO_SHORT_SLOT) {
-                (bytes32[] memory annexSources,) = VaultAllocation.novelSources(backing.keys, sources, coldkey, netuid);
-                _annex(tokenId, clone, coldkey, netuid, backing.keys, annexSources);
-                return;
-            }
-            keys = _collectionKeys(keys, backing.keys, coldkey, netuid);
+        bytes32[] memory sources = new bytes32[](1);
+        sources[0] = source;
+        if (recovery[tokenId].shortSince == 0) {
+            (, VaultReads.Backing memory backing) = _openBacking(tokenId, coldkey, netuid);
+            if (VaultMath.contains(backing.keys, source)) revert NothingToRecover();
+            _annex(tokenId, clone, coldkey, netuid, backing.keys, sources);
+            return;
         }
-        (bytes32[] memory strays,) = VaultAllocation.novelSources(keys, sources, coldkey, netuid);
+        if (source == parkingHotkey) revert NothingToRecover();
         uint256 before = IStaking(STAKING_PRECOMPILE).getStake(parkingHotkey, coldkey, netuid);
-        uint256 parked = _secureBacking(clone, coldkey, netuid, VaultMath.concat(keys, strays));
-        uint256 expected = _totalTracked(slots);
-        if (VaultReads.coversTracked(parked, expected)) {
-            _finishRecovery(tokenId, parked);
-        } else if (!recovering) {
-            _startRecovery(tokenId, keys, expected, parked);
-        } else {
-            if (parked <= before) revert NothingToRecover();
-            emit BackingRecovered(tokenId, parkingHotkey, parked - before);
-        }
+        uint256 parked = _secureBacking(clone, coldkey, netuid, sources);
+        if (parked <= before) revert NothingToRecover();
+        emit BackingRecovered(tokenId, parkingHotkey, parked - before);
     }
 
     /// @dev Keep resolved keys and old-key residue locations.

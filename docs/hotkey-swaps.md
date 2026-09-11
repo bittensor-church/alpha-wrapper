@@ -61,9 +61,9 @@ again.
 ## The parking hotkey
 
 At deployment the vault claims one hotkey for its own coldkey, the parking
-hotkey. Nobody else can rename it, rename into it, or claim it. Every recovery
-and every write-off gathers located backing onto that hotkey when a balance
-clears the conservative movement floor. Otherwise sub-floor balances may stay
+hotkey. Nobody else can rename it, rename into it, or claim it. Sync gathers
+located backing onto that hotkey when a balance clears the conservative movement
+floor. Otherwise sub-floor balances may stay
 behind without delaying the fixed window. Completion collapses the record to
 parking; abandoned dust needs explicit `recoverStray` sources later. The position
 is then parked:
@@ -106,13 +106,15 @@ any shortfall or recovery clock.
    below-floor piles. Other collection failures revert without changing the clock
    or obligation.
 3. Locate more alpha under the clone's coldkey and call
-   `recoverStray(tokenId, sources)`. Partial finds park immediately and reduce
-   the pooled deficit; no validator association is needed. Recovery can also
-   start before an explicit sync. `missingStake(tokenId)` reports unlocated alpha;
+   `recoverStray(tokenId, source)` once per hotkey, after sync declares the loss.
+   Finds reduce the pooled deficit without validator attribution. If parking is
+   empty, collect a movable source first so it can carry smaller sources home.
+   `missingStake(tokenId)` reports unlocated alpha;
    it excludes located dust that may also be written off if it cannot be parked.
 4. While recovery is open, priced operations refuse. Further syncs collect
    returns at recorded locations. Partial recovery never extends the deadline.
    At expiry, sync collects returns before writing off the remaining deficit.
+   After collecting full coverage, call sync again to finalize recovery.
    Full recovery or write-off leaves the position parked. Alpha recovered later
    belongs to the holders at that time.
 5. After completion, attesters publish a newer set even if all backing returned.
@@ -120,7 +122,7 @@ any shortfall or recovery clock.
    or `rebalance(netuid)` releases the parked position onto it.
 
 `recoverStray` never edits the registry and cannot pay the caller from vault
-funds. Partial collection emits `BackingRecovered`; completion emits
+funds. Collection emits `BackingRecovered`; sync finalization emits
 `BackingParked`. A write-off emits `BackingWrittenOff` before it. Both calls
 are permissionless.
 

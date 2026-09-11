@@ -121,7 +121,7 @@ contract BackingResolutionTest is AlphaVaultTestBase {
         vault.rebalance(NETUID1);
 
         // Everything is on recorded keys, so the collision parks without a watcher-supplied source.
-        vault.recoverStray(TOKEN1, new bytes32[](0));
+        vault.syncBacking(TOKEN1);
 
         assertTrue(lens.isBackingIntact(TOKEN1), "the merged balance is counted once on the parking hotkey");
         assertEq(lens.totalStake(TOKEN1), 30 ether, "and nothing was lost in the collision");

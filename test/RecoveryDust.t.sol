@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import { AlphaVaultTestBase } from "./AlphaVaultTestBase.sol";
-import { BackingUnchanged } from "src/VaultErrors.sol";
+import { BackingUnchanged, NothingToRecover } from "src/VaultErrors.sol";
 import { VaultReads } from "src/libraries/VaultReads.sol";
 import { STAKING_PRECOMPILE } from "src/interfaces/IStaking.sol";
 import { MockStaking, CHAIN_MIN_STAKE } from "./mocks/MockStaking.sol";
@@ -33,10 +33,12 @@ contract RecoveryDustTest is AlphaVaultTestBase {
         assertEq(vault.recordedSlots(TOKEN1)[0].tracked, EXPECTED);
     }
 
-    function test_SubFloorStray_StartsRecoveryWithoutReducingTheObligation() public {
+    function test_SubFloorStray_CannotChangeTheDeclaredObligation() public {
         _missingPosition();
         _plant(hotkey4, DUST);
-        vault.recoverStray(TOKEN1, _hotkeys(hotkey4));
+        vault.syncBacking(TOKEN1);
+        vm.expectRevert(NothingToRecover.selector);
+        vault.recoverStray(TOKEN1, hotkey4);
         assertEq(lens.frozenUntil(TOKEN1), block.timestamp + vault.recoveryWindow());
         assertEq(vault.recordedSlots(TOKEN1)[0].tracked, EXPECTED);
         assertEq(_parkedStake(NETUID1), 0);
@@ -68,7 +70,7 @@ contract RecoveryDustTest is AlphaVaultTestBase {
     function test_ParkedPile_CollectsDustWithoutExtendingTheWindow() public {
         (bytes32[] memory tips, uint256 deadline) = _emptyRecovery();
         uint256 recovered = _getVaultStake(tips[2], NETUID1);
-        vault.recoverStray(TOKEN1, _hotkeys(tips[2]));
+        vault.recoverStray(TOKEN1, tips[2]);
         _plant(hotkey1, DUST);
         vault.syncBacking(TOKEN1);
         assertEq(_parkedStake(NETUID1), recovered + DUST);
@@ -109,7 +111,7 @@ contract RecoveryDustTest is AlphaVaultTestBase {
     function test_PriceFallDuringRecovery_DoesNotLetDustBlockTheParkedBalance() public {
         (bytes32[] memory tips, uint256 deadline) = _emptyRecovery();
         uint256 recovered = _getVaultStake(tips[2], NETUID1);
-        vault.recoverStray(TOKEN1, _hotkeys(tips[2]));
+        vault.recoverStray(TOKEN1, tips[2]);
         _plant(hotkey1, DUST);
         _setAlphaPrice(NETUID1, 0.1e18);
         assertLt(recovered / 10, CHAIN_MIN_STAKE);

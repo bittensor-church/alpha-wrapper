@@ -88,7 +88,7 @@ def test_parking_prevents_late_swaps_and_partial_recovery_keeps_one_deadline(env
     assert env.stake(parking, clone, netuid) == parked_before
     assert env.frozen_until(token_id) == deadline
 
-    env.recover_stray(token_id, [b, b], "Fixed deadline: partial recovery must succeed")
+    env.recover_stray(token_id, b, "Fixed deadline: partial recovery must succeed")
     partial = env.stake(parking, clone, netuid)
     assert abs(partial - parked_before - a_stake) <= tolerance
     assert env.frozen_until(token_id) == deadline, "partial recovery must not extend the deadline"
@@ -126,7 +126,7 @@ def test_parking_prevents_late_swaps_and_partial_recovery_keeps_one_deadline(env
     assert env.frozen_until(token_id) == 0
     print(f"Fixed deadline: declared={declared_at}, late_swap={late_at}, deadline={deadline}, write_off={written_off_at}")
 
-    env.recover_stray(token_id, [f], "Fixed deadline: late recovery failed")
+    env.recover_stray(token_id, f, "Fixed deadline: late recovery failed")
     assert env.stake(f, clone, netuid) <= config.ROUNDING_DUST_SLOT_RAO
     assert env.vault_total_stake(token_id) >= expected - 2 * tolerance
     assert env.vault_shares(token_id) == shares

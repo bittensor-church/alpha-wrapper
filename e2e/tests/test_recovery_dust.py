@@ -121,7 +121,10 @@ def test_sub_floor_backing_cannot_block_the_fixed_recovery_window(env, recovery_
             assert env.stake(position["hotkeys"][0], coldkey, netuid) == position["dust"]
 
         # Written-off dust remains recoverable. Explicitly include its abandoned location.
-        env.recover_stray(token, position["sources"] + [position["hotkeys"][0]], "Recovery dust: late collection failed")
+        for source in position["sources"]:
+            env.recover_stray(token, source, "Recovery dust: late source collection failed")
+        if index < 2:
+            env.recover_stray(token, position["hotkeys"][0], "Recovery dust: late dust collection failed")
         parked = env.stake(parking, coldkey, netuid)
         assert abs(parked - position["expected"] - position["dust"]) <= 3 * tolerance
         assert env.vault_shares(token) == position["shares"]

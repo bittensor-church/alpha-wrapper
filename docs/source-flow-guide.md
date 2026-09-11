@@ -31,7 +31,7 @@ must also belong to the owner recorded when the validator was attested.
 ```text
 Missing backing -> syncBacking secures located backing -> fixed recovery window
                        |
-                       +-> partial recoverStray / returned balance + sync -> collect into parking
+                       +-> recoverStray(source) -> collect into parking -> sync finalizes
                        +-> full coverage -> recovery complete; parked
                        +-> expiry + sync -> collect returns; write off deficit; parked
 

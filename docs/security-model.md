@@ -52,8 +52,9 @@ can bring the dust home. Other collection failures revert without changing the
 clock or obligation; persistent chain restrictions can still delay recovery.
 
 Recovery counts one expected total and one pool of located alpha, without assigning
-finds to validators. `recoverStray` accepts partial finds and parks them immediately;
-`syncBacking` also collects returns at recorded locations. Neither extends the clock.
+finds to validators. After sync declares a loss, `recoverStray(tokenId, source)`
+parks one source per call. Only sync finalizes recovery, collecting returns at
+recorded locations first. Neither call extends the clock.
 Validator swaps cannot move the secured balance off the vault-owned parking hotkey.
 At expiry, sync collects returns before writing off the remaining deficit,
 including any dust still outside parking. The dust exposure is per skipped

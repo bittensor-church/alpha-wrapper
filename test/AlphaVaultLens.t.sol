@@ -155,7 +155,9 @@ contract AlphaVaultLensTest is AlphaVaultTestBase {
     function test_ParkedToken_ReportsItsStateAndRefusesTheMintQuote() public {
         _depositAndWrap(alice, NETUID1, 30 ether);
         _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
-        vault.recoverStray(TOKEN1, _hotkeys(hotkey4));
+        vault.syncBacking(TOKEN1);
+        vault.recoverStray(TOKEN1, hotkey4);
+        vault.syncBacking(TOKEN1);
 
         assertTrue(lens.awaitingAttestation(TOKEN1), "the lens reports the parked position");
         assertTrue(lens.isBackingIntact(TOKEN1), "parked backing is whole");

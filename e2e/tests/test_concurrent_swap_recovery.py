@@ -1,8 +1,8 @@
 """Unequal concurrent swaps recover into one pool, in either source order.
 
 After both successor edges are cut, the larger source can be recovered first,
-even when supplied twice. Its actual balance reduces the pooled deficit without
-assigning it to a validator. The smaller source then completes recovery.
+one source per call. Its actual balance reduces the pooled deficit without
+assigning it to a validator. The smaller source then fills the deficit, and sync finalizes recovery.
 """
 import re
 
@@ -73,7 +73,7 @@ def test_concurrent_unequal_swaps_cannot_poison_stray_recovery(env):
     env.assert_vault_reverts_with(
         "NothingToRecover()", 1_500_000,
         "Concurrent swaps: D is already resolved and cannot be counted again",
-        "recoverStray(uint256,bytes32[])", token_id, f"[{successors[1]}]",
+        "recoverStray(uint256,bytes32)", token_id, successors[1],
         private_key=config.DEPLOYER_PRIVATE_KEY, sender=config.DEPLOYER_ADDRESS,
     )
     assert recorded_slots() == record_before
@@ -98,6 +98,14 @@ def test_concurrent_unequal_swaps_cannot_poison_stray_recovery(env):
         )
         assert exists == "false", "each old name must lose its successor edge"
     assert not env.backing_intact(token_id), "both successor balances must now be unlocated"
+    env.assert_vault_reverts_with(
+        "BackingShortfall(uint16,bytes32,uint256)", 1_500_000,
+        "Concurrent swaps: recovery must require an explicit declaration",
+        "recoverStray(uint256,bytes32)", token_id, successors[1],
+        private_key=config.DEPLOYER_PRIVATE_KEY, sender=config.DEPLOYER_ADDRESS,
+    )
+    assert env.frozen_until(token_id) == config.UNDECLARED_SHORTFALL
+    assert recorded_slots() == record_before
     env.sync_backing(token_id, label="syncBacking [two missing slots]")
     deadline = env.frozen_until(token_id)
     assert 0 < deadline < config.UNDECLARED_SHORTFALL, "the shortfall must have a real recovery deadline"
@@ -113,11 +121,11 @@ def test_concurrent_unequal_swaps_cannot_poison_stray_recovery(env):
     assert parked_before > 0, "syncBacking must secure the located remainder immediately"
     located_before = parked_before + env.total_stake_across(clone_coldkey, netuid, hotkeys + successors)
 
-    # Supply the larger source twice. It is credited once, with no attempt to assign it to A or C.
+    # Collect the larger source without assigning it to A or C.
     receipt = env.vault_send(
         4_000_000, "Concurrent swaps: partial recovery of D failed",
-        "recoverStray(uint256,bytes32[])", token_id, f"[{successors[1]},{successors[1]}]",
-        private_key=config.DEPLOYER_PRIVATE_KEY, label="recoverStray [larger source, repeated]",
+        "recoverStray(uint256,bytes32)", token_id, successors[1],
+        private_key=config.DEPLOYER_PRIVATE_KEY, label="recoverStray [larger source]",
     )
     block = chain.receipt_block_number(receipt, "Concurrent partial recovery")
     partial = int(chain.cast_call(
@@ -143,7 +151,10 @@ def test_concurrent_unequal_swaps_cannot_poison_stray_recovery(env):
     assert env.stake(successors[0], clone_coldkey, netuid) >= source_balances[0] - tolerance
     assert env.vault_shares(token_id) == shares
     assert not env.backing_intact(token_id)
-    env.recover_stray(token_id, [successors[0]], "Concurrent swaps: final partial recovery failed")
+    env.recover_stray(token_id, successors[0], "Concurrent swaps: final partial recovery failed")
+    assert env.frozen_until(token_id) == deadline, "only sync may clear recovery"
+    assert recorded_slots() == record_before, "collection must preserve the recovery record"
+    env.sync_backing(token_id, label="syncBacking [finalize full recovery]")
     parked = env.stake(parking_hotkey, clone_coldkey, netuid)
     assert parked >= max(backing_before, located_before) - tolerance, "both swapped balances must come home"
     assert env.total_stake_across(clone_coldkey, netuid, hotkeys + successors) <= config.ROUNDING_DUST_TOTAL_RAO

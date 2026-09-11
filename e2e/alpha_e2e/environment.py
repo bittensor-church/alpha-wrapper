@@ -125,12 +125,10 @@ class Environment:
             4_000_000, "syncBacking failed", "syncBacking(uint256)", token_id, label=label,
         )
 
-    def recover_stray(self, token_id: int, source_pubkeys: List[str], message: str) -> dict:
-        """Park everything the vault can locate, including the alpha under `source_pubkeys`,
-        on the vault's own hotkey. Anyone may call it."""
-        sources = "[" + ",".join(source_pubkeys) + "]"
+    def recover_stray(self, token_id: int, source_pubkey: str, message: str) -> dict:
+        """Collect one source; sync must declare any shortfall first."""
         return self.vault_send(
-            4_000_000, message, "recoverStray(uint256,bytes32[])", token_id, sources,
+            4_000_000, message, "recoverStray(uint256,bytes32)", token_id, source_pubkey,
             label="recoverStray",
         )
 

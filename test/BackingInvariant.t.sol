@@ -99,17 +99,14 @@ contract BackingHandler is Test {
         harness.simulateSilentMove(from, to);
     }
 
-    function recoverStray(uint256 sourceSeed, uint256 countSeed) external {
+    function recoverStray(uint256 sourceSeed) external {
         uint256 slotsBefore = vault.recordedSlots(tokenId).length;
         if (slotsBefore == 0) return;
-        bytes32[] memory sources = new bytes32[](bound(countSeed, 1, 3));
-        for (uint256 i; i < sources.length; ++i) {
-            sources[i] =
-                touchedHotkeys[bound(uint256(keccak256(abi.encode(sourceSeed, i))), 0, touchedHotkeys.length - 1)];
-        }
+        bytes32 source =
+            touchedHotkeys[bound(uint256(keccak256(abi.encode(sourceSeed, uint256(0)))), 0, touchedHotkeys.length - 1)];
         uint256 owedBefore = harness.trackedBacking();
         uint256 supplyBefore = vault.totalSupply(tokenId);
-        try vault.recoverStray(tokenId, sources) {
+        try vault.recoverStray(tokenId, source) {
             (uint64 since,) = vault.recovery(tokenId);
             if (since == 0) {
                 bool[] memory covered = harness.coveredSlots();
@@ -228,10 +225,12 @@ contract BackingInvariantTest is AlphaVaultTestBase {
         handler.swapWithoutAnEdge(3920, 702498195375104724870804370661893358612984996200603330987954554);
         handler.swapWithoutAnEdge(21936, 9555);
         handler.swapWithoutAnEdge(0, 46484125467125653278869020054723548665048815226470);
-        handler.recoverStray(361656362808158655897425226168322, 0);
+        handler.syncBacking();
+        handler.recoverStray(361656362808158655897425226168322);
         handler.swapHotkey(395928111782571441, 47594521996258548997527314557814977391483923631630328760470);
         handler.swapWithoutAnEdge(115792089237316195423570985008687907853269984665640564039457584007913129639932, 2);
-        handler.recoverStray(496832458824593621465406068473474564241632359248770171723107483670860501638, 0);
+        handler.syncBacking();
+        handler.recoverStray(496832458824593621465406068473474564241632359248770171723107483670860501638);
         handler.swapHotkey(1000000000000000000, 518);
         handler.swapHotkey(39284778829218561959962831765498513039391595077, 1);
         handler.swapHotkey(4668825657844413095552775974875155388807116336350818157329463057335574, 863968505977431908);
@@ -243,7 +242,8 @@ contract BackingInvariantTest is AlphaVaultTestBase {
         );
         handler.swapWithoutAnEdge(2720838758, 2641);
         handler.swapWithoutAnEdge(2151, 2641);
-        handler.recoverStray(115792089237316195423570985008687907853269984665640564039457584007913129639935, 0);
+        handler.syncBacking();
+        handler.recoverStray(115792089237316195423570985008687907853269984665640564039457584007913129639935);
 
         invariant_TotalTrackedBackingIsBoundedByCurrentChainHoldings();
         invariant_NoTwoSlotsAnswerForOneKey();

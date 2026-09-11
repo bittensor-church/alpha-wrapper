@@ -61,8 +61,9 @@ def park(env: Environment, token_id: int, stranding: Stranding, context: str) ->
 
     env.sync_backing(token_id, label="syncBacking [declare]")
     assert env.frozen_until(token_id) > 0, f"{context}: the shortfall should be on file with a deadline"
-    env.recover_stray(token_id, [stranding.successor_pubkey], f"{context}: recoverStray failed")
+    env.recover_stray(token_id, stranding.successor_pubkey, f"{context}: recoverStray failed")
 
+    env.sync_backing(token_id, label="syncBacking [finalize]")
     parked = env.stake(env.parking_hotkey(), clone_coldkey, netuid)
     assert parked >= backing_before - config.CONSOLIDATION_ROUNDING_TOLERANCE_RAO, (
         f"{context}: the parking hotkey holds {parked} against {backing_before} before the incident"
