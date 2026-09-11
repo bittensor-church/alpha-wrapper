@@ -6,7 +6,6 @@ prices, quotes) and scenario actions (vault sends, deposits, share transfers,
 validator rotations, revert assertions).
 """
 import re
-import secrets
 import time
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -387,8 +386,7 @@ class Environment:
         clone = self.clone_address(self.current_token_id(netuid))
         if int(mailbox, 16) == 0 or int(clone, 16) == 0:
             self.vault_send(
-                2_000_000, "mailbox preparation failed", "createMailbox(uint256,bytes32)",
-                netuid, "0x" + secrets.token_hex(32),
+                2_000_000, "mailbox preparation failed", "createMailbox(uint256)", netuid,
                 private_key=private_key or config.WRAPPER_USER_PRIVATE_KEY,
             )
             mailbox = self.mailbox_address(netuid, user)

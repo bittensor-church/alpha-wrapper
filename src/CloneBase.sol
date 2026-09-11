@@ -24,17 +24,15 @@ abstract contract CloneBase {
         _;
     }
 
-    /// @param ownHotkey Claim this clone's own account as a hotkey it owns. The chain refuses coldkey
-    ///        swaps into any hotkey, so the account stays unswappable even while it holds no stake.
-    function initialize(address _wrapper, bool ownHotkey) external {
+    /// @dev Owning its own account as a hotkey keeps the account unswappable even while it holds no
+    ///      stake, because the chain refuses coldkey swaps into any hotkey.
+    function initialize(address _wrapper) external {
         if (initialized) revert AlreadyInitialized();
         if (msg.sender != _wrapper) revert UnauthorizedInitializer();
         wrapper = _wrapper;
         initialized = true;
-        if (ownHotkey) {
-            INeuron(NEURON_PRECOMPILE)
-                .tryAssociateHotkey(IAddressMapping(ADDRESS_MAPPING_PRECOMPILE).addressMapping(address(this)));
-        }
+        INeuron(NEURON_PRECOMPILE)
+            .tryAssociateHotkey(IAddressMapping(ADDRESS_MAPPING_PRECOMPILE).addressMapping(address(this)));
     }
 
     /// @notice Transfer staked alpha to another coldkey without changing its hotkey or subnet.

@@ -64,11 +64,11 @@ requires withdrawals to succeed and closes every holder's position.
 
 ## Public API coverage
 
-`LockedAlphaDepositTest` covers predeployment candidate rejection, UID retries,
-atomic rollback, shared-clone reuse, generation changes, postdeployment swap and
-locked-transfer refusal (including empty and TAO-only accounts), unexpected-lock
-failures and UID-bound candidate recovery. The mock separates conviction hotkeys
-from actual stake locations; the live scenario checks the chain's behavior.
+`LockedAlphaDepositTest` covers poisoned-candidate skipping, atomic rollback,
+shared-clone reuse, generation changes, postdeployment swap and locked-transfer
+refusal (including empty and TAO-only accounts) and unexpected-lock failures.
+The mock separates conviction hotkeys from actual stake locations; the live
+scenario checks the chain's behavior.
 
 The public suites cover first deposits, zero deposits, share round trips,
 token generation, validator validation, successor recovery, dissolution phases,

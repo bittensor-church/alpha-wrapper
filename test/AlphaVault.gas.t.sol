@@ -10,21 +10,21 @@ import { MAX_VALIDATORS } from "src/ValidatorRegistry.sol";
 contract AlphaVaultGasTest is AlphaVaultTestBase {
     function test_gas_createMailbox_firstOnSubnet() public {
         vm.prank(alice);
-        vault.createMailbox(NETUID1, keccak256("gas-first-mailbox"));
+        vault.createMailbox(NETUID1);
         vm.snapshotGasLastCall("AlphaVault", "createMailbox: first on subnet");
     }
 
     function test_gas_createMailbox_sharedSubnet() public {
         _prepareMailbox(alice, NETUID1);
         vm.prank(bob);
-        vault.createMailbox(NETUID1, keccak256("gas-later-mailbox"));
+        vault.createMailbox(NETUID1);
         vm.snapshotGasLastCall("AlphaVault", "createMailbox: shared subnet");
     }
 
     function test_gas_createMailbox_existing() public {
         _prepareMailbox(alice, NETUID1);
         vm.prank(alice);
-        vault.createMailbox(NETUID1, keccak256("ignored-uid"));
+        vault.createMailbox(NETUID1);
         vm.snapshotGasLastCall("AlphaVault", "createMailbox: existing");
     }
 

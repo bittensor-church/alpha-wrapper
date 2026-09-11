@@ -26,7 +26,6 @@ import {
     LockedDeposit,
     LockedBacking,
     MailboxNotPrepared,
-    MailboxAlreadyPrepared,
     SubnetCloneNotPrepared,
     NetuidOutOfRange,
     NothingToRecover,
@@ -101,7 +100,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     /// @dev Weight-alignment moves only; excludes consolidation and payout-gather hops.
     event Rebalanced(uint256 indexed tokenId, bytes32 indexed fromHotkey, bytes32 indexed toHotkey, uint256 amount);
     event SubnetProxyCreated(uint256 indexed tokenId, address clone);
-    event MailboxCreated(address indexed user, uint256 indexed netuid, bytes32 uid, address mailbox);
+    event MailboxCreated(address indexed user, uint256 indexed netuid, address mailbox);
     /// @dev Net of refunds; `taoOut` is EVM wei. A full burn's empty-vault refund rate can mint
     ///      more shares than were burned, in which case the event's `shares` is zero.
     event UnwrappedForTao(
@@ -155,15 +154,9 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     }
 
     /// @notice Prepare a protected mailbox before sending alpha. The first caller also prepares
-    ///         the shared subnet clone. A fresh random UID lets a rejected candidate be retried.
-    function createMailbox(uint256 netuid, bytes32 deploymentUid)
-        external
-        nonReentrant
-        returns (address mailbox, address clone)
-    {
-        return VaultAllocation.prepareClones(
-            cloneFactory, subnetClone, _mailboxes, currentTokenId(netuid), netuid, deploymentUid
-        );
+    ///         the shared subnet clone.
+    function createMailbox(uint256 netuid) external nonReentrant returns (address mailbox, address clone) {
+        return VaultAllocation.prepareClones(cloneFactory, subnetClone, _mailboxes, currentTokenId(netuid), netuid);
     }
 
     /// @notice Zero until `createMailbox` succeeds.
@@ -484,22 +477,7 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     function reclaimMailboxAlphaAsTao(uint256 netuid, bytes32 hotkey, uint256 minTaoOut) external nonReentrant {
         if (netuid > type(uint16).max) revert NetuidOutOfRange();
         if (hotkey == bytes32(0)) revert ZeroHotkey();
-        _sellMailboxAlpha(_requireMailbox(msg.sender, netuid), netuid, hotkey, minTaoOut);
-    }
-
-    /// @notice Sell unlocked alpha held by a rejected candidate for native TAO; works while alpha
-    ///         transfers are disabled.
-    function reclaimUnpreparedMailboxAlphaAsTao(uint256 netuid, bytes32 uid, bytes32 hotkey, uint256 minTaoOut)
-        external
-        nonReentrant
-    {
-        if (netuid > type(uint16).max) revert NetuidOutOfRange();
-        if (hotkey == bytes32(0)) revert ZeroHotkey();
-        address mailbox = VaultAllocation.recoveryMailbox(cloneFactory, _mailboxes, netuid, uid);
-        _sellMailboxAlpha(mailbox, netuid, hotkey, minTaoOut);
-    }
-
-    function _sellMailboxAlpha(address mailbox, uint256 netuid, bytes32 hotkey, uint256 minTaoOut) private {
+        address mailbox = _requireMailbox(msg.sender, netuid);
         bytes32 mailboxColdkey = VaultReads.coldkeyOf(mailbox);
         uint256 amount = IStaking(STAKING_PRECOMPILE).getStake(hotkey, mailboxColdkey, netuid);
         if (amount == 0) revert ZeroAmount();
@@ -923,16 +901,6 @@ contract AlphaVault is ERC1155, ERC1155Supply, ReentrancyGuard {
     function _requireMailbox(address user, uint256 netuid) private view returns (address mailbox) {
         mailbox = getDepositAddress(user, netuid);
         if (mailbox == address(0)) revert MailboxNotPrepared();
-    }
-
-    /// @notice Recover funds sent to a rejected candidate. Zero hotkey reclaims TAO only.
-    /// @dev A candidate deployed for recovery can never become the accepted mailbox.
-    function reclaimUnpreparedMailbox(uint256 netuid, bytes32 uid, bytes32 hotkey, bytes32 destinationColdkey)
-        external
-        nonReentrant
-    {
-        if (netuid > type(uint16).max) revert NetuidOutOfRange();
-        VaultAllocation.reclaimCandidateFunds(cloneFactory, _mailboxes, netuid, uid, hotkey, destinationColdkey);
     }
 
     function _syncTao(uint256 tokenId) private {

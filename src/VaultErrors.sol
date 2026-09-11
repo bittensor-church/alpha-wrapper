@@ -23,7 +23,6 @@ error SubnetCloneNotPrepared();
 error LockedBacking();
 error CloneContaminated(address candidate);
 error CloneProtectionFailed(address clone);
-error MailboxAlreadyPrepared();
 error WithdrawTooSmall();
 error ClaimBelowNativePrecision();
 error SupplyCapExceeded();

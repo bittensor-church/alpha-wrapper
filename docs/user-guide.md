@@ -12,12 +12,11 @@ use 18-decimal EVM wei. One native RAO is 1e9 wei.
 
 1. Read `getCurrentValidators(netuid)` on the lens. The deposit must sit under a
    currently attested hotkey; move your stake there first if needed.
-2. Call `createMailbox(netuid, deploymentUid)` with a fresh random `bytes32` UID.
-   This creates your mailbox and, for the first user of this subnet generation,
-   the shared subnet clone. If it reverts `CloneContaminated(candidate)`, retry
-   with a new UID.
+2. Call `createMailbox(netuid)`. This creates your mailbox and, for the first
+   user of this subnet generation, the shared subnet clone. A `CloneContaminated`
+   revert means every fresh candidate was poisoned in that block; retry later.
 3. Read `getDepositAddress(you, netuid)` from the vault. Zero means creation has
-   not succeeded yet; never fund a predicted candidate.
+   not succeeded yet.
 4. Convert that EVM address to its Substrate coldkey using
    `addressMapping(address)` at `0x080C` (Frontier HashedAddressMapping).
 5. Use Subtensor's `transfer_stake` to send alpha to that coldkey on the same
@@ -33,8 +32,7 @@ differ slightly from the preview. Zero waives the minimum.
 After a netuid is recycled, call `createMailbox` again before wrapping its new
 registration; your mailbox stays the same and the new subnet clone is created.
 The first user on a generation pays for the shared clone as well as their
-mailbox; later users pay for a mailbox. A public UID can be front-run, so a
-failed creation can need another attempt.
+mailbox; later users pay for a mailbox.
 
 A deposit below the vault's conservative stake floor reverts `DepositTooSmall`;
 top up the mailbox before retrying. A mailbox holding conviction-locked alpha
@@ -160,13 +158,3 @@ transfers prevent the first method, not the TAO sale itself.
 If a swap moved your deposit, wrapping the old key can revert `ZeroAmount`.
 Locate the mailbox's stake from chain state/history, reclaim from its actual key,
 then redeposit under a currently attested hotkey.
-
-If you funded a candidate that was later rejected, call
-`reclaimUnpreparedMailbox(netuid, uid, hotkey, destColdkey)` from the same EVM
-account. It moves the alpha at that hotkey to `destColdkey` and returns native
-TAO to you; a zero hotkey reclaims TAO only. A lock travels with the alpha, so
-the recipient must accept locks and, if it already holds a lock on the subnet,
-that lock must sit on the same hotkey. While alpha transfers are disabled,
-`reclaimUnpreparedMailboxAlphaAsTao(netuid, uid, hotkey, minTaoOut)` sells the
-unlocked alpha for native TAO instead. The candidate never becomes your mailbox;
-keep each UID you tried until its funds are recovered.

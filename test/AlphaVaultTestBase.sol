@@ -222,7 +222,7 @@ abstract contract AlphaVaultTestBase is AttestationHelper {
 
     function _prepareMailbox(address user, uint256 netuid) internal returns (address mailbox) {
         vm.prank(user);
-        (mailbox,) = vault.createMailbox(netuid, keccak256(abi.encode(user, netuid)));
+        (mailbox,) = vault.createMailbox(netuid);
     }
 
     function _mailboxColdkey(address user, uint256 netuid) internal view returns (bytes32) {

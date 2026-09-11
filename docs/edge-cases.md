@@ -30,9 +30,9 @@ A refund on an unwrapped deposit's mailbox is collected with
 Disabling alpha transfers blocks wrapping, live alpha exits and alpha mailbox
 reclaims. The vault reads the switch first and reverts `AlphaTransfersDisabled`,
 so shares and stake are preserved and the caller keeps the gas the chain would
-have taken. `unwrapForTao`, `reclaimMailboxAlphaAsTao` and
-`reclaimUnpreparedMailboxAlphaAsTao` unstake instead, so this setting does not
-block them; ownership, backing, minimums and pool execution still can.
+have taken. `unwrapForTao` and `reclaimMailboxAlphaAsTao` unstake instead, so
+this setting does not block them; ownership, backing, minimums and pool
+execution still can.
 
 ## Locked alpha
 
@@ -45,10 +45,10 @@ locks onto it without that account's consent.
 Locked alpha never backs a share:
 
 - Mailboxes and subnet clones are created through `createMailbox` before they
-  are funded. Creation rejects candidates that carry a lock, swap history or
-  ownership roles (`CloneContaminated`; retry with a fresh UID), then has each
-  accepted clone claim its own account as a hotkey, because the chain refuses
-  coldkey swaps into existing hotkeys even at zero stake.
+  are funded. Creation skips candidates that carry a lock, swap history or
+  ownership roles, then has each accepted clone claim its own account as a
+  hotkey, because the chain refuses coldkey swaps into existing hotkeys even at
+  zero stake.
 - `wrap` reverts `LockedDeposit` while the caller's mailbox holds a lock.
 - Priced operations and quotes revert `LockedBacking` while the subnet clone
   holds a lock. The conviction hotkey need not hold the locked stake, so a lock
@@ -56,9 +56,6 @@ Locked alpha never backs a share:
 - `reclaimAlphaFromMailbox` refuses a locked mailbox when the destination
   rejects locks; `reclaimMailboxAlphaAsTao` refuses any locked mailbox. Both fail
   before the chain can refuse and burn the forwarded gas.
-- Funds sent to a rejected candidate return through `reclaimUnpreparedMailbox`,
-  which never activates it; transferred alpha keeps its lock. Unlocked alpha can
-  instead be sold through `reclaimUnpreparedMailboxAlphaAsTao`.
 
 ## Minimum stake size and rounding
 
