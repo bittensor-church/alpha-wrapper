@@ -1,5 +1,11 @@
 # AlphaVault bytecode reduction
 
+This note is an archived change report. It records the change measured
+between base `2c3a630` and the implementation commit `ce7dfe3` (PR #74).
+Later work moved clone preparation into `VaultAllocation`, so the ABI entry
+count, storage entries, test counts and sizes below describe that change
+rather than current main; current sizes come from `forge build --sizes` in CI.
+
 Base: freshly fetched `origin/main`, `2c3a63067d7d4c048f4fdb6dc1eea26497b24653`
 (8 September 2026). Implementation branch: `codex/alphavault-bytecode`.
 
@@ -19,7 +25,7 @@ changing the length. These are compiled measurements, not source-map estimates.
 
 | Variant | AlphaVault runtime | Saved vs main | VaultAllocation runtime |
 | --- | ---: | ---: | ---: |
-| Latest main | 24,355 B | — | 2,797 B |
+| Base 2c3a630 | 24,355 B | - | 2,797 B |
 | Extract weight-alignment loop only | 23,811 B | 544 B | 4,119 B |
 | Also extract rotated-stake consolidation | 23,344 B | 1,011 B | 4,891 B |
 | Also extract payout gathering and rebalance balance reads (implementation) | 22,488 B | **1,867 B** | 6,434 B |
@@ -110,7 +116,7 @@ is 53,071 gas on a full alpha unwrap with 64 validators. All measured TAO exits,
 shortfall sync and lens calls are unchanged. These figures do not include the
 one-time deployment cost of the larger library.
 
-From this worktree, build production contracts and inspect their runtime sizes:
+At commit ce7dfe3, build production contracts and inspect their runtime sizes:
 
 ```sh
 forge build --sizes --skip test --skip script

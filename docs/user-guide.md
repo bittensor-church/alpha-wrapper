@@ -118,8 +118,10 @@ The lens exposes:
 - `frozenUntil(tokenId)`: zero while the position accounts for itself, the
   maximum value while a shortfall is still undeclared, otherwise the deadline
   at which `syncBacking` can write the loss off.
-- `awaitingAttestation(tokenId)`: whether the position rests on the vault's
-  parking hotkey.
+- `awaitingAttestation(tokenId)`: whether the position still waits for an
+  attestation newer than the one it parked under. It turns false the moment a
+  newer set is published, while the alpha keeps sitting on the parking hotkey,
+  earning nothing, until the first wrap or rebalance moves it.
 
 A parked position pays alpha exits from the parking hotkey: the alpha arrives
 delegated to that hotkey and earns nothing until you move it to a validator
