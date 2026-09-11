@@ -9,20 +9,22 @@ from web3.contract import Contract
 from web3.exceptions import ContractLogicError
 
 from common import (
+    add_block_argument,
     extract_error_name,
     get_web3_connection,
     load_abi,
     lookup_token_id,
     make_csv_writer,
+    resolve_block,
 )
 
 
-def _validator_columns(registry: Contract | None, netuid: int) -> dict:
+def _validator_columns(registry: Contract | None, netuid: int, block: int) -> dict:
     """One (hotkey, weight) column pair per configured validator, plus the count."""
     cols: dict = {"validators_count": ""}
     if registry is None:
         return cols
-    hotkeys, weights, _owners = registry.functions.getValidators(netuid).call()
+    hotkeys, weights, _owners = registry.functions.getValidators(netuid).call(block_identifier=block)
     cols["validators_count"] = len(hotkeys)
     for i, (hotkey, weight) in enumerate(zip(hotkeys, weights)):
         cols[f"validator_{i+1}_hotkey"] = "0x" + hotkey.hex()
@@ -37,12 +39,15 @@ def main() -> None:
                         help="AlphaVaultLens contract address, from the same trusted source as the vault")
     parser.add_argument("--registry-address", help="Optional ValidatorRegistry address (enables validator columns)")
     parser.add_argument("--rpc-url", required=True, help="HTTP RPC URL of the Subtensor EVM endpoint")
+    add_block_argument(parser)
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--token-id", type=int, help="Packed tokenId")
     target.add_argument("--netuid", type=int, help="Subnet netuid")
     args = parser.parse_args()
 
     w3 = get_web3_connection(args.rpc_url)
+    # Every read is pinned to one block, so the row is a single consistent snapshot.
+    block = resolve_block(w3, args.block)
     vault = w3.eth.contract(
         address=w3.to_checksum_address(args.vault_address),
         abi=load_abi("AlphaVault"),
@@ -53,7 +58,7 @@ def main() -> None:
     )
     # A row assembled from a mismatched pair would mix one vault's supply with another's backing.
     # This catches the wrong lens, not a dishonest one: the address still has to be trusted.
-    lens_vault = lens.functions.vault().call()
+    lens_vault = lens.functions.vault().call(block_identifier=block)
     if lens_vault != w3.to_checksum_address(args.vault_address):
         sys.exit(f"lens {args.lens_address} reads vault {lens_vault}, not {args.vault_address}")
     registry = None
@@ -63,11 +68,14 @@ def main() -> None:
             abi=load_abi("ValidatorRegistry"),
         )
 
-    token_id = args.token_id if args.token_id is not None else lookup_token_id(vault, args.netuid)
+    token_id = (
+        args.token_id if args.token_id is not None
+        else lookup_token_id(vault, args.netuid, block)
+    )
     netuid = token_id & 0xFFFF
 
     try:
-        share_price = lens.functions.sharePrice(token_id).call()
+        share_price = lens.functions.sharePrice(token_id).call(block_identifier=block)
         share_price_error = ""
     except ContractLogicError as e:
         share_price = ""
@@ -76,29 +84,30 @@ def main() -> None:
     # A token holding backing it cannot account for refuses to be valued; what it can locate is
     # still readable, and the error names why the two are not the same number.
     try:
-        total_stake = lens.functions.totalStake(token_id).call()
+        total_stake = lens.functions.totalStake(token_id).call(block_identifier=block)
         total_stake_error = ""
     except ContractLogicError as e:
-        total_stake = lens.functions.locatedStake(token_id).call()
+        total_stake = lens.functions.locatedStake(token_id).call(block_identifier=block)
         total_stake_error = extract_error_name(e, lens.abi)
 
     row = {
+        "block": block,
         "token_id": token_id,
-        "total_supply": vault.functions.totalSupply(token_id).call(),
+        "total_supply": vault.functions.totalSupply(token_id).call(block_identifier=block),
         "total_stake": total_stake,
         "total_stake_error": total_stake_error,
-        "frozen_until": lens.functions.frozenUntil(token_id).call(),
-        "awaiting_attestation": lens.functions.awaitingAttestation(token_id).call(),
+        "frozen_until": lens.functions.frozenUntil(token_id).call(block_identifier=block),
+        "awaiting_attestation": lens.functions.awaitingAttestation(token_id).call(block_identifier=block),
         "share_price": share_price,
         "share_price_error": share_price_error,
-        "subnet_clone": vault.functions.subnetClone(token_id).call(),
-        **_validator_columns(registry, netuid),
+        "subnet_clone": vault.functions.subnetClone(token_id).call(block_identifier=block),
+        **_validator_columns(registry, netuid, block),
     }
 
     writer = make_csv_writer(sys.stdout, list(row))
     writer.writerow(row)
 
-    print(f"Fetched state for token {token_id}", file=sys.stderr)
+    print(f"Fetched state for token {token_id} at block {block}", file=sys.stderr)
 
 
 if __name__ == "__main__":

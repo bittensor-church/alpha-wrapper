@@ -84,9 +84,9 @@ TAO exit, quote each recorded slot's balance with `simSwapAlphaForTao` on the
 alpha precompile through `eth_call`, where a refused quote costs nothing,
 exclude the slots that fail or quote zero, then dry-run the masked call the
 same way; `scripts/plan_tao_exit.py` does exactly this, quoting each slot from
-the key the vault would sell it from. Quotes are taken one at a time and earlier
-sales move the pool, so the dry run is the real check, and a state change
-between it and inclusion can still call for one retry.
+the key the vault would sell it from, which it reads off the lens. Quotes are
+taken one at a time and earlier sales move the pool, so the dry run is the real
+check, and a state change between it and inclusion can still call for one retry.
 
 A full-supply burn uses floor-exempt full stake drains. This is not an unconditional
 exit guarantee: ownership, backing, pool execution and slippage checks still apply.

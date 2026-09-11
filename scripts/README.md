@@ -14,8 +14,9 @@ build the contracts before using them.
 | `get_vault_state.py` | Token state and lens quotes |
 | `plan_tao_exit.py` | Pre-flight for a TAO exit: per-slot quotes, the exclusion mask, a dry run |
 
-`get_vault_state.py` requires `--lens-address` and `--vault-address`. Use a trusted
-lens: checking its `vault()` catches a mismatch, not fabricated quotes.
+`get_vault_state.py` and `plan_tao_exit.py` require `--lens-address` and
+`--vault-address`. Use a trusted lens: checking its `vault()` catches a mismatch,
+not fabricated quotes.
 
 Units: `_rao` columns are alpha at 9 decimals; `_wei` columns are native TAO at
 18 decimals. Shares are raw ERC-1155 units. Alpha payouts, alpha requested for sale

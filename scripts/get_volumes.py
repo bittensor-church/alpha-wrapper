@@ -4,56 +4,71 @@
 
 import argparse
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
-from common import get_web3_connection, load_abi, lookup_token_id, make_csv_writer
+from common import (
+    add_block_range_arguments,
+    fetch_event_logs,
+    get_web3_connection,
+    load_abi,
+    lookup_token_id,
+    make_csv_writer,
+)
 
 
-EventLog = Mapping[str, Any]
+@dataclass
+class EventTotals:
+    """Count and running sums of the named amount fields of one event stream."""
 
+    summed: tuple[str, ...]
+    count: int = 0
+    sums: dict[str, int] = field(default_factory=dict)
 
-def _sum(logs: Sequence[EventLog], field: str) -> int:
-    return sum(log["args"][field] for log in logs)
+    def add(self, args: Mapping[str, Any]) -> None:
+        self.count += 1
+        for name in self.summed:
+            self.sums[name] = self.sums.get(name, 0) + args[name]
+
+    def total(self, name: str) -> int:
+        return self.sums.get(name, 0)
 
 
 def build_volume_row(
     token_id: int,
     user: str,
-    deposit_logs: Sequence[EventLog],
-    alpha_unwrap_logs: Sequence[EventLog],
-    tao_unwrap_logs: Sequence[EventLog],
-    dissolved_unwrap_logs: Sequence[EventLog],
+    deposits: EventTotals,
+    alpha_unwraps: EventTotals,
+    tao_unwraps: EventTotals,
+    dissolved_unwraps: EventTotals,
 ) -> dict[str, int | str]:
     """Aggregate events without combining alpha RAO and TAO wei."""
-    alpha_sold = _sum(tao_unwrap_logs, "alphaSold")
-    tao_from_alpha_sales = _sum(tao_unwrap_logs, "taoOut")
-    tao_from_dissolutions = _sum(dissolved_unwrap_logs, "taoOut")
-    unwrap_count = len(alpha_unwrap_logs) + len(tao_unwrap_logs) + len(dissolved_unwrap_logs)
-    shares_burned = (
-        _sum(alpha_unwrap_logs, "shares")
-        + _sum(tao_unwrap_logs, "shares")
-        + _sum(dissolved_unwrap_logs, "shares")
-    )
+    tao_from_alpha_sales = tao_unwraps.total("taoOut")
+    tao_from_dissolutions = dissolved_unwraps.total("taoOut")
 
     return {
         "token_id": token_id,
         "user": user,
-        "deposit_count": len(deposit_logs),
-        "alpha_deposited_rao": _sum(deposit_logs, "assets"),
-        "shares_minted": _sum(deposit_logs, "shares"),
-        "alpha_unwrap_count": len(alpha_unwrap_logs),
-        "alpha_unwrap_shares_burned": _sum(alpha_unwrap_logs, "shares"),
-        "alpha_unwrapped_rao": _sum(alpha_unwrap_logs, "alphaOut"),
-        "tao_unwrap_count": len(tao_unwrap_logs),
-        "tao_unwrap_shares_burned": _sum(tao_unwrap_logs, "shares"),
-        "alpha_sold_for_tao_rao": alpha_sold,
+        "deposit_count": deposits.count,
+        "alpha_deposited_rao": deposits.total("assets"),
+        "shares_minted": deposits.total("shares"),
+        "alpha_unwrap_count": alpha_unwraps.count,
+        "alpha_unwrap_shares_burned": alpha_unwraps.total("shares"),
+        "alpha_unwrapped_rao": alpha_unwraps.total("alphaOut"),
+        "tao_unwrap_count": tao_unwraps.count,
+        "tao_unwrap_shares_burned": tao_unwraps.total("shares"),
+        "alpha_sold_for_tao_rao": tao_unwraps.total("alphaSold"),
         "tao_from_alpha_sales_wei": tao_from_alpha_sales,
-        "dissolved_unwrap_count": len(dissolved_unwrap_logs),
-        "dissolved_unwrap_shares_burned": _sum(dissolved_unwrap_logs, "shares"),
+        "dissolved_unwrap_count": dissolved_unwraps.count,
+        "dissolved_unwrap_shares_burned": dissolved_unwraps.total("shares"),
         "tao_from_dissolutions_wei": tao_from_dissolutions,
-        "unwrap_count": unwrap_count,
-        "shares_burned": shares_burned,
+        "unwrap_count": alpha_unwraps.count + tao_unwraps.count + dissolved_unwraps.count,
+        "shares_burned": (
+            alpha_unwraps.total("shares")
+            + tao_unwraps.total("shares")
+            + dissolved_unwraps.total("shares")
+        ),
         "tao_received_wei": tao_from_alpha_sales + tao_from_dissolutions,
     }
 
@@ -61,8 +76,7 @@ def build_volume_row(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--vault-address", required=True, help="AlphaVault contract address")
-    parser.add_argument("--block-start", required=True, type=int, help="Starting block (inclusive)")
-    parser.add_argument("--block-end", required=True, type=int, help="Ending block (inclusive)")
+    add_block_range_arguments(parser)
     parser.add_argument("--user", help="Optional user address; restricts volumes to this user")
     parser.add_argument("--rpc-url", required=True, help="HTTP RPC URL of the Subtensor EVM endpoint")
     target = parser.add_mutually_exclusive_group(required=True)
@@ -83,34 +97,23 @@ def main() -> None:
     if user_filter is not None:
         arg_filters["user"] = user_filter
 
-    deposit_logs = vault.events.Deposited.get_logs(
-        from_block=args.block_start,
-        to_block=args.block_end,
-        argument_filters=arg_filters,
-    )
-    unwrap_logs = vault.events.Unwrapped.get_logs(
-        from_block=args.block_start,
-        to_block=args.block_end,
-        argument_filters=arg_filters,
-    )
-    tao_unwrap_logs = vault.events.UnwrappedForTao.get_logs(
-        from_block=args.block_start,
-        to_block=args.block_end,
-        argument_filters=arg_filters,
-    )
-    dissolved_unwrap_logs = vault.events.DissolvedSubnetUnwrapped.get_logs(
-        from_block=args.block_start,
-        to_block=args.block_end,
-        argument_filters=arg_filters,
-    )
+    def totals_for(event_name: str, *summed: str) -> EventTotals:
+        totals = EventTotals(summed)
+        for _log, ev_args in fetch_event_logs(
+            w3, args.vault_address, "AlphaVault", event_name,
+            args.block_start, args.block_end,
+            argument_filters=arg_filters, chunk_size=args.chunk_size,
+        ):
+            totals.add(ev_args)
+        return totals
 
     row = build_volume_row(
         token_id,
         user_filter if user_filter is not None else "",
-        deposit_logs,
-        unwrap_logs,
-        tao_unwrap_logs,
-        dissolved_unwrap_logs,
+        totals_for("Deposited", "assets", "shares"),
+        totals_for("Unwrapped", "shares", "alphaOut"),
+        totals_for("UnwrappedForTao", "shares", "alphaSold", "taoOut"),
+        totals_for("DissolvedSubnetUnwrapped", "shares", "taoOut"),
     )
 
     writer = make_csv_writer(sys.stdout, list(row))

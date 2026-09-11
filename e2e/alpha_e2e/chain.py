@@ -17,6 +17,13 @@ class ChainError(RuntimeError):
     pass
 
 
+# A read answers in one round trip, a send waits for inclusion, a build compiles
+# the whole tree, so each class of command gets its own deadline.
+_READ_TIMEOUT = config.CALL_TIMEOUT_SECONDS
+_SEND_TIMEOUT = config.COMMAND_TIMEOUT_SECONDS
+_BUILD_TIMEOUT = config.DEPLOY_TIMEOUT_SECONDS
+
+
 def _first_token(line: str) -> str:
     return line.strip().split()[0] if line.strip() else ""
 
@@ -27,15 +34,20 @@ def _tokens_per_line(raw: str) -> List[str]:
 
 def run(
     cmd: List[str], *, check: bool = True, capture: bool = True,
-    input: Optional[str] = None,
+    input: Optional[str] = None, timeout: Optional[float] = config.COMMAND_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     # An omitted optional mixHash field causes a benign receipt-poller diagnostic.
     # Silence that module; transaction failures still surface through receipts/errors.
     env.setdefault("RUST_LOG", "error,alloy_provider::blocks=off")
-    completed = subprocess.run(
-        cmd, capture_output=capture, text=True, env=env, input=input,
-    )
+    try:
+        completed = subprocess.run(
+            cmd, capture_output=capture, text=True, env=env, input=input, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ChainError(
+            f"command timed out after {timeout}s: {' '.join(cmd)}"
+        ) from error
     if check and completed.returncode != 0:
         raise ChainError(
             f"command failed ({completed.returncode}): {' '.join(cmd)}\n"
@@ -57,7 +69,7 @@ def _cast_call_command(
 def cast_call(
     to: str, signature: str, *args, rpc: str = config.RPC_URL, block: Optional[int] = None,
 ) -> str:
-    completed = run(_cast_call_command(to, signature, args, rpc, block))
+    completed = run(_cast_call_command(to, signature, args, rpc, block), timeout=_READ_TIMEOUT)
     return _first_token(completed.stdout)
 
 
@@ -65,7 +77,7 @@ def cast_call_raw(
     to: str, signature: str, *args, rpc: str = config.RPC_URL, block: Optional[int] = None,
 ) -> str:
     """cast's full printout for a call, for return shapes such as struct arrays."""
-    return run(_cast_call_command(to, signature, args, rpc, block)).stdout
+    return run(_cast_call_command(to, signature, args, rpc, block), timeout=_READ_TIMEOUT).stdout
 
 
 # Frontier reports a call the EVM refused (as opposed to one that reverted) with this message.
@@ -78,7 +90,7 @@ def quote_alpha_for_tao(netuid: int, alpha_rao: int, rpc: str = config.RPC_URL) 
     probe = run(
         ["cast", "call", config.ALPHA_PRECOMPILE, "simSwapAlphaForTao(uint16,uint64)(uint256)",
          str(netuid), str(alpha_rao), "--rpc-url", rpc],
-        check=False,
+        check=False, timeout=_READ_TIMEOUT,
     )
     if probe.returncode == 0:
         return int(_first_token(probe.stdout))
@@ -90,7 +102,7 @@ def quote_alpha_for_tao(netuid: int, alpha_rao: int, rpc: str = config.RPC_URL) 
 def cast_call_lines(
     to: str, signature: str, *args, rpc: str = config.RPC_URL, block: Optional[int] = None,
 ) -> List[str]:
-    completed = run(_cast_call_command(to, signature, args, rpc, block))
+    completed = run(_cast_call_command(to, signature, args, rpc, block), timeout=_READ_TIMEOUT)
     return _tokens_per_line(completed.stdout)
 
 
@@ -102,7 +114,7 @@ def cast_send(
         ["cast", "send", to, signature, *[str(a) for a in args],
          "--private-key", private_key, "--rpc-url", rpc,
          *config.EVM_TX_FLAGS, "--gas-limit", str(gas_limit), "--json"],
-        check=False,
+        check=False, timeout=_SEND_TIMEOUT,
     )
     try:
         receipt = json.loads(completed.stdout)
@@ -171,18 +183,23 @@ def forge_create(
         cmd += ["--libraries", library]
     if constructor_args:
         cmd += ["--constructor-args", *[str(a) for a in constructor_args]]
-    completed = run(cmd)
+    completed = run(cmd, timeout=_BUILD_TIMEOUT)
     return json.loads(completed.stdout)["deployedTo"]
+
+
+def forge_build() -> None:
+    """Compile the contracts the deploy steps and the ABI readers work from."""
+    run(["forge", "build", "--quiet"], timeout=_BUILD_TIMEOUT)
 
 
 @lru_cache(maxsize=None)
 def cast_sig(signature: str) -> str:
-    return run(["cast", "sig", signature]).stdout.strip()
+    return run(["cast", "sig", signature], timeout=_READ_TIMEOUT).stdout.strip()
 
 
 @lru_cache(maxsize=None)
 def cast_sig_event(signature: str) -> str:
-    return run(["cast", "sig-event", signature]).stdout.strip()
+    return run(["cast", "sig-event", signature], timeout=_READ_TIMEOUT).stdout.strip()
 
 
 def event_word(receipt: dict, signature: str, index: int, message: str) -> int:
@@ -197,11 +214,11 @@ def event_word(receipt: dict, signature: str, index: int, message: str) -> int:
 
 
 def cast_keccak(data_hex: str) -> str:
-    return run(["cast", "keccak", data_hex]).stdout.strip()
+    return run(["cast", "keccak", data_hex], timeout=_READ_TIMEOUT).stdout.strip()
 
 
 def cast_abi_encode(signature: str, *args) -> str:
-    return run(["cast", "abi-encode", signature, *map(str, args)]).stdout.strip()
+    return run(["cast", "abi-encode", signature, *map(str, args)], timeout=_READ_TIMEOUT).stdout.strip()
 
 
 def create2_clone_address(deployer: str, implementation: str, salt: str) -> str:
@@ -210,32 +227,45 @@ def create2_clone_address(deployer: str, implementation: str, salt: str) -> str:
         "0x3d602d80600a3d3981f3363d3d373d3d3d363d73" + implementation[2:].lower()
         + "5af43d82803e903d91602b57fd5bf3"
     )
-    return run(["cast", "create2", "--deployer", deployer, "--salt", salt, "--init-code", init_code]).stdout.strip()
+    return run(
+        ["cast", "create2", "--deployer", deployer, "--salt", salt, "--init-code", init_code],
+        timeout=_READ_TIMEOUT,
+    ).stdout.strip()
 
 
 def cast_block_number(rpc: str = config.RPC_URL) -> int:
-    return int(run(["cast", "block-number", "--rpc-url", rpc]).stdout.strip())
+    return int(run(["cast", "block-number", "--rpc-url", rpc], timeout=_READ_TIMEOUT).stdout.strip())
 
 
 def cast_chain_id(rpc: str = config.RPC_URL) -> int:
-    return int(run(["cast", "chain-id", "--rpc-url", rpc]).stdout.strip())
+    return int(run(["cast", "chain-id", "--rpc-url", rpc], timeout=_READ_TIMEOUT).stdout.strip())
 
 
 def cast_balance_ether(address: str, rpc: str = config.RPC_URL) -> float:
-    return float(run(["cast", "balance", address, "--rpc-url", rpc, "--ether"]).stdout.strip())
+    completed = run(["cast", "balance", address, "--rpc-url", rpc, "--ether"], timeout=_READ_TIMEOUT)
+    return float(completed.stdout.strip())
 
 
 def cast_balance_wei(address: str, rpc: str = config.RPC_URL) -> int:
     """Native balance in raw wei (int) -- the balance form all deltas must use."""
-    return int(run(["cast", "balance", address, "--rpc-url", rpc]).stdout.strip())
+    return int(run(["cast", "balance", address, "--rpc-url", rpc], timeout=_READ_TIMEOUT).stdout.strip())
 
 
 def cast_code(address: str, rpc: str = config.RPC_URL) -> str:
-    return run(["cast", "code", address, "--rpc-url", rpc]).stdout.strip()
+    return run(["cast", "code", address, "--rpc-url", rpc], timeout=_READ_TIMEOUT).stdout.strip()
 
 
 def cast_wallet_address(private_key: str) -> str:
-    return run(["cast", "wallet", "address", private_key]).stdout.strip()
+    return run(["cast", "wallet", "address", private_key], timeout=_READ_TIMEOUT).stdout.strip()
+
+
+def _btcli_command(args: List[str]) -> List[str]:
+    """btcli reads and writes keys under its own default directory unless told
+    otherwise, so anything naming a wallet is pointed at the suite's directory."""
+    cmd = ["btcli", *args]
+    if any(arg.startswith("--wallet") for arg in cmd) and "--wallet-path" not in cmd:
+        cmd += ["--wallet-path", config.WALLET_PATH]
+    return cmd
 
 
 def btcli(
@@ -245,7 +275,16 @@ def btcli(
     creation, registration, wallet files) keep check=False; steps with no
     read-back (funding transfers, subnet start, sudo set) pass check=True so a
     failure aborts the run at its cause, not at a confusing later step."""
-    return run(["btcli", *args, "--network", config.CHAIN_ENDPOINT], check=check, input=input)
+    return run(
+        _btcli_command([*args, "--network", config.CHAIN_ENDPOINT]),
+        check=check, input=input, timeout=_SEND_TIMEOUT,
+    )
+
+
+def btcli_local(args: List[str], *, check: bool = False) -> subprocess.CompletedProcess:
+    """Run a btcli command that only touches local key files; it must not carry
+    the --network flag."""
+    return run(_btcli_command(args), check=check, timeout=_SEND_TIMEOUT)
 
 
 def btcli_json(args: List[str], *, check: bool = False) -> dict:

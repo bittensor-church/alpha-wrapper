@@ -1,17 +1,22 @@
 """Common utilities for Alpha-Wrapper observability scripts."""
 
+import argparse
 import csv
 import json
 import pathlib
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import asdict, fields
-from typing import Any, TextIO
+from typing import Any, Optional, TextIO
 
 from eth_utils import function_signature_to_4byte_selector
 from web3 import Web3
 from web3.contract import Contract
 from web3.exceptions import ContractLogicError
+
+# A node caps how much history one eth_getLogs may cover, so a long range is read
+# in windows of this many blocks.
+DEFAULT_CHUNK_SIZE = 10_000
 
 
 def get_web3_connection(rpc_url: str) -> Web3:
@@ -61,16 +66,55 @@ def extract_error_name(exc: Exception, abi: list[dict]) -> str:
     return selector
 
 
-def lookup_token_id(vault: Contract, netuid: int) -> int:
+def lookup_token_id(vault: Contract, netuid: int, block: int | str = "latest") -> int:
     """Resolve `netuid` to its current packed tokenId via `vault.currentTokenId`.
 
     Exits with a friendly error if the call reverts (e.g. `SubnetNotRegistered`
     for a netuid that was never registered or has been fully dissolved).
     """
     try:
-        return vault.functions.currentTokenId(netuid).call()
+        return vault.functions.currentTokenId(netuid).call(block_identifier=block)
     except ContractLogicError as e:
         sys.exit(f"netuid {netuid}: {extract_error_name(e, vault.abi)}")
+
+
+def block_number(text: str) -> int:
+    """argparse type for an absolute block number; a relative offset would be resolved
+    against a fresh head on every call and the report would span several blocks."""
+    value = int(text)
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"block must be an absolute, non-negative number, got {value}")
+    return value
+
+
+def add_block_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--block", type=block_number, help="Block to read at (default: the current head)")
+
+
+def resolve_block(w3: Web3, requested: Optional[int]) -> int:
+    """The one block every read of a report is pinned to: the requested one, or the
+    head read exactly once."""
+    if requested is None:
+        return w3.eth.block_number
+    if requested < 0:
+        raise ValueError(f"block must be an absolute, non-negative number, got {requested}")
+    return requested
+
+
+def add_block_range_arguments(parser: argparse.ArgumentParser) -> None:
+    """The block window and per-request chunk size every event reader takes."""
+    parser.add_argument("--block-start", required=True, type=int, help="Starting block (inclusive)")
+    parser.add_argument("--block-end", required=True, type=int, help="Ending block (inclusive)")
+    parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE,
+                        help=f"Blocks per log request (default {DEFAULT_CHUNK_SIZE})")
+
+
+def block_chunks(start: int, end: int, size: int) -> Iterator[tuple[int, int]]:
+    """Split an inclusive block range into inclusive windows of at most `size` blocks."""
+    if size < 1:
+        raise ValueError(f"--chunk-size must be at least 1 block, got {size}")
+    for chunk_start in range(start, end + 1, size):
+        yield chunk_start, min(chunk_start + size - 1, end)
 
 
 def fetch_event_logs(
@@ -80,25 +124,47 @@ def fetch_event_logs(
     event_name: str,
     block_start: int,
     block_end: int,
+    argument_filters: Optional[dict[str, Any]] = None,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
 ) -> Iterator[tuple[dict, dict]]:
-    """Yield (log, decoded_args) for `event_name` from `contract_name` in the block range."""
-    checksummed = w3.to_checksum_address(address)
-    contract = w3.eth.contract(address=checksummed, abi=load_abi(contract_name))
+    """Yield (log, decoded_args) for `event_name` from `contract_name` in the block
+    range, one chunk of blocks per request."""
+    if not 0 <= block_start <= block_end:
+        raise ValueError(
+            f"block range must satisfy 0 <= start <= end, got {block_start}..{block_end}"
+        )
+    contract = w3.eth.contract(
+        address=w3.to_checksum_address(address), abi=load_abi(contract_name)
+    )
+    return _stream_event_logs(
+        contract, event_name, block_start, block_end, argument_filters, chunk_size
+    )
+
+
+def _stream_event_logs(
+    contract: Contract,
+    event_name: str,
+    block_start: int,
+    block_end: int,
+    argument_filters: Optional[dict[str, Any]],
+    chunk_size: int,
+) -> Iterator[tuple[dict, dict]]:
     event_handle = contract.events[event_name]()
-    logs = w3.eth.get_logs({
-        "fromBlock": block_start,
-        "toBlock": block_end,
-        "address": checksummed,
-        "topics": [event_handle.topic],
-    })
-    for log in logs:
-        yield log, event_handle.process_log(log)["args"]
+    for from_block, to_block in block_chunks(block_start, block_end, chunk_size):
+        for log in event_handle.get_logs(
+            from_block=from_block, to_block=to_block, argument_filters=argument_filters,
+        ):
+            yield log, log["args"]
 
 
-def write_dataclass_csv(stream: TextIO, rows: list, dataclass_type: type, event_name: str) -> None:
-    """Write dataclass rows as CSV (header + rows) and log a count to stderr."""
+def write_dataclass_csv(
+    stream: TextIO, rows: Iterable, dataclass_type: type, event_name: str,
+) -> None:
+    """Write dataclass rows as CSV (header + rows) as they arrive and log a count to stderr."""
     fieldnames = [f.name for f in fields(dataclass_type)]
     writer = make_csv_writer(stream, fieldnames)
+    count = 0
     for row in rows:
         writer.writerow(asdict(row))
-    print(f"Found {len(rows)} {event_name} events", file=sys.stderr)
+        count += 1
+    print(f"Found {count} {event_name} events", file=sys.stderr)

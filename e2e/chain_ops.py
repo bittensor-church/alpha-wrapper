@@ -29,13 +29,22 @@ import sys
 from alpha_e2e import extrinsics, substrate, validators
 
 
-def _run_extrinsic(operation) -> None:
+def _report(operation, failure: type) -> None:
+    """Print what the operation returned, or its failure on stderr with exit 1."""
     try:
         result = operation()
-    except extrinsics.ExtrinsicError as error:
+    except failure as error:
         print(f"FAIL: {error}", file=sys.stderr)
         sys.exit(1)
     print(result)
+
+
+def _run_extrinsic(operation) -> None:
+    _report(operation, extrinsics.ExtrinsicError)
+
+
+def _convert_address(operation) -> None:
+    _report(operation, ValueError)
 
 
 def main() -> None:
@@ -113,9 +122,9 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.cmd == "h160_to_substrate_b32":
-        print(substrate.h160_to_substrate_b32(args.h160))
+        _convert_address(lambda: substrate.h160_to_substrate_b32(args.h160))
     elif args.cmd == "h160_to_ss58":
-        print(substrate.h160_to_ss58(args.h160))
+        _convert_address(lambda: substrate.h160_to_ss58(args.h160))
     elif args.cmd == "transfer_stake":
         _run_extrinsic(lambda: "ok block=" + extrinsics.transfer_stake(
             args.dest_ss58, args.hotkey_ss58, args.netuid, args.alpha_amount,
