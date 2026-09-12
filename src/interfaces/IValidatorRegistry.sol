@@ -10,6 +10,6 @@ interface IValidatorRegistry {
         view
         returns (bytes32[] memory hotkeys, uint16[] memory weights, bytes32[] memory owners);
 
-    /// @notice Attestations landed for `netuid`; each landing increments it by one.
+    /// @notice Validator updates landed for `netuid`; each landing increments it by one.
     function nonces(uint256 netuid) external view returns (uint256);
 }

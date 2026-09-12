@@ -119,7 +119,7 @@ def test_min_stake_floor(env):
 
     env.set_validators(
         dust_netuid, [rotated_in_pubkey, kept_hotkey_b_pubkey, kept_hotkey_c_pubkey],
-        [5000, 3000, 2000],
+        [5000, 3000, 2000], basic_hotkey=kept_hotkey_b_pubkey,
     )
     dust_total_before = env.vault_total_stake(dust_token_id)
     consolidating_deposit = dust_boundary * 3
@@ -148,6 +148,11 @@ def test_min_stake_floor(env):
     )
     print("  Backing folded in the fresh deposit and the reclaimed dust; "
           "remembered set refreshed to the current set")
+
+    if env.registry_type == "basic":
+        # A single 100% target has no weighted split to drift or correct. The
+        # Basic variant covers the deposit gate and rotated-dust consolidation above.
+        return
 
     # --- Leg 3: a sub-floor rebalance move is skipped, not attempted ----------------
     # The vault applies the same readable minimum to corrective moves, so it skips them and leaves

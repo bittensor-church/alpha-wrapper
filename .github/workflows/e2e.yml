@@ -18,13 +18,14 @@ env:
 
 jobs:
   e2e:
-    name: Localnet E2E (${{ matrix.scenario }})
+    name: Localnet E2E (${{ matrix.registry }}, ${{ matrix.scenario }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     strategy:
       fail-fast: false
       matrix:
+        registry: [attested, basic]
         # Each scenario gets its own fresh subtensor service container, so the
         # transfers-off run (which globally disables alpha transfers) is isolated.
         scenario:
@@ -46,6 +47,20 @@ jobs:
           - tests/test_parking_isolation.py
           - tests/test_subnet_generation.py
           - tests/test_dust_exit.py
+
+        # These scenarios require multiple simultaneous recorded validators.
+        # See e2e/README.md for the per-scenario explanation.
+        exclude:
+          - registry: basic
+            scenario: tests/test_concurrent_swap_recovery.py
+          - registry: basic
+            scenario: tests/test_shared_recovery_deadline.py
+          - registry: basic
+            scenario: tests/test_recovery_dust.py
+          - registry: basic
+            scenario: tests/test_hostile_dust.py
+          - registry: basic
+            scenario: tests/test_dust_exit.py
 
     services:
       subtensor:
@@ -109,7 +124,7 @@ jobs:
         # pipefail so a failing run still fails the step through the tee.
         run: |
           set -o pipefail
-          python -m pytest ${{ matrix.scenario }} -v -s -m scenario --tb=short | tee /tmp/e2e.log
+          python -m pytest ${{ matrix.scenario }} -v -s -m scenario --registry-type ${{ matrix.registry }} --tb=short | tee /tmp/e2e.log
 
       - name: Report on-chain gas per call
         if: always()
@@ -117,7 +132,7 @@ jobs:
         run: |
           if grep -q 'GAS |' /tmp/e2e.log; then
             {
-              echo "## On-chain gas: ${{ matrix.scenario }}"
+              echo "## On-chain gas: ${{ matrix.registry }} / ${{ matrix.scenario }}"
               echo '```'
               grep 'GAS |' /tmp/e2e.log | sed 's/^ *GAS | *//'
               echo '```'

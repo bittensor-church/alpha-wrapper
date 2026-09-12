@@ -9,8 +9,8 @@ be deposited:
               emissions, raise the per-block registration limit
   Phase 2     create + register 3 validator hotkeys per subnet
   Phase 3     stake TAO per validator at ratio 3:2:1
-  Phase 4     deploy the contracts, wire the validator registry (2-of-2), attest
-              the initial 50/30/20 validator sets, create the subnet proxies
+  Phase 4     deploy the contracts and either attest 50/30/20 validator sets
+              (2-of-2) or set the first hotkey at 100% via the Basic admin
   Phase 5     fund the wrapper user account
 
 btcli calls go through chain.btcli() (auto-appends --network) or
@@ -244,7 +244,9 @@ def _stake_validators(
 
 # --- Phase 4: deploy contracts -------------------------------------------------------
 
-def _deploy_contracts(netuids: List[int], hotkey_pubkeys: List[str], *, recovery_window: int):
+def _deploy_contracts(
+    netuids: List[int], hotkey_pubkeys: List[str], *, recovery_window: int, registry_type: str = "attested",
+):
     _log("Phase 4: Deploy")
 
     # Capture the deploy block so a downstream observability phase can scope its
@@ -265,18 +267,28 @@ def _deploy_contracts(netuids: List[int], hotkey_pubkeys: List[str], *, recovery
     )
     print(f"  SubnetClone: {subnet_clone_implementation_address}")
 
-    # DEPLOYER (0x7bD3...) < WRAPPER_USER (0xd103...) hex-ascending -- required by
-    # ValidatorRegistry's sorted-signers check.
-    validator_registry_address = chain.forge_create(
-        "src/ValidatorRegistry.sol:ValidatorRegistry",
-        private_key=config.DEPLOYER_PRIVATE_KEY,
-        constructor_args=[
-            config.DEPLOYER_ADDRESS,
-            f"[{config.DEPLOYER_ADDRESS},{config.WRAPPER_USER_ADDRESS}]", "2",
-        ],
-    )
-    print(f"  ValidatorRegistry: {validator_registry_address} "
-          f"(admin={config.DEPLOYER_ADDRESS}, signers=[DEPLOYER,WRAPPER_USER], threshold=2)")
+    if registry_type == "basic":
+        validator_registry_address = chain.forge_create(
+            "src/BasicValidatorRegistry.sol:BasicValidatorRegistry",
+            private_key=config.DEPLOYER_PRIVATE_KEY,
+            constructor_args=[config.DEPLOYER_ADDRESS],
+        )
+        print(f"  BasicValidatorRegistry: {validator_registry_address} (immutable admin={config.DEPLOYER_ADDRESS})")
+    elif registry_type == "attested":
+        # DEPLOYER (0x7bD3...) < WRAPPER_USER (0xd103...) hex-ascending -- required by
+        # ValidatorRegistry's sorted-signers check.
+        validator_registry_address = chain.forge_create(
+            "src/ValidatorRegistry.sol:ValidatorRegistry",
+            private_key=config.DEPLOYER_PRIVATE_KEY,
+            constructor_args=[
+                config.DEPLOYER_ADDRESS,
+                f"[{config.DEPLOYER_ADDRESS},{config.WRAPPER_USER_ADDRESS}]", "2",
+            ],
+        )
+        print(f"  ValidatorRegistry: {validator_registry_address} "
+              f"(admin={config.DEPLOYER_ADDRESS}, signers=[DEPLOYER,WRAPPER_USER], threshold=2)")
+    else:
+        raise ValueError(f"Unknown registry type: {registry_type}")
 
     allocation_library = "src/libraries/VaultAllocation.sol:VaultAllocation"
     allocation_address = chain.forge_create(allocation_library, private_key=config.DEPLOYER_PRIVATE_KEY)
@@ -318,13 +330,17 @@ def _deploy_contracts(netuids: List[int], hotkey_pubkeys: List[str], *, recovery
             subnet_index * config.VALIDATORS_PER_SUBNET:
             (subnet_index + 1) * config.VALIDATORS_PER_SUBNET
         ]
-        validators.set_validators(
-            validator_registry_address,
-            [config.DEPLOYER_PRIVATE_KEY, config.WRAPPER_USER_PRIVATE_KEY],
-            netuid, subnet_pubkeys, INITIAL_VALIDATOR_WEIGHTS,
-        )
-        print(f"  netuid {netuid} validators set (50/30/20): "
-              + ", ".join(f"{pubkey[:18]}..." for pubkey in subnet_pubkeys))
+        if registry_type == "basic":
+            validators.set_basic_validator(validator_registry_address, netuid, subnet_pubkeys[0])
+            print(f"  netuid {netuid} sole validator (100%): {subnet_pubkeys[0]}")
+        else:
+            validators.set_validators(
+                validator_registry_address,
+                [config.DEPLOYER_PRIVATE_KEY, config.WRAPPER_USER_PRIVATE_KEY],
+                netuid, subnet_pubkeys, INITIAL_VALIDATOR_WEIGHTS,
+            )
+            print(f"  netuid {netuid} validators set (50/30/20): "
+                  + ", ".join(f"{pubkey[:18]}..." for pubkey in subnet_pubkeys))
     registry_block_end = chain.cast_block_number()
 
     contracts = DeployedContracts(
@@ -339,7 +355,7 @@ def _deploy_contracts(netuids: List[int], hotkey_pubkeys: List[str], *, recovery
 
 # --- Composition -------------------------------------------------------------------------
 
-def build_environment(*, recovery_window: int = 3 * 60 * 60) -> Environment:
+def build_environment(*, recovery_window: int = 3 * 60 * 60, registry_type: str = "attested") -> Environment:
     _check_repo_root()
     _check_chain_reachable()
     _ensure_alice_wallet()
@@ -352,7 +368,7 @@ def build_environment(*, recovery_window: int = 3 * 60 * 60) -> Environment:
     hotkey_names, hotkey_pubkeys, hotkey_ss58s = _register_validators(netuids)
     _stake_validators(netuids, hotkey_names, hotkey_pubkeys, hotkey_ss58s)
     (observation_block_start, registry_block_start, registry_block_end,
-     contracts, token_ids) = _deploy_contracts(netuids, hotkey_pubkeys, recovery_window=recovery_window)
+     contracts, token_ids) = _deploy_contracts(netuids, hotkey_pubkeys, recovery_window=recovery_window, registry_type=registry_type)
     _log("Phase 5: Fund user account")
     _ensure_evm_account_funded(
         "User account", config.WRAPPER_USER_ADDRESS, config.WRAPPER_USER_SS58,
@@ -373,6 +389,7 @@ def build_environment(*, recovery_window: int = 3 * 60 * 60) -> Environment:
     print(f"  Wrapper substrate coldkey: {wrapper_substrate_coldkey}")
 
     return Environment(
+        registry_type=registry_type,
         netuids=netuids, token_ids=token_ids,
         hotkey_names=hotkey_names, hotkey_pubkeys=hotkey_pubkeys, hotkey_ss58s=hotkey_ss58s,
         vault_address=contracts.vault_address,

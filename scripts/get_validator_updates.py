@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Fetch ValidatorRegistry `ValidatorsUpdated` events within a block range and print as CSV."""
+"""Fetch attested or Basic validator registry updates within a block range and print as CSV."""
 
 import argparse
 import sys
@@ -25,7 +25,8 @@ class ValidatorsUpdatedEvent:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--registry-address", required=True, help="ValidatorRegistry contract address")
+    parser.add_argument("--registry-address", required=True, help="Validator registry contract address")
+    parser.add_argument("--registry-type", choices=("attested", "basic"), default="attested")
     add_block_range_arguments(parser)
     parser.add_argument("--rpc-url", required=True, help="HTTP RPC URL of the Subtensor EVM endpoint")
     args = parser.parse_args()
@@ -36,11 +37,13 @@ def main() -> None:
             tx_hash=log["transactionHash"].to_0x_hex(),
             netuid=ev_args["netuid"],
             nonce=ev_args["nonce"],
-            count=len(ev_args["hotkeys"]),
+            count=1 if args.registry_type == "basic" else len(ev_args["hotkeys"]),
             timestamp=w3.eth.get_block(log["blockNumber"]).timestamp,
         )
         for log, ev_args in fetch_event_logs(
-            w3, args.registry_address, "ValidatorRegistry", "ValidatorsUpdated",
+            w3, args.registry_address,
+            "BasicValidatorRegistry" if args.registry_type == "basic" else "ValidatorRegistry",
+            "ValidatorUpdated" if args.registry_type == "basic" else "ValidatorsUpdated",
             args.block_start, args.block_end, chunk_size=args.chunk_size,
         )
     )

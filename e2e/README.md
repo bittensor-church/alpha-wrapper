@@ -28,6 +28,43 @@ Use one scenario module per fresh chain. Modules share subnet and contract state
 through the session-scoped `env` fixture; running several against one long-lived
 chain is unsupported. CI gives each scenario its own container.
 
+## Registry variants
+
+The default remains `ValidatorRegistry`. CI also runs each compatible scenario in a
+separate job and fresh chain with `--registry-type basic`, deploying
+`BasicValidatorRegistry` with the deployer as permanent admin. Pytest gives the cases
+separate `[attested]` and `[basic]` IDs. To select the Basic full flow:
+
+```bash
+python3 -m pytest tests/test_full_flow.py -v -m scenario --registry-type basic
+```
+
+Both modes register and fund three hotkeys per subnet. Basic initially configures
+only the first as its 100% target, and deposits must use that currently listed key:
+`wrap` rejects deposits under unlisted keys. Rotations and parking releases explicitly
+choose a sole successor; they submit admin transactions without signing attestations.
+The full flow covers deposits under the configured target, observability, both exit
+rails, emissions and a real rotation from the sole incumbent to another hotkey.
+Basic churn rotates A to B and then B to C, depositing under the current target in
+each phase. The min-stake-floor Basic case covers its deposit gate and
+rotated-dust consolidation legs; its third leg specifically tests a weighted split
+and is inapplicable to one 100% target.
+
+CI adds Basic variants for 13 scenario files (15 test cases, including all three
+`test_dust_dos.py` cases). These five original scenarios remain attested-only:
+
+| Scenario | Why its setup cannot be reproduced with a single recorded validator |
+| --- | --- |
+| `test_concurrent_swap_recovery.py` | Requires simultaneous unequal balances on multiple recorded hotkeys, then independent swaps before any vault synchronization. |
+| `test_shared_recovery_deadline.py` | Requires A and E to disappear while C remains located, then partial recovery of A while E stays missing. |
+| `test_recovery_dust.py` | Requires multiple independently lost slots and a third case with one still-located slot to seed movable parking. |
+| `test_hostile_dust.py` | Requires a recorded 50/30/20 set with A/B funded and C at zero after a skipped corrective move, then a foreign donation on C and its rotation out. A never-recorded foreign key is not the same case. |
+| `test_dust_exit.py` | Requires a refused-dust slot to remain recorded alongside live backing at 9999/1 weights; a Basic rotation consolidates the old slot on the next wrap. |
+
+Chainless helper tests do not deploy a registry and are not duplicated. They separately
+cover selecting/deploying either registry, Basic admin submissions, rejection of
+implicit multi-target conversions and both event formats.
+
 ## Layout and coverage
 
 `alpha_e2e/` contains configuration, address derivation, chain commands,
