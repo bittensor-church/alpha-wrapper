@@ -1,10 +1,6 @@
 """Chainless tests for the volume tool's aggregation of TAO exits."""
-import pathlib
-import sys
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
-
-from get_volumes import EventTotals, build_volume_row  # noqa: E402
+from get_volumes import EventTotals, build_volume_row
 
 
 def _totals(summed, *events):

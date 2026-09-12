@@ -1,13 +1,9 @@
 """Chainless tests for the observability scripts' block-range handling."""
 import argparse
-import pathlib
-import sys
 
 import pytest
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
-
-import common  # noqa: E402
+import common
 
 
 def test_block_chunks_covers_the_range_exactly_once():

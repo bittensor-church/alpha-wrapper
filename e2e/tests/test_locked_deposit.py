@@ -68,7 +68,7 @@ def test_locked_deposit(env, recovery_window):
     gift_hotkey_ss58 = env.hotkey_ss58s[-1]
     assert gift_hotkey != hotkey, "scenario needs a gift key outside the first subnet's attested set"
     _, _, _, contracts, _ = bootstrap._deploy_contracts(
-        [netuid], env.subnet_hotkey_pubkeys(0), recovery_window=recovery_window
+        [netuid], env.subnet_hotkey_pubkeys(0), recovery_window=recovery_window, registry_type=env.registry_type
     )
     env = replace(
         env, vault_address=contracts.vault_address, lens_address=contracts.lens_address,

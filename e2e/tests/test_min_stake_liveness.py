@@ -127,15 +127,21 @@ class ChurnLedger:
         boundary = self.floor_boundary_alpha()
         self.deposit_step(label, primary_pubkey, primary_ss58, boundary * 9 // 2)
         self.unwrap_for_alpha_step(label, 80)
-        self.deposit_step(label, secondary_pubkey, secondary_ss58, boundary * 5 // 2)
+        # Before rotating, Basic can only wrap under the current primary.
+        deposit_pubkey, deposit_ss58 = (
+            (primary_pubkey, primary_ss58) if self.env.uses_basic_registry
+            else (secondary_pubkey, secondary_ss58)
+        )
+        self.deposit_step(label, deposit_pubkey, deposit_ss58, boundary * 5 // 2)
 
         replacement_pubkey, _ = bootstrap.register_hotkey(self.netuid, replacement_name)
         self.union_hotkey_pubkeys.append(replacement_pubkey)
         self.env.set_validators(
             self.netuid, [replacement_pubkey, secondary_pubkey, kept_pubkey],
-            [5000, 3000, 2000],
+            [5000, 3000, 2000], basic_hotkey=secondary_pubkey,
         )
-        print(f"  {label}: rotated {primary_pubkey[:18]}... out for {replacement_pubkey[:18]}...")
+        new_target = secondary_pubkey if self.env.uses_basic_registry else replacement_pubkey
+        print(f"  {label}: rotated {primary_pubkey[:18]}... out for {new_target[:18]}...")
 
         self.unwrap_for_alpha_step(f"{label} (over the rotated-out balances)", 50)
         rotated_out_leftover = self.env.stake(primary_pubkey, self.clone_coldkey, self.netuid)

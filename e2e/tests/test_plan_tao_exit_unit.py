@@ -1,13 +1,9 @@
 """Chainless tests for the TAO exit planner's per-slot decisions and quote classification."""
-import pathlib
-import sys
 
 import pytest
 from web3.exceptions import ContractLogicError, Web3RPCError
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
-
-import plan_tao_exit as planner  # noqa: E402
+import plan_tao_exit as planner
 
 FIRST = bytes.fromhex("11" * 32)
 SECOND = bytes.fromhex("22" * 32)

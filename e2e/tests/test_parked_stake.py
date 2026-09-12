@@ -62,7 +62,8 @@ def test_holder_exits_after_attesters_replace_the_ownerless_name(env):
     )
 
     # The attesters name the successor in place of the abandoned key.
-    env.set_validators(netuid, [successor_pubkey, hotkeys[1], hotkeys[2]], [5000, 3000, 2000])
+    env.set_validators(netuid, [successor_pubkey, hotkeys[1], hotkeys[2]], [5000, 3000, 2000],
+                       basic_hotkey=successor_pubkey)
 
     # The same exit, now paid: the vault claims the abandoned key, rolls the stake onto the
     # successor and delivers to the holder's own coldkey.

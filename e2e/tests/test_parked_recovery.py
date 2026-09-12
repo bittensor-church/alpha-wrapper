@@ -66,7 +66,8 @@ def test_watcher_parks_a_position_whose_trail_a_stranger_cut(env):
     assert env.awaiting_attestation(token_id), "an exit does not release the position"
 
     # The attesters replace the vacated name with the successor; the next rebalance releases the position.
-    env.set_validators(netuid, [successor_pubkey, hotkeys[1], hotkeys[2]], [5000, 3000, 2000])
+    env.set_validators(netuid, [successor_pubkey, hotkeys[1], hotkeys[2]], [5000, 3000, 2000],
+                       basic_hotkey=successor_pubkey)
     assert not env.awaiting_attestation(token_id), "a newer attestation lifts the hold"
     env.vault_send(
         4_000_000, "Parked recovery: the release rebalance failed", "rebalance(uint256)", netuid,
@@ -80,7 +81,11 @@ def test_watcher_parks_a_position_whose_trail_a_stranger_cut(env):
     assert env.stake(successor_pubkey, clone_coldkey, netuid) > 0, "the successor should carry its weight"
     assert env.backing_intact(token_id), "the record follows the new set"
     assert not env.awaiting_attestation(token_id), "and the position is ordinary again"
+    deposit_hotkey, deposit_ss58 = (
+        (successor_pubkey, stranding.successor_ss58) if env.uses_basic_registry
+        else (hotkeys[1], env.hotkey_ss58s[1])
+    )
     env.deposit_and_wrap(
-        netuid, hotkeys[1], env.hotkey_ss58s[1],
+        netuid, deposit_hotkey, deposit_ss58,
         config.PER_HOTKEY_TRANSFER_RAO // 10, 1_500_000, "Parked recovery: deposits should resume",
     )

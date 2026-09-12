@@ -65,7 +65,7 @@ def test_rotated_out_dust_cannot_lock_the_vault(env):
     )
     env.set_validators(
         netuid, [replacement_pubkey, kept_hotkey_b_pubkey, kept_hotkey_c_pubkey],
-        [5000, 3000, 2000],
+        [5000, 3000, 2000], basic_hotkey=kept_hotkey_b_pubkey,
     )
     print(f"  Position is now {dust_residue} alpha RAO of dust under a rotated-out hotkey")
 

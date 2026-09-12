@@ -38,8 +38,9 @@ def test_parked_subnets_share_the_hotkey_without_sharing_state(env):
     for hotkey, before in zip(hotkeys_b, stakes_b_before):
         assert env.stake(hotkey, clone_b, netuid_b) >= before, "B's stake should stay on B's validators"
 
+    deposit_index = 0 if env.uses_basic_registry else 1
     env.deposit_and_wrap(
-        netuid_b, hotkeys_b[1], env.hotkey_ss58s[VALIDATORS + 1],
+        netuid_b, hotkeys_b[deposit_index], env.hotkey_ss58s[VALIDATORS + deposit_index],
         config.PER_HOTKEY_TRANSFER_RAO // 10, 1_500_000, "Isolation: B should accept a deposit while A is parked",
     )
     env.vault_send(
@@ -68,7 +69,8 @@ def test_parked_subnets_share_the_hotkey_without_sharing_state(env):
     assert env.stake(parking_hotkey, clone_b, netuid_b) == parked_b, "B's entry should hold B's alpha"
     assert env.awaiting_attestation(token_a) and env.awaiting_attestation(token_b), "both positions should wait"
 
-    env.set_validators(netuid_a, [stranding_a.successor_pubkey, hotkeys_a[1], hotkeys_a[2]], [5000, 3000, 2000])
+    env.set_validators(netuid_a, [stranding_a.successor_pubkey, hotkeys_a[1], hotkeys_a[2]], [5000, 3000, 2000],
+                       basic_hotkey=stranding_a.successor_pubkey)
     assert env.awaiting_attestation(token_b), "an attestation for A should not release B"
     env.vault_send(
         4_000_000, "Isolation: the release rebalance on A failed", "rebalance(uint256)", netuid_a,
@@ -82,7 +84,8 @@ def test_parked_subnets_share_the_hotkey_without_sharing_state(env):
     assert env.stake(parking_hotkey, clone_b, netuid_b) == parked_b, "releasing A should move nothing of B's"
     assert env.awaiting_attestation(token_b), "B should still be parked"
 
-    env.set_validators(netuid_b, [stranding_b.successor_pubkey, hotkeys_b[1], hotkeys_b[2]], [5000, 3000, 2000])
+    env.set_validators(netuid_b, [stranding_b.successor_pubkey, hotkeys_b[1], hotkeys_b[2]], [5000, 3000, 2000],
+                       basic_hotkey=stranding_b.successor_pubkey)
     env.vault_send(
         4_000_000, "Isolation: the release rebalance on B failed", "rebalance(uint256)", netuid_b,
         label="rebalance [release B]",

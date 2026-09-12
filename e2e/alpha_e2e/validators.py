@@ -109,3 +109,15 @@ def set_validators(
         raise ValidatorUpdateError(f"updateValidators failed (tx {transaction_hash.hex()})")
     print(f"  {chain.GAS_LOG_PREFIX} {'updateValidators':<44} {receipt.gasUsed:>10,}")
     return transaction_hash.hex()
+
+
+def set_basic_validator(registry_address: str, netuid: int, hotkey: str) -> str:
+    """Submit an immediate single-validator update from the bootstrap owner."""
+    receipt = chain.cast_send(
+        registry_address, "setValidator(uint256,bytes32)", netuid, hotkey,
+        private_key=config.DEPLOYER_PRIVATE_KEY, gas_limit=500_000,
+    )
+    chain.report_gas("setValidator", receipt, reverted=not chain.receipt_ok(receipt))
+    if not chain.receipt_ok(receipt):
+        raise ValidatorUpdateError(f"setValidator failed: {receipt}")
+    return receipt["transactionHash"]
