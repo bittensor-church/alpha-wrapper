@@ -56,7 +56,11 @@ class Environment:
     observation_block_start: int
     registry_block_start: int
     registry_block_end: int
-    registry_type: str = "attested"
+    registry_type: str
+
+    @property
+    def uses_basic_registry(self) -> bool:
+        return self.registry_type == "basic"
 
     # --- On-chain getters -----------------------------------------------------
     def subnet_hotkey_pubkeys(self, subnet_index: int) -> List[str]:
@@ -409,14 +413,12 @@ class Environment:
     ) -> None:
         """Publish a set, with an explicit sole target for compatible Basic variants.
 
-        Reject an implicit multi-validator conversion: the scenario must choose the
+        Reject an implicit conversion: the scenario must choose the
         single target that preserves its rotation or recovery setup.
         """
-        if self.registry_type == "basic":
+        if self.uses_basic_registry:
             if basic_hotkey is None:
-                if len(hotkey_pubkeys) != 1 or weights != [config.BPS_BASE]:
-                    raise ValueError("Basic scenario must explicitly select one validator")
-                basic_hotkey = hotkey_pubkeys[0]
+                raise ValueError("Basic scenario must explicitly select one validator")
             if basic_hotkey not in hotkey_pubkeys:
                 raise ValueError("Basic target must belong to the requested validator set")
             validators.set_basic_validator(self.validator_registry_address, netuid, basic_hotkey)

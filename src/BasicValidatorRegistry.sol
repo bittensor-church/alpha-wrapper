@@ -33,7 +33,7 @@ contract BasicValidatorRegistry is IValidatorRegistry, Ownable2Step {
 
     /// @notice Set the subnet's sole validator at 100% weight; there is no delay.
     /// @dev Resubmitting the same hotkey refreshes its owner and advances the nonce, allowing
-    ///      the vault to leave parking after a fresh administrative decision. Sets cannot be cleared.
+    ///      the vault to leave parking after a fresh owner decision. Sets cannot be cleared.
     function setValidator(uint256 netuid, bytes32 hotkey) external onlyOwner {
         if (netuid > type(uint16).max) revert NetuidOutOfRange();
         if (hotkey == bytes32(0)) revert ZeroHotkey();
@@ -53,14 +53,13 @@ contract BasicValidatorRegistry is IValidatorRegistry, Ownable2Step {
         returns (bytes32[] memory hotkeys, uint16[] memory weights, bytes32[] memory owners)
     {
         Validator memory validator = _validators[netuid];
-        uint256 count = validator.hotkey == bytes32(0) ? 0 : 1;
-        hotkeys = new bytes32[](count);
-        weights = new uint16[](count);
-        owners = new bytes32[](count);
-        if (count != 0) {
-            hotkeys[0] = validator.hotkey;
-            weights[0] = VaultMath.BPS_BASE;
-            owners[0] = validator.owner;
-        }
+        if (validator.hotkey == bytes32(0)) return (hotkeys, weights, owners);
+
+        hotkeys = new bytes32[](1);
+        weights = new uint16[](1);
+        owners = new bytes32[](1);
+        hotkeys[0] = validator.hotkey;
+        weights[0] = VaultMath.BPS_BASE;
+        owners[0] = validator.owner;
     }
 }

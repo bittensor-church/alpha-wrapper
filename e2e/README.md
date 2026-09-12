@@ -42,7 +42,7 @@ python3 -m pytest tests/test_full_flow.py -v -m scenario --registry-type basic
 Both modes register and fund three hotkeys per subnet. Basic initially configures
 only the first as its 100% target, and deposits must use that currently listed key:
 `wrap` rejects deposits under unlisted keys. Rotations and parking releases explicitly
-choose a sole successor; they submit admin transactions without signing attestations.
+choose a sole successor; they submit owner transactions without signing attestations.
 The full flow covers deposits under the configured target, observability, both exit
 rails, emissions and a real rotation from the sole incumbent to another hotkey.
 Basic churn rotates A to B and then B to C, depositing under the current target in
@@ -50,8 +50,7 @@ each phase. The min-stake-floor Basic case covers its deposit gate and
 rotated-dust consolidation legs; its third leg specifically tests a weighted split
 and is inapplicable to one 100% target.
 
-CI adds Basic variants for 13 scenario files (15 test cases, including all three
-`test_dust_dos.py` cases). These five original scenarios remain attested-only:
+These scenarios remain attested-only:
 
 | Scenario | Why its setup cannot be reproduced with a single recorded validator |
 | --- | --- |
@@ -60,10 +59,6 @@ CI adds Basic variants for 13 scenario files (15 test cases, including all three
 | `test_recovery_dust.py` | Requires multiple independently lost slots and a third case with one still-located slot to seed movable parking. |
 | `test_hostile_dust.py` | Requires a recorded 50/30/20 set with A/B funded and C at zero after a skipped corrective move, then a foreign donation on C and its rotation out. A never-recorded foreign key is not the same case. |
 | `test_dust_exit.py` | Requires a refused-dust slot to remain recorded alongside live backing at 9999/1 weights; a Basic rotation consolidates the old slot on the next wrap. |
-
-Chainless helper tests do not deploy a registry and are not duplicated. They separately
-cover selecting/deploying either registry, Basic admin submissions, rejection of
-implicit multi-target conversions and both event formats.
 
 ## Layout and coverage
 
@@ -108,8 +103,5 @@ Each module's docstring describes its sequence. These scenarios exercise specifi
 recovery conditions, not an unconditional exit guarantee; see the
 [design](../docs/hotkey-swaps.md).
 
-Chainless harness tests are `test_substrate.py`, `test_chain_unit.py`,
-`test_checks_unit.py`, `test_environment_unit.py`, `test_plan_tao_exit_unit.py`,
-`test_common_unit.py` and `test_bootstrap_unit.py`.
 Bootstrap creates three subnets, nine validators, the contracts and funded test
 accounts once per scenario process.

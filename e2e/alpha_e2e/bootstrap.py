@@ -244,29 +244,7 @@ def _stake_validators(
 
 # --- Phase 4: deploy contracts -------------------------------------------------------
 
-def _deploy_contracts(
-    netuids: List[int], hotkey_pubkeys: List[str], *, recovery_window: int, registry_type: str = "attested",
-):
-    _log("Phase 4: Deploy")
-
-    # Capture the deploy block so a downstream observability phase can scope its
-    # event queries.
-    observation_block_start = chain.cast_block_number()
-    print(f"  Observability block range start: {observation_block_start}")
-
-    chain.forge_build()
-    print("  Compiled")
-
-    mailbox_implementation_address = chain.forge_create(
-        "src/DepositMailbox.sol:DepositMailbox", private_key=config.DEPLOYER_PRIVATE_KEY,
-    )
-    print(f"  DepositMailbox: {mailbox_implementation_address}")
-
-    subnet_clone_implementation_address = chain.forge_create(
-        "src/SubnetClone.sol:SubnetClone", private_key=config.DEPLOYER_PRIVATE_KEY,
-    )
-    print(f"  SubnetClone: {subnet_clone_implementation_address}")
-
+def _deploy_registry(registry_type: str) -> str:
     if registry_type == "basic":
         validator_registry_address = chain.forge_create(
             "src/BasicValidatorRegistry.sol:BasicValidatorRegistry",
@@ -289,6 +267,49 @@ def _deploy_contracts(
               f"(admin={config.DEPLOYER_ADDRESS}, signers=[DEPLOYER,WRAPPER_USER], threshold=2)")
     else:
         raise ValueError(f"Unknown registry type: {registry_type}")
+    return validator_registry_address
+
+
+def _configure_subnet(
+    registry_type: str, validator_registry_address: str, netuid: int, subnet_pubkeys: List[str],
+) -> None:
+    if registry_type == "basic":
+        validators.set_basic_validator(validator_registry_address, netuid, subnet_pubkeys[0])
+        print(f"  netuid {netuid} sole validator (100%): {subnet_pubkeys[0]}")
+    else:
+        validators.set_validators(
+            validator_registry_address,
+            [config.DEPLOYER_PRIVATE_KEY, config.WRAPPER_USER_PRIVATE_KEY],
+            netuid, subnet_pubkeys, INITIAL_VALIDATOR_WEIGHTS,
+        )
+        print(f"  netuid {netuid} validators set (50/30/20): "
+              + ", ".join(f"{pubkey[:18]}..." for pubkey in subnet_pubkeys))
+
+
+def _deploy_contracts(
+    netuids: List[int], hotkey_pubkeys: List[str], *, recovery_window: int, registry_type: str,
+):
+    _log("Phase 4: Deploy")
+
+    # Capture the deploy block so a downstream observability phase can scope its
+    # event queries.
+    observation_block_start = chain.cast_block_number()
+    print(f"  Observability block range start: {observation_block_start}")
+
+    chain.forge_build()
+    print("  Compiled")
+
+    mailbox_implementation_address = chain.forge_create(
+        "src/DepositMailbox.sol:DepositMailbox", private_key=config.DEPLOYER_PRIVATE_KEY,
+    )
+    print(f"  DepositMailbox: {mailbox_implementation_address}")
+
+    subnet_clone_implementation_address = chain.forge_create(
+        "src/SubnetClone.sol:SubnetClone", private_key=config.DEPLOYER_PRIVATE_KEY,
+    )
+    print(f"  SubnetClone: {subnet_clone_implementation_address}")
+
+    validator_registry_address = _deploy_registry(registry_type)
 
     allocation_library = "src/libraries/VaultAllocation.sol:VaultAllocation"
     allocation_address = chain.forge_create(allocation_library, private_key=config.DEPLOYER_PRIVATE_KEY)
@@ -330,17 +351,7 @@ def _deploy_contracts(
             subnet_index * config.VALIDATORS_PER_SUBNET:
             (subnet_index + 1) * config.VALIDATORS_PER_SUBNET
         ]
-        if registry_type == "basic":
-            validators.set_basic_validator(validator_registry_address, netuid, subnet_pubkeys[0])
-            print(f"  netuid {netuid} sole validator (100%): {subnet_pubkeys[0]}")
-        else:
-            validators.set_validators(
-                validator_registry_address,
-                [config.DEPLOYER_PRIVATE_KEY, config.WRAPPER_USER_PRIVATE_KEY],
-                netuid, subnet_pubkeys, INITIAL_VALIDATOR_WEIGHTS,
-            )
-            print(f"  netuid {netuid} validators set (50/30/20): "
-                  + ", ".join(f"{pubkey[:18]}..." for pubkey in subnet_pubkeys))
+        _configure_subnet(registry_type, validator_registry_address, netuid, subnet_pubkeys)
     registry_block_end = chain.cast_block_number()
 
     contracts = DeployedContracts(
@@ -355,7 +366,7 @@ def _deploy_contracts(
 
 # --- Composition -------------------------------------------------------------------------
 
-def build_environment(*, recovery_window: int = 3 * 60 * 60, registry_type: str = "attested") -> Environment:
+def build_environment(*, recovery_window: int = 3 * 60 * 60, registry_type: str) -> Environment:
     _check_repo_root()
     _check_chain_reachable()
     _ensure_alice_wallet()

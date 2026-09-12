@@ -37,7 +37,7 @@ WRAP_SLIPPAGE_TOLERANCE_PCT = 1
 
 @pytest.mark.scenario
 def test_deposits_and_both_exits_survive_emissions_and_validator_rotation(env):
-    deposit_hotkey_count = 1 if env.registry_type == "basic" else config.VALIDATORS_PER_SUBNET
+    deposit_hotkey_count = 1 if env.uses_basic_registry else config.VALIDATORS_PER_SUBNET
     validator_count = str(deposit_hotkey_count)
     # --- Phase 6: transfer alpha to the deposit mailboxes (3 validators each) ---
     for subnet_index, netuid in enumerate(env.netuids):
@@ -405,12 +405,16 @@ def test_deposits_and_both_exits_survive_emissions_and_validator_rotation(env):
     # still pay the holder full value.
     rotation_netuid = env.netuids[1]
     rotation_token_id = env.token_ids[1]
-    kept_hotkey_first = env.hotkey_pubkeys[3]
-    kept_hotkey_second = env.hotkey_pubkeys[4]
-    rotated_out_hotkey = env.hotkey_pubkeys[3] if env.registry_type == "basic" else env.hotkey_pubkeys[5]
+    deposit_hotkey, new_target, third_hotkey = env.subnet_hotkey_pubkeys(1)
+    if env.uses_basic_registry:
+        rotated_out_hotkey = deposit_hotkey
+        rotation_hotkeys = [deposit_hotkey, new_target]
+    else:
+        rotated_out_hotkey = third_hotkey
+        rotation_hotkeys = [deposit_hotkey, new_target, third_hotkey]
 
     env.deposit_and_wrap(
-        rotation_netuid, kept_hotkey_first, env.hotkey_ss58s[3],
+        rotation_netuid, deposit_hotkey, env.hotkey_ss58s[3],
         60_000_000_000, 1_500_000, "Phase 14 wrap failed",
     )
     rotation_shares = env.vault_shares(rotation_token_id)
@@ -423,10 +427,9 @@ def test_deposits_and_both_exits_survive_emissions_and_validator_rotation(env):
 
     # Attested drops the third validator; Basic replaces its sole first target
     # with the second. No vault call runs, so the old stake stays rotated out.
-    env.set_validators(rotation_netuid, [kept_hotkey_first, kept_hotkey_second], [6000, 4000],
-                       basic_hotkey=kept_hotkey_second)
+    env.set_validators(rotation_netuid, [deposit_hotkey, new_target], [6000, 4000],
+                       basic_hotkey=new_target)
 
-    rotation_hotkeys = list(dict.fromkeys([kept_hotkey_first, kept_hotkey_second, rotated_out_hotkey]))
     delivered_before = env.total_stake_across(
         env.wrapper_substrate_coldkey, rotation_netuid, rotation_hotkeys,
     )

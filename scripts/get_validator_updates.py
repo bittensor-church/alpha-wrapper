@@ -14,6 +14,20 @@ from common import (
 )
 
 
+REGISTRY_EVENTS = {
+    "basic": ("BasicValidatorRegistry", "ValidatorUpdated"),
+    "attested": ("ValidatorRegistry", "ValidatorsUpdated"),
+}
+
+
+def validator_count(event_args: dict) -> int:
+    if "hotkeys" in event_args:
+        return len(event_args["hotkeys"])
+    if "hotkey" in event_args:
+        return 1
+    raise ValueError("Validator update event has no hotkey field")
+
+
 @dataclass
 class ValidatorsUpdatedEvent:
     tx_hash: str
@@ -26,24 +40,23 @@ class ValidatorsUpdatedEvent:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--registry-address", required=True, help="Validator registry contract address")
-    parser.add_argument("--registry-type", choices=("attested", "basic"), default="attested")
+    parser.add_argument("--registry-type", choices=REGISTRY_EVENTS, default="attested")
     add_block_range_arguments(parser)
     parser.add_argument("--rpc-url", required=True, help="HTTP RPC URL of the Subtensor EVM endpoint")
     args = parser.parse_args()
 
+    contract_name, event_name = REGISTRY_EVENTS[args.registry_type]
     w3 = get_web3_connection(args.rpc_url)
     rows = (
         ValidatorsUpdatedEvent(
             tx_hash=log["transactionHash"].to_0x_hex(),
             netuid=ev_args["netuid"],
             nonce=ev_args["nonce"],
-            count=1 if args.registry_type == "basic" else len(ev_args["hotkeys"]),
+            count=validator_count(ev_args),
             timestamp=w3.eth.get_block(log["blockNumber"]).timestamp,
         )
         for log, ev_args in fetch_event_logs(
-            w3, args.registry_address,
-            "BasicValidatorRegistry" if args.registry_type == "basic" else "ValidatorRegistry",
-            "ValidatorUpdated" if args.registry_type == "basic" else "ValidatorsUpdated",
+            w3, args.registry_address, contract_name, event_name,
             args.block_start, args.block_end, chunk_size=args.chunk_size,
         )
     )

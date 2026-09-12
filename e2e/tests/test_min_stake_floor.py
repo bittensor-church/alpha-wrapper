@@ -149,7 +149,7 @@ def test_min_stake_floor(env):
     print("  Backing folded in the fresh deposit and the reclaimed dust; "
           "remembered set refreshed to the current set")
 
-    if env.registry_type == "basic":
+    if env.uses_basic_registry:
         # A single 100% target has no weighted split to drift or correct. The
         # Basic variant covers the deposit gate and rotated-dust consolidation above.
         return

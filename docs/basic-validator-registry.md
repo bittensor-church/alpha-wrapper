@@ -7,23 +7,14 @@ subnet before accepting deposits. Deposits must be under that currently configur
 hotkey; the vault rejects `wrap` for other hotkeys. Pass the registry address to the vault constructor.
 The existing deployment script accepts this address through `VALIDATOR_REGISTRY`.
 
-The admin is the OpenZeppelin `Ownable2Step` owner, exposed through `owner()`.
+The registry uses OpenZeppelin `Ownable2Step`; only the current `owner()` can
+update validators. `renounceOwnership()` is disabled. Ownership changes preserve
+validator sets and nonces, so the new owner must publish a validator update to
+release recovered parking. See the [security model](security-model.md) for owner
+key-loss assumptions.
+
 There are no signers, attestations, batch updates or timelocks. Validator updates
-take effect immediately. The owner has sole control over validator selection.
-
-To rotate the admin, the current owner calls `transferOwnership(newOwner)`, then
-that address calls `acceptOwnership()`. Until acceptance, the current owner retains
-all update authority and `pendingOwner()` has none. The owner can replace a pending
-nomination or cancel it with `transferOwnership(address(0))`; cancellation leaves
-the current owner in place. Acceptance clears the pending nomination. Ownership
-changes preserve all validator sets and nonces; the new owner must still publish a
-validator update to release recovered parking. `renounceOwnership()` is disabled.
-
-Two-step transfers permit planned key rotation, not recovery of an already lost
-owner key. If the owner key is lost without an accessible pending successor, no
-further updates can land. Existing and future recovered parking then cannot be
-released: deposits and rebalance stay blocked, although parked exits remain available.
-An already nominated successor can still accept without another call from the old owner.
+take effect immediately.
 
 Updates reject zero hotkeys, netuids above 65,535 and hotkeys without an owner record
 in the staking precompile. Like `ValidatorRegistry`, this contract records the owner
@@ -34,7 +25,7 @@ Unconfigured subnets return three empty arrays and nonce zero. Each successful u
 increments only that subnet's nonce and emits
 `ValidatorUpdated(netuid, nonce, hotkey, owner)`. The same hotkey may be submitted again
 to refresh its owner and advance the nonce. The vault uses that newer nonce to release
-recovered parking after an admin decision. Configured subnets cannot be cleared.
+recovered parking after an owner decision. Configured subnets cannot be cleared.
 Owner changes on-chain do not silently change the recorded owner; the vault retains
 its existing ownership checks and recovery behavior.
 

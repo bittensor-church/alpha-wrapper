@@ -82,7 +82,7 @@ def test_watcher_parks_a_position_whose_trail_a_stranger_cut(env):
     assert env.backing_intact(token_id), "the record follows the new set"
     assert not env.awaiting_attestation(token_id), "and the position is ordinary again"
     deposit_hotkey, deposit_ss58 = (
-        (successor_pubkey, stranding.successor_ss58) if env.registry_type == "basic"
+        (successor_pubkey, stranding.successor_ss58) if env.uses_basic_registry
         else (hotkeys[1], env.hotkey_ss58s[1])
     )
     env.deposit_and_wrap(

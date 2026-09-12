@@ -111,8 +111,8 @@ def set_validators(
     return transaction_hash.hex()
 
 
-def set_basic_validator(registry_address: str, netuid: int, hotkey: str) -> dict:
-    """Submit an immediate single-validator update from the bootstrap owner (these scenarios do not transfer ownership)."""
+def set_basic_validator(registry_address: str, netuid: int, hotkey: str) -> str:
+    """Submit an immediate single-validator update from the bootstrap owner."""
     receipt = chain.cast_send(
         registry_address, "setValidator(uint256,bytes32)", netuid, hotkey,
         private_key=config.DEPLOYER_PRIVATE_KEY, gas_limit=500_000,
@@ -120,4 +120,4 @@ def set_basic_validator(registry_address: str, netuid: int, hotkey: str) -> dict
     chain.report_gas("setValidator", receipt, reverted=not chain.receipt_ok(receipt))
     if not chain.receipt_ok(receipt):
         raise ValidatorUpdateError(f"setValidator failed: {receipt}")
-    return receipt
+    return receipt["transactionHash"]

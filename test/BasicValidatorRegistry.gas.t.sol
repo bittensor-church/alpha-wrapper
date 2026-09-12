@@ -46,17 +46,4 @@ contract BasicValidatorRegistryGasTest is Test {
         registry.getValidators(1);
         vm.snapshotGasLastCall("BasicValidatorRegistry", "getValidators: unconfigured");
     }
-
-    function test_gas_transferOwnership() public {
-        registry.transferOwnership(makeAddr("successor"));
-        vm.snapshotGasLastCall("BasicValidatorRegistry", "transferOwnership");
-    }
-
-    function test_gas_acceptOwnership() public {
-        address successor = makeAddr("successor");
-        registry.transferOwnership(successor);
-        vm.prank(successor);
-        registry.acceptOwnership();
-        vm.snapshotGasLastCall("BasicValidatorRegistry", "acceptOwnership");
-    }
 }

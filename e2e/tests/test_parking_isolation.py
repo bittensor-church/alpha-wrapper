@@ -38,7 +38,7 @@ def test_parked_subnets_share_the_hotkey_without_sharing_state(env):
     for hotkey, before in zip(hotkeys_b, stakes_b_before):
         assert env.stake(hotkey, clone_b, netuid_b) >= before, "B's stake should stay on B's validators"
 
-    deposit_index = 0 if env.registry_type == "basic" else 1
+    deposit_index = 0 if env.uses_basic_registry else 1
     env.deposit_and_wrap(
         netuid_b, hotkeys_b[deposit_index], env.hotkey_ss58s[VALIDATORS + deposit_index],
         config.PER_HOTKEY_TRANSFER_RAO // 10, 1_500_000, "Isolation: B should accept a deposit while A is parked",

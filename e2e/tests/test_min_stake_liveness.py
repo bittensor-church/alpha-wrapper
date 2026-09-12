@@ -129,7 +129,7 @@ class ChurnLedger:
         self.unwrap_for_alpha_step(label, 80)
         # Before rotating, Basic can only wrap under the current primary.
         deposit_pubkey, deposit_ss58 = (
-            (primary_pubkey, primary_ss58) if self.env.registry_type == "basic"
+            (primary_pubkey, primary_ss58) if self.env.uses_basic_registry
             else (secondary_pubkey, secondary_ss58)
         )
         self.deposit_step(label, deposit_pubkey, deposit_ss58, boundary * 5 // 2)
@@ -140,7 +140,7 @@ class ChurnLedger:
             self.netuid, [replacement_pubkey, secondary_pubkey, kept_pubkey],
             [5000, 3000, 2000], basic_hotkey=secondary_pubkey,
         )
-        new_target = secondary_pubkey if self.env.registry_type == "basic" else replacement_pubkey
+        new_target = secondary_pubkey if self.env.uses_basic_registry else replacement_pubkey
         print(f"  {label}: rotated {primary_pubkey[:18]}... out for {new_target[:18]}...")
 
         self.unwrap_for_alpha_step(f"{label} (over the rotated-out balances)", 50)

@@ -43,7 +43,7 @@ def test_token_follows_the_registration_counter_not_the_block(env):
     assert delivered >= quoted_alpha - config.ROUNDING_DUST_TOTAL_RAO, (
         f"the exit delivered {delivered} alpha against a quote of {quoted_alpha}"
     )
-    deposit_index = 0 if env.registry_type == "basic" else 1
+    deposit_index = 0 if env.uses_basic_registry else 1
     env.deposit_and_wrap(
         netuid, hotkeys[deposit_index], env.hotkey_ss58s[deposit_index],
         config.PER_HOTKEY_TRANSFER_RAO // 10, 1_500_000, "Generation: deposits should land on the same token",
