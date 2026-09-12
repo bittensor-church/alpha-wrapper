@@ -1,7 +1,9 @@
 {
-  "getValidators": "6349",
-  "getValidators: unconfigured": "5853",
-  "setValidator: first commit": "101288",
-  "setValidator: refresh": "44388",
-  "setValidator: rotation": "49988"
+  "acceptOwnership": "28086",
+  "getValidators": "6350",
+  "getValidators: unconfigured": "5854",
+  "setValidator: first commit": "103478",
+  "setValidator: refresh": "46578",
+  "setValidator: rotation": "52178",
+  "transferOwnership": "47698"
 }

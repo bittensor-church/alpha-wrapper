@@ -16,7 +16,7 @@ contract BasicValidatorRegistryVaultTest is AlphaVaultTestBase {
         (vault, lens) = _deployVaultAndLens(address(basicRegistry));
     }
 
-    function test_wrapAllocatesEverythingToTheSoleValidator() public {
+    function test_Wrap_AllocatesToSoleValidator() public {
         _depositAndWrap(alice, NETUID1, 10 * ALPHA);
         assertEq(_getVaultStake(hotkey1, NETUID1), 10 * ALPHA);
         assertEq(_getVaultStake(hotkey2, NETUID1), 0);
@@ -24,7 +24,7 @@ contract BasicValidatorRegistryVaultTest is AlphaVaultTestBase {
         assertEq(_lastSeen(TOKEN1).length, 1);
     }
 
-    function test_wrapRejectsAnUnlistedHotkeyWithoutCollectingTheDeposit() public {
+    function test_RevertWhen_WrapHotkeyIsUnlisted() public {
         _simulateAlphaDepositHotkey(alice, NETUID1, 10 * ALPHA, hotkey2);
         vm.expectRevert(ChosenHotkeyNotInSet.selector);
         _wrapHotkey(alice, NETUID1, hotkey2);
@@ -32,7 +32,7 @@ contract BasicValidatorRegistryVaultTest is AlphaVaultTestBase {
         assertEq(vault.balanceOf(alice, TOKEN1), 0);
     }
 
-    function test_rotationRebalancesWithoutChangingSharesOrOtherSubnet() public {
+    function test_Rebalance_RotationPreservesSharesAndOtherSubnet() public {
         _depositAndWrap(alice, NETUID1, 10 * ALPHA);
         _depositAndWrap(bob, NETUID2, 20 * ALPHA);
         uint256 shares = vault.balanceOf(alice, TOKEN1);
@@ -45,7 +45,7 @@ contract BasicValidatorRegistryVaultTest is AlphaVaultTestBase {
         assertEq(_lastSeen(TOKEN1).length, 1);
     }
 
-    function test_alphaExitConsolidatesTheRotatedValidator() public {
+    function test_Unwrap_ConsolidatesRotatedValidator() public {
         _depositAndWrap(alice, NETUID1, 10 * ALPHA);
         basicRegistry.setValidator(NETUID1, hotkey3);
         uint256 shares = vault.balanceOf(alice, TOKEN1);
@@ -56,7 +56,7 @@ contract BasicValidatorRegistryVaultTest is AlphaVaultTestBase {
         assertEq(_getStakeForColdkey(hotkey3, _toSubstrate(alice), NETUID1), 10 * ALPHA);
     }
 
-    function test_taoExitDrainsTheRotatedValidator() public {
+    function test_UnwrapForTao_DrainsRotatedValidator() public {
         _depositAndWrap(alice, NETUID1, 10 * ALPHA);
         basicRegistry.setValidator(NETUID1, hotkey3);
         uint256 balanceBefore = alice.balance;
@@ -68,7 +68,7 @@ contract BasicValidatorRegistryVaultTest is AlphaVaultTestBase {
         assertGt(alice.balance, balanceBefore);
     }
 
-    function test_freshAdminUpdateReleasesRecoveredParking() public {
+    function test_Rebalance_NewOwnerReleasesRecoveredParking() public {
         _depositAndWrap(alice, NETUID1, 10 * ALPHA);
         uint256 shares = vault.balanceOf(alice, TOKEN1);
         _simulateOffVaultSwap(NETUID1, hotkey1, hotkey4);
@@ -78,7 +78,14 @@ contract BasicValidatorRegistryVaultTest is AlphaVaultTestBase {
         assertTrue(lens.awaitingAttestation(TOKEN1));
         assertEq(_parkedStake(NETUID1), 10 * ALPHA);
 
+        basicRegistry.transferOwnership(bob);
+        assertTrue(lens.awaitingAttestation(TOKEN1), "nomination does not publish a validator update");
+        vm.prank(bob);
+        basicRegistry.acceptOwnership();
+        assertTrue(lens.awaitingAttestation(TOKEN1), "acceptance does not publish a validator update");
+        assertEq(basicRegistry.nonces(NETUID1), 1);
         _recordHotkeyOwner(hotkey4);
+        vm.prank(bob);
         basicRegistry.setValidator(NETUID1, hotkey4);
         assertFalse(lens.awaitingAttestation(TOKEN1));
         vault.rebalance(NETUID1);

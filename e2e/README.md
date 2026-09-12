@@ -32,7 +32,7 @@ chain is unsupported. CI gives each scenario its own container.
 
 The default remains `ValidatorRegistry`. CI also runs each compatible scenario in a
 separate job and fresh chain with `--registry-type basic`, deploying
-`BasicValidatorRegistry` with the deployer as permanent admin. Pytest gives the cases
+`BasicValidatorRegistry` with the deployer as initial owner. Pytest gives the cases
 separate `[attested]` and `[basic]` IDs. To select the Basic full flow:
 
 ```bash

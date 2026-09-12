@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.36;
 
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { Ownable2Step } from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import { NetuidOutOfRange, ZeroHotkey } from "src/VaultErrors.sol";
 import { Test } from "forge-std/Test.sol";
 import { BasicValidatorRegistry } from "src/BasicValidatorRegistry.sol";
 import { IValidatorRegistry } from "src/interfaces/IValidatorRegistry.sol";
@@ -43,41 +46,41 @@ contract BasicValidatorRegistryTest is Test {
         assertEq(asInterface.nonces(netuid), nonce);
     }
 
-    function test_constructorRecordsAdmin() public view {
-        assertEq(registry.admin(), admin);
+    function test_Constructor_RecordsOwner() public view {
+        assertEq(registry.owner(), admin);
     }
 
-    function test_constructorRejectsZeroAdmin() public {
-        vm.expectRevert(BasicValidatorRegistry.ZeroAddress.selector);
+    function test_RevertWhen_InitialOwnerIsZero() public {
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableInvalidOwner.selector, address(0)));
         new BasicValidatorRegistry(address(0));
     }
 
-    function test_nonAdminCannotConfigureAnEmptySubnet() public {
-        vm.expectRevert(BasicValidatorRegistry.Unauthorized.selector);
+    function test_RevertWhen_NonOwnerConfiguresSubnet() public {
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
         registry.setValidator(NETUID, HOTKEY);
         _assertValidator(NETUID, 0, 0, 0);
     }
 
-    function test_ownerExistenceUsesThePrecompileFlag() public {
+    function test_SetValidator_UsesOwnerExistenceFlag() public {
         // Subtensor returns the stored AccountId independently of the existence flag.
         _owner(HOTKEY, true, 0);
         _set(NETUID, HOTKEY);
         _assertValidator(NETUID, HOTKEY, 0, 1);
     }
 
-    function test_unconfiguredSubnetReturnsEmptyArraysAndZeroNonce() public view {
+    function test_GetValidators_UnconfiguredSubnetIsEmpty() public view {
         _assertValidator(NETUID, 0, 0, 0);
         _assertValidator(type(uint256).max, 0, 0, 0);
     }
 
-    function test_firstUpdateIsImmediateAndEmitsOwnerAndNonce() public {
+    function test_SetValidator_ImmediatelyRecordsOwnerAndNonce() public {
         vm.expectEmit(true, false, false, true, address(registry));
         emit BasicValidatorRegistry.ValidatorUpdated(NETUID, 1, HOTKEY, OWNER);
         _set(NETUID, HOTKEY);
         _assertValidator(NETUID, HOTKEY, OWNER, 1);
     }
 
-    function test_rotationReplacesHotkeyAndOwnerWithoutAppending() public {
+    function test_SetValidator_ReplacesHotkeyAndOwner() public {
         _set(NETUID, HOTKEY);
         bytes32 nextHotkey = keccak256("next");
         bytes32 nextOwner = keccak256("nextOwner");
@@ -88,7 +91,7 @@ contract BasicValidatorRegistryTest is Test {
         _assertValidator(NETUID, nextHotkey, nextOwner, 2);
     }
 
-    function test_sameHotkeyRefreshesOwnerAndNonce() public {
+    function test_SetValidator_SameHotkeyRefreshesOwnerAndNonce() public {
         _set(NETUID, HOTKEY);
         _set(NETUID, HOTKEY);
         _assertValidator(NETUID, HOTKEY, OWNER, 2);
@@ -99,7 +102,7 @@ contract BasicValidatorRegistryTest is Test {
         _assertValidator(NETUID, HOTKEY, nextOwner, 3);
     }
 
-    function test_readsRetainRecordedOwnerWhenHotkeyBecomesOwnerless() public {
+    function test_GetValidators_PreservesOwnerSnapshot() public {
         _set(NETUID, HOTKEY);
         _owner(HOTKEY, false, 0);
         _assertValidator(NETUID, HOTKEY, OWNER, 1);
@@ -108,7 +111,7 @@ contract BasicValidatorRegistryTest is Test {
         _assertValidator(NETUID, HOTKEY, OWNER, 1);
     }
 
-    function test_subnetsHaveIndependentValidatorsAndNonces() public {
+    function test_SetValidator_SubnetsAreIndependent() public {
         _set(NETUID, HOTKEY);
         _set(2, HOTKEY);
         bytes32 nextHotkey = keccak256("next");
@@ -119,34 +122,34 @@ contract BasicValidatorRegistryTest is Test {
         _assertValidator(3, 0, 0, 0);
     }
 
-    function test_acceptsNetuidBoundaries() public {
+    function test_SetValidator_AcceptsNetuidBoundaries() public {
         _set(0, HOTKEY);
         _set(type(uint16).max, HOTKEY);
         _assertValidator(0, HOTKEY, OWNER, 1);
         _assertValidator(type(uint16).max, HOTKEY, OWNER, 1);
     }
 
-    function test_rejectsOutOfRangeNetuid() public {
-        vm.expectRevert(BasicValidatorRegistry.NetuidOutOfRange.selector);
+    function test_RevertWhen_NetuidIsOutOfRange() public {
+        vm.expectRevert(NetuidOutOfRange.selector);
         _set(uint256(type(uint16).max) + 1, HOTKEY);
         _assertValidator(uint256(type(uint16).max) + 1, 0, 0, 0);
     }
 
-    function test_rejectsZeroHotkeyWithoutClearingExistingValidator() public {
+    function test_RevertWhen_HotkeyIsZero() public {
         _set(NETUID, HOTKEY);
-        vm.expectRevert(BasicValidatorRegistry.ZeroHotkey.selector);
+        vm.expectRevert(ZeroHotkey.selector);
         _set(NETUID, 0);
         _assertValidator(NETUID, HOTKEY, OWNER, 1);
     }
 
-    function test_rejectsOwnerlessHotkeyOnFirstUpdate() public {
+    function test_RevertWhen_HotkeyHasNoOwner() public {
         _owner(HOTKEY, false, OWNER);
         vm.expectRevert(abi.encodeWithSelector(BasicValidatorRegistry.OwnerlessHotkey.selector, HOTKEY));
         _set(NETUID, HOTKEY);
         _assertValidator(NETUID, 0, 0, 0);
     }
 
-    function test_precompileFailurePreservesExistingValidatorAndNonce() public {
+    function test_RevertWhen_OwnerPrecompileFails() public {
         _set(NETUID, HOTKEY);
         vm.mockCallRevert(
             STAKING_PRECOMPILE, abi.encodeCall(IStaking.getHotkeyOwner, (HOTKEY)), abi.encode("unavailable")
@@ -156,40 +159,156 @@ contract BasicValidatorRegistryTest is Test {
         _assertValidator(NETUID, HOTKEY, OWNER, 1);
     }
 
-    function test_adminCannotBeTransferredOrRenounced() public {
-        vm.startPrank(admin);
-        (bool transferred,) =
-            address(registry).call(abi.encodeWithSignature("transferOwnership(address)", address(this)));
-        (bool renounced,) = address(registry).call(abi.encodeWithSignature("renounceOwnership()"));
-        vm.stopPrank();
-        assertFalse(transferred);
-        assertFalse(renounced);
-        assertEq(registry.admin(), admin);
+    function test_TransferOwnership_RequiresAcceptanceAndPreservesOwnerAuthority() public {
+        address successor = makeAddr("successor");
+        vm.expectEmit(true, true, false, true, address(registry));
+        emit Ownable2Step.OwnershipTransferStarted(admin, successor);
+        vm.prank(admin);
+        registry.transferOwnership(successor);
+        assertEq(registry.owner(), admin);
+        assertEq(registry.pendingOwner(), successor);
+
+        vm.prank(successor);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, successor));
+        registry.setValidator(NETUID, HOTKEY);
         _set(NETUID, HOTKEY);
-        vm.expectRevert(BasicValidatorRegistry.Unauthorized.selector);
+        _assertValidator(NETUID, HOTKEY, OWNER, 1);
+    }
+
+    function test_AcceptOwnership_TransfersUpdateAuthorityWithoutChangingValidators() public {
+        address successor = makeAddr("successor");
+        _set(NETUID, HOTKEY);
+        _set(2, HOTKEY);
+        vm.prank(admin);
+        registry.transferOwnership(successor);
+        vm.expectEmit(true, true, false, true, address(registry));
+        emit Ownable.OwnershipTransferred(admin, successor);
+        vm.prank(successor);
+        registry.acceptOwnership();
+        assertEq(registry.owner(), successor);
+        assertEq(registry.pendingOwner(), address(0));
+        _assertValidator(NETUID, HOTKEY, OWNER, 1);
+        _assertValidator(2, HOTKEY, OWNER, 1);
+
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, admin));
+        registry.setValidator(NETUID, HOTKEY);
+        vm.prank(successor);
+        registry.setValidator(NETUID, HOTKEY);
+        _assertValidator(NETUID, HOTKEY, OWNER, 2);
+        _assertValidator(2, HOTKEY, OWNER, 1);
+    }
+
+    function test_RevertWhen_NonOwnerNominatesSuccessor() public {
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
+        registry.transferOwnership(address(this));
+        assertEq(registry.owner(), admin);
+        assertEq(registry.pendingOwner(), address(0));
+    }
+
+    function test_RevertWhen_AcceptingWithoutPendingOwner() public {
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, admin));
+        registry.acceptOwnership();
+        assertEq(registry.owner(), admin);
+    }
+
+    function test_TransferOwnership_ReplacesPendingOwner() public {
+        address first = makeAddr("first successor");
+        address second = makeAddr("second successor");
+        vm.startPrank(admin);
+        registry.transferOwnership(first);
+        registry.transferOwnership(second);
+        vm.stopPrank();
+        assertEq(registry.owner(), admin);
+        assertEq(registry.pendingOwner(), second);
+        vm.prank(first);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, first));
+        registry.acceptOwnership();
+        vm.prank(second);
+        registry.acceptOwnership();
+        assertEq(registry.owner(), second);
+        assertEq(registry.pendingOwner(), address(0));
+    }
+
+    function test_TransferOwnership_ZeroCancelsPendingTransfer() public {
+        address successor = makeAddr("successor");
+        vm.startPrank(admin);
+        registry.transferOwnership(successor);
+        registry.transferOwnership(address(0));
+        vm.stopPrank();
+        assertEq(registry.owner(), admin);
+        assertEq(registry.pendingOwner(), address(0));
+        vm.prank(successor);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, successor));
+        registry.acceptOwnership();
+        _set(NETUID, HOTKEY);
+        _assertValidator(NETUID, HOTKEY, OWNER, 1);
+    }
+
+    function test_RevertWhen_OwnerRenouncesWithPendingSuccessor() public {
+        address successor = makeAddr("successor");
+        vm.prank(admin);
+        registry.transferOwnership(successor);
+        vm.prank(admin);
+        vm.expectRevert(BasicValidatorRegistry.RenunciationDisabled.selector);
+        registry.renounceOwnership();
+        assertEq(registry.owner(), admin);
+        assertEq(registry.pendingOwner(), successor);
+        vm.prank(successor);
+        registry.acceptOwnership();
+        vm.prank(successor);
         registry.setValidator(NETUID, HOTKEY);
         _assertValidator(NETUID, HOTKEY, OWNER, 1);
     }
 
-    function testFuzz_onlyAdminCanUpdate(address caller) public {
+    function test_RevertWhen_OwnerRenouncesWithoutPendingSuccessor() public {
+        vm.prank(admin);
+        vm.expectRevert(BasicValidatorRegistry.RenunciationDisabled.selector);
+        registry.renounceOwnership();
+        assertEq(registry.owner(), admin);
+        assertEq(registry.pendingOwner(), address(0));
+        _set(NETUID, HOTKEY);
+        _assertValidator(NETUID, HOTKEY, OWNER, 1);
+    }
+
+    function test_RevertWhen_NonOwnerRenounces() public {
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
+        registry.renounceOwnership();
+        assertEq(registry.owner(), admin);
+    }
+
+    function testFuzz_RevertWhen_CallerIsNotPendingOwner(address caller) public {
+        address successor = makeAddr("successor");
+        vm.assume(caller != successor);
+        vm.prank(admin);
+        registry.transferOwnership(successor);
+        vm.prank(caller);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, caller));
+        registry.acceptOwnership();
+        assertEq(registry.owner(), admin);
+        assertEq(registry.pendingOwner(), successor);
+    }
+
+    function testFuzz_RevertWhen_CallerIsNotOwner(address caller) public {
         vm.assume(caller != admin);
         _set(NETUID, HOTKEY);
         vm.prank(caller);
-        vm.expectRevert(BasicValidatorRegistry.Unauthorized.selector);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, caller));
         registry.setValidator(NETUID, HOTKEY);
         _assertValidator(NETUID, HOTKEY, OWNER, 1);
     }
 
-    function testFuzz_validSingleValidator(uint16 netuid, bytes32 hotkey, bytes32 owner) public {
-        vm.assume(hotkey != 0);
+    function testFuzz_SetValidator_ValidSingleValidator(uint16 netuid, bytes32 hotkey, bytes32 owner) public {
+        hotkey = bytes32(bound(uint256(hotkey), 1, type(uint256).max));
         _owner(hotkey, true, owner);
         _set(netuid, hotkey);
         _assertValidator(netuid, hotkey, owner, 1);
     }
 
-    function testFuzz_rejectsOutOfRangeNetuid(uint256 netuid) public {
+    function testFuzz_RevertWhen_NetuidIsOutOfRange(uint256 netuid) public {
         netuid = bound(netuid, uint256(type(uint16).max) + 1, type(uint256).max);
-        vm.expectRevert(BasicValidatorRegistry.NetuidOutOfRange.selector);
+        vm.expectRevert(NetuidOutOfRange.selector);
         _set(netuid, HOTKEY);
         _assertValidator(netuid, 0, 0, 0);
     }

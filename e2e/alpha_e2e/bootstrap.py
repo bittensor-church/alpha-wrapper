@@ -273,7 +273,7 @@ def _deploy_contracts(
             private_key=config.DEPLOYER_PRIVATE_KEY,
             constructor_args=[config.DEPLOYER_ADDRESS],
         )
-        print(f"  BasicValidatorRegistry: {validator_registry_address} (immutable admin={config.DEPLOYER_ADDRESS})")
+        print(f"  BasicValidatorRegistry: {validator_registry_address} (initial owner={config.DEPLOYER_ADDRESS})")
     elif registry_type == "attested":
         # DEPLOYER (0x7bD3...) < WRAPPER_USER (0xd103...) hex-ascending -- required by
         # ValidatorRegistry's sorted-signers check.

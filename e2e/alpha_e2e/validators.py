@@ -112,7 +112,7 @@ def set_validators(
 
 
 def set_basic_validator(registry_address: str, netuid: int, hotkey: str) -> dict:
-    """Submit an immediate single-validator update from the permanent admin."""
+    """Submit an immediate single-validator update from the bootstrap owner (these scenarios do not transfer ownership)."""
     receipt = chain.cast_send(
         registry_address, "setValidator(uint256,bytes32)", netuid, hotkey,
         private_key=config.DEPLOYER_PRIVATE_KEY, gas_limit=500_000,

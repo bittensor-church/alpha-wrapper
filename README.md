@@ -8,7 +8,7 @@ ERC-1155 shares of Bittensor staked alpha, with alpha and native-TAO exits.
 - [User guide](docs/user-guide.md): deposits, exits and mailbox recovery.
 - [Hotkey swaps](docs/hotkey-swaps.md): the empty-slot issue, automatic handling
   and watcher-assisted recovery.
-- [Basic validator registry](docs/basic-validator-registry.md): one permanent admin and one target per subnet.
+- [Basic validator registry](docs/basic-validator-registry.md): one owner with two-step transfers and one target per subnet.
 - [Attester guide](docs/attester-guide.md): signed validator weights.
 - [Edge cases](docs/edge-cases.md): dissolution, minimums, disabled transfers and dust.
 - [Security model](docs/security-model.md): authority, liveness dependencies and loss policy.
